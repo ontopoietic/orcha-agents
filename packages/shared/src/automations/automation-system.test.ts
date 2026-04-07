@@ -486,7 +486,7 @@ describe('AutomationSystem', () => {
   });
 
   describe('buildSdkHooks', () => {
-    it('should return empty object (command execution removed)', async () => {
+    it('should return empty for prompt-only agent events (prompts are not supported for agent events)', async () => {
       writeFileSync(join(tempDir, AUTOMATIONS_CONFIG_FILE), JSON.stringify({
         automations: {
           PreToolUse: [
@@ -500,8 +500,40 @@ describe('AutomationSystem', () => {
         workspaceId: 'test-workspace',
       });
 
+      // Prompt actions on agent events are ignored — only command actions produce hooks
       const result = system.buildSdkHooks();
       expect(result).toEqual({});
+
+      await system.dispose();
+    });
+
+    it('should build hooks for command actions on agent events', async () => {
+      writeFileSync(join(tempDir, AUTOMATIONS_CONFIG_FILE), JSON.stringify({
+        automations: {
+          PreCompact: [
+            { matcher: undefined, actions: [{ type: 'command', command: 'echo hello' }] },
+          ],
+        },
+      }));
+
+      const system = new AutomationSystem({
+        workspaceRootPath: tempDir,
+        workspaceId: 'test-workspace',
+      });
+
+      const result = system.buildSdkHooks();
+      expect(result.PreCompact).toBeDefined();
+      expect(result.PreCompact!.length).toBe(1);
+      expect(result.PreCompact![0].hooks.length).toBe(1);
+
+      // Execute the hook and verify it runs the command
+      const hookResult = await result.PreCompact![0].hooks[0](
+        { hook_event_name: 'PreCompact' },
+        'test-id',
+        {}
+      );
+      expect(hookResult.continue).toBe(true);
+      expect(hookResult.reason).toBe('hello');
 
       await system.dispose();
     });

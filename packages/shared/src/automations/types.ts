@@ -93,7 +93,17 @@ export interface WebhookAction {
   auth?: WebhookAuth;
 }
 
-export type AutomationAction = PromptAction | WebhookAction;
+/** A command action - executes a shell command (Agent events only).
+ *  Stdout is returned as the hook reason, making it visible to the agent. */
+export interface CommandAction {
+  type: 'command';
+  /** Shell command to execute */
+  command: string;
+  /** Timeout in milliseconds (default: 30000) */
+  timeout?: number;
+}
+
+export type AutomationAction = PromptAction | WebhookAction | CommandAction;
 
 // ============================================================================
 // Condition Types
