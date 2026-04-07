@@ -54,10 +54,17 @@ export const WebhookActionSchema = z.object({
   ]).optional(),
 });
 
-/** Accepts prompt and webhook actions strictly; passes through legacy/unknown action types without erroring */
+export const CommandActionSchema = z.object({
+  type: z.literal('command'),
+  command: z.string().min(1, 'Command cannot be empty'),
+  timeout: z.number().int().positive().optional(),
+});
+
+/** Accepts prompt, webhook, and command actions strictly; passes through legacy/unknown action types without erroring */
 export const ActionDefinitionSchema = z.union([
   PromptActionSchema,
   WebhookActionSchema,
+  CommandActionSchema,
   z.object({ type: z.string() }).passthrough(),
 ]);
 
