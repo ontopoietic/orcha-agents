@@ -9,11 +9,12 @@
  * (sync runs multiple writeLedger() calls per phase).
  */
 
-import { watch, readFileSync, existsSync, FSWatcher } from 'fs'
+import { watch, readFileSync, existsSync } from 'fs'
+import type { FSWatcher } from 'fs'
 import { join } from 'path'
-import type { LedgerActivityEvent } from '../shared/ledger-activity'
+import type { LedgerActivityEvent, LedgerData, LedgerSignal, LedgerCandidate, LedgerObligation, LedgerSignalDelta } from '../shared/ledger-activity'
 
-export type { LedgerActivityEvent }
+export type { LedgerActivityEvent, LedgerData }
 
 const LEDGER_FILE = '.orcha-ledger.json'
 const DEBOUNCE_MS = 500
@@ -131,4 +132,51 @@ export function stopLedgerWatch(): void {
   }
   prevState = null
   currentWorkingDir = null
+}
+
+/**
+ * Read the full ledger contents for the detail panel.
+ */
+export function readFullLedger(workingDir: string): LedgerData | null {
+  const ledgerPath = join(workingDir, LEDGER_FILE)
+  if (!existsSync(ledgerPath)) return null
+
+  try {
+    const raw = JSON.parse(readFileSync(ledgerPath, 'utf-8'))
+
+    const signals: LedgerSignal[] = (raw.rawSignals ?? []).map((s: any) => ({
+      id: s.id,
+      createdAt: s.createdAt ?? '',
+      status: s.status ?? 'unknown',
+      source: s.source ?? 'unknown',
+      summary: s.summary ?? '',
+      evidenceRefs: s.evidenceRefs,
+    }))
+
+    const candidates: LedgerCandidate[] = (raw.candidates ?? []).map((c: any) => ({
+      id: c.id,
+      title: c.title ?? c.summary ?? '',
+      category: c.category ?? c.type ?? 'uncategorized',
+      signalIds: c.signalIds ?? c.sourceSignalIds ?? [],
+      createdAt: c.createdAt,
+    }))
+
+    const obligations: LedgerObligation[] = (raw.obligations ?? []).map((o: any) => ({
+      id: o.id,
+      status: o.status ?? 'unknown',
+      description: o.description ?? o.title ?? '',
+      policyRef: o.policyRef,
+    }))
+
+    return {
+      signals,
+      candidates,
+      obligations,
+      syncStatus: raw.syncRunState?.syncStatus ?? raw.syncRunState?.currentPhase ?? 'unknown',
+      completionStatus: raw.completionStatus ?? 'unknown',
+      updatedAt: raw.updatedAt ?? raw.sessionMeta?.updatedAt ?? '',
+    }
+  } catch {
+    return null
+  }
 }

@@ -182,6 +182,9 @@ export const routes = {
       subpage
         ? `settings/${subpage}` as const
         : 'settings' as const,
+
+    /** Ledger detail view */
+    ledger: () => 'ledger' as const,
   },
 } as const
 

@@ -1,11 +1,12 @@
 "use client"
 
 import * as React from "react"
-import { useAtomValue } from "jotai"
+import { useAtomValue, useSetAtom } from "jotai"
 import { motion, AnimatePresence } from "motion/react"
 import {
   BookOpen,
   ChevronRight,
+  ExternalLink,
   MessageSquare,
   GitCommit,
   FileSearch,
@@ -15,8 +16,9 @@ import {
 
 import { cn } from "@/lib/utils"
 import { sessionMetaMapAtom } from "@/atoms/sessions"
-import { focusedSessionIdAtom } from "@/atoms/panel-stack"
+import { focusedSessionIdAtom, ledgerWorkingDirAtom } from "@/atoms/panel-stack"
 import { useActiveWorkspace } from "@/context/AppShellContext"
+import { routes, navigate } from "@/lib/navigate"
 import type { LedgerActivityEvent, LedgerSignalDelta } from "../../../shared/ledger-activity"
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -135,6 +137,7 @@ export function LedgerPanel() {
   const focusedSessionId = useAtomValue(focusedSessionIdAtom)
   const sessionMetaMap = useAtomValue(sessionMetaMapAtom)
   const activeWorkspace = useActiveWorkspace()
+  const setLedgerWorkingDir = useSetAtom(ledgerWorkingDirAtom)
 
   const sessionWorkingDir = focusedSessionId
     ? sessionMetaMap.get(focusedSessionId)?.workingDirectory ?? null
@@ -302,6 +305,13 @@ export function LedgerPanel() {
                   {totals.candidates > 0 && ` · ${totals.candidates} Kand`}
                   {totals.obligations > 0 && ` · ${totals.obligations} Obl`}
                 </span>
+                <button
+                  onClick={(e) => { e.stopPropagation(); if (workingDirectory) setLedgerWorkingDir(workingDirectory); navigate(routes.view.ledger()) }}
+                  className="ml-auto flex items-center gap-1 text-[11px] text-foreground/30 hover:text-foreground/60 transition-colors"
+                >
+                  Details
+                  <ExternalLink className="h-2.5 w-2.5" />
+                </button>
               </div>
             )}
           </motion.div>

@@ -414,6 +414,20 @@ client.onConnectionStateChanged((state) => {
   return () => { ipcRenderer.removeListener('transfer:progress', handler) }
 }
 
+// Ledger watcher — direct IPC (local file system, not routed through WS)
+;(api as ElectronAPI).ledgerWatch = (workingDir: string) =>
+  ipcRenderer.invoke('ledger:watch', workingDir)
+;(api as ElectronAPI).ledgerUnwatch = () =>
+  ipcRenderer.invoke('ledger:unwatch')
+;(api as ElectronAPI).ledgerRead = (workingDir: string) =>
+  ipcRenderer.invoke('ledger:read', workingDir)
+;(api as ElectronAPI).onLedgerActivity = (callback) => {
+  const handler = (_event: Electron.IpcRendererEvent, activityEvent: unknown) =>
+    callback(activityEvent as import('../shared/ledger-activity').LedgerActivityEvent)
+  ipcRenderer.on('ledger:activity', handler)
+  return () => ipcRenderer.removeListener('ledger:activity', handler)
+}
+
 // System warnings — expose env-based flags set during main process startup
 // (preload-only: reads env var directly, no IPC round-trip needed)
 ;(api as ElectronAPI).getSystemWarnings = async () => ({
