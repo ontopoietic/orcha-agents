@@ -133,6 +133,16 @@ class ModelRefreshService {
       if (modelCount > 10) {
         handlerLog.warn(`Model refresh [${slug}]: userDefined3Tier has suspicious model count (${modelCount})`)
       }
+      // Merge custom ZAI models if missing from persisted list
+      if (connection.piAuthProvider === 'zai' && connection.models) {
+        const { getZaiCustomModels } = await import('@craft-agent/shared/config/models-pi')
+        const existingIds = new Set(connection.models.map(m => typeof m === 'string' ? m : m.id))
+        const missing = getZaiCustomModels().filter(m => !existingIds.has(m.id))
+        if (missing.length > 0) {
+          updateLlmConnection(slug, { models: [...connection.models, ...missing] })
+          handlerLog.info(`Model refresh [${slug}]: merged ${missing.length} custom ZAI models into userDefined3Tier list`)
+        }
+      }
       return
     }
 

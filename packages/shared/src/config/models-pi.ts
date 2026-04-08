@@ -71,6 +71,13 @@ const ZAI_CUSTOM_MODELS: ModelDefinition[] = [
 ];
 
 /**
+ * Get the custom ZAI models list (for use in model refresh merging).
+ */
+export function getZaiCustomModels(): ModelDefinition[] {
+  return ZAI_CUSTOM_MODELS;
+}
+
+/**
  * Models to EXCLUDE from the Pi model list.
  * Temporary workaround for models that are broken in the current Pi SDK version.
  * e.g., gemini-1.5-flash fails with "not found for API version v1beta"
