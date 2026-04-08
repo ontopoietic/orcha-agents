@@ -24,6 +24,10 @@ type ApiToChannelMapKeys = Exclude<
   | 'relaunchApp' // direct IPC to main process — not through WS RPC
   | 'removeWorkspace' // direct IPC to main process — modifies local config
   | 'invokeOnServer' // direct IPC to main process — cross-server RPC
+  | 'ledgerWatch' // direct IPC — ledger watcher
+  | 'ledgerUnwatch' // direct IPC — ledger watcher
+  | 'ledgerRead' // direct IPC — ledger reader
+  | 'onLedgerActivity' // direct IPC listener — ledger activity events
 > | BrowserPaneKeys
 type ChannelMapKeys = keyof typeof CHANNEL_MAP & string
 
