@@ -107,6 +107,15 @@ import { validateGitBashPath, checkVCRedistInstalled } from '@craft-agent/server
 // Initialize electron-log for renderer process support
 log.initialize()
 
+// Orcha Agents fork: use a separate userData directory to avoid conflict with official Craft Agents.
+// This must be set before requestSingleInstanceLock() which uses the userData path.
+if (app.isPackaged && !process.env.CRAFT_USER_DATA_DIR) {
+  app.setPath('userData', '/tmp/craft-agents-fork-v2')
+}
+if (process.env.CRAFT_USER_DATA_DIR) {
+  app.setPath('userData', process.env.CRAFT_USER_DATA_DIR)
+}
+
 // Enable debug/perf in dev mode (running from source)
 if (isDebugMode) {
   process.env.CRAFT_DEBUG = '1'
@@ -800,11 +809,31 @@ app.whenReady().then(async () => {
         app.exit(0)
       })
 
-      // Language change: sync from renderer to main process and rebuild native menu
+// Language change: sync from renderer to main process and rebuild native menu
       ipcMain.handle('i18n:changeLanguage', async (_event, lang: string) => {
         i18n.changeLanguage(lang)
         const { rebuildMenu } = await import('./menu')
         await rebuildMenu()
+      })
+
+      // Ledger watcher — observe .orcha-ledger.json in working directory
+      ipcMain.handle('ledger:watch', (event, workingDir: string) => {
+        const { startLedgerWatch } = require('./ledger-watcher') as typeof import('./ledger-watcher')
+        startLedgerWatch(workingDir, (activityEvent) => {
+          if (!event.sender.isDestroyed()) {
+            event.sender.send('ledger:activity', activityEvent)
+          }
+        })
+      })
+
+      ipcMain.handle('ledger:unwatch', () => {
+        const { stopLedgerWatch } = require('./ledger-watcher') as typeof import('./ledger-watcher')
+        stopLedgerWatch()
+      })
+
+      ipcMain.handle('ledger:read', (_event, workingDir: string) => {
+        const { readFullLedger } = require('./ledger-watcher') as typeof import('./ledger-watcher')
+        return readFullLedger(workingDir)
       })
 
       ipcMain.on('__get-ws-port', (e) => {

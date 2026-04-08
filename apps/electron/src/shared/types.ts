@@ -242,6 +242,12 @@ export interface ElectronAPI {
   // App lifecycle
   relaunchApp(): Promise<void>
   removeWorkspace(workspaceId: string): Promise<boolean>
+
+  // Ledger watcher — observe .orcha-ledger.json in working directory
+  ledgerWatch(workingDir: string): Promise<void>
+  ledgerUnwatch(): Promise<void>
+  ledgerRead(workingDir: string): Promise<import('./ledger-activity').LedgerData | null>
+  onLedgerActivity(callback: (event: import('./ledger-activity').LedgerActivityEvent) => void): () => void
   invokeOnServer(url: string, token: string, channel: string, ...args: any[]): Promise<any>
 
   // Remote session transfer (main-process orchestrated, supports chunked upload)
@@ -742,6 +748,14 @@ export interface AutomationsNavigationState {
 }
 
 /**
+ * Ledger navigation state
+ */
+export interface LedgerNavigationState {
+  navigator: 'ledger'
+  rightSidebar?: RightSidebarPanel
+}
+
+/**
  * Unified navigation state
  */
 export type NavigationState =
@@ -750,6 +764,7 @@ export type NavigationState =
   | SettingsNavigationState
   | SkillsNavigationState
   | AutomationsNavigationState
+  | LedgerNavigationState
 
 export const isSessionsNavigation = (
   state: NavigationState
@@ -770,6 +785,10 @@ export const isSkillsNavigation = (
 export const isAutomationsNavigation = (
   state: NavigationState
 ): state is AutomationsNavigationState => state.navigator === 'automations'
+
+export const isLedgerNavigation = (
+  state: NavigationState
+): state is LedgerNavigationState => state.navigator === 'ledger'
 
 export const DEFAULT_NAVIGATION_STATE: NavigationState = {
   navigator: 'sessions',
@@ -798,6 +817,9 @@ export const getNavigationStateKey = (state: NavigationState): string => {
   }
   if (state.navigator === 'settings') {
     return `settings:${state.subpage}`
+  }
+  if (state.navigator === 'ledger') {
+    return 'ledger'
   }
   // Chats
   const f = state.filter
