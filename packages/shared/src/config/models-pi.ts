@@ -39,6 +39,37 @@ function piModelToDefinition(m: Model<Api>): ModelDefinition {
   };
 }
 
+// ============================================
+// CUSTOM ZAI MODELS (not yet in Pi SDK)
+// ============================================
+
+/**
+ * ZAI models that are available via the z.ai API but not yet shipped
+ * in the Pi SDK's static catalog. These are appended to the SDK list
+ * in getPiModelsForAuthProvider() and automatically de-duplicated —
+ * once the SDK includes them natively, these entries are ignored.
+ */
+const ZAI_CUSTOM_MODELS: ModelDefinition[] = [
+  {
+    id: 'pi/glm-5.1',
+    name: 'GLM-5.1',
+    shortName: 'GLM-5.1',
+    description: 'zai model via Craft Agents Backend',
+    provider: 'pi',
+    contextWindow: 204800,
+    supportsThinking: true,
+  },
+  {
+    id: 'pi/glm-5v-turbo',
+    name: 'GLM-5V-Turbo',
+    shortName: 'GLM-5V-Turbo',
+    description: 'zai model via Craft Agents Backend',
+    provider: 'pi',
+    contextWindow: 202752,
+    supportsThinking: true,
+  },
+];
+
 /**
  * Models to EXCLUDE from the Pi model list.
  * Temporary workaround for models that are broken in the current Pi SDK version.
@@ -87,10 +118,12 @@ function isBareBedrockClaudeModel(modelId: string): boolean {
  * Get Pi models for a specific auth provider directly from the Pi SDK.
  */
 export function getPiModelsForAuthProvider(piAuthProvider: string): ModelDefinition[] {
+  let result: ModelDefinition[] = [];
+
   try {
     const models = getModels(piAuthProvider as KnownProvider);
     if (models.length > 0) {
-      return models
+      result = models
         .filter(m => !isExcludedPiModel(m.id))
         // Bedrock: exclude bare Claude models without region prefix — they're
         // always rejected by Bedrock which requires inference profiles (us.*/eu.*/global.*).
@@ -101,7 +134,18 @@ export function getPiModelsForAuthProvider(piAuthProvider: string): ModelDefinit
   } catch {
     // Provider not recognized by SDK — fall through
   }
-  return [];
+
+  // Append custom ZAI models not yet in the Pi SDK (auto-deduplicates)
+  if (piAuthProvider === 'zai') {
+    const sdkIds = new Set(result.map(m => m.id));
+    for (const custom of ZAI_CUSTOM_MODELS) {
+      if (!sdkIds.has(custom.id)) {
+        result.push(custom);
+      }
+    }
+  }
+
+  return result;
 }
 
 /**
