@@ -102,8 +102,8 @@ function activityToEvents(event: LedgerActivityEvent): LedgerEvent[] {
         signalsDelta: [s],
       })
     }
-  } else if (event.candidates > 0 || event.obligations > 0) {
-    // Sync phase progress without new signals
+  } else {
+    // Always show sync state — even when ledger is clean (0 candidates/obligations)
     events.push({
       id: `sync-${event.timestamp}`,
       timestamp: event.timestamp,
@@ -297,16 +297,18 @@ export function LedgerPanel() {
               </div>
             )}
 
-            {/* Summary footer */}
-            {hasSummary && (
+            {/* Summary footer — always visible when working directory is set */}
+            {workingDirectory && (
               <div className="flex items-center gap-2 border-t border-foreground/[0.04] py-1.5 px-2">
-                <span className="text-xs text-foreground/30">
-                  {totals.signals} Sig
-                  {totals.candidates > 0 && ` · ${totals.candidates} Kand`}
-                  {totals.obligations > 0 && ` · ${totals.obligations} Obl`}
-                </span>
+                {hasSummary && (
+                  <span className="text-xs text-foreground/30">
+                    {totals.signals} Sig
+                    {totals.candidates > 0 && ` · ${totals.candidates} Kand`}
+                    {totals.obligations > 0 && ` · ${totals.obligations} Obl`}
+                  </span>
+                )}
                 <button
-                  onClick={(e) => { e.stopPropagation(); if (workingDirectory) setLedgerWorkingDir(workingDirectory); navigate(routes.view.ledger()) }}
+                  onClick={(e) => { e.stopPropagation(); setLedgerWorkingDir(workingDirectory); navigate(routes.view.ledger()) }}
                   className="ml-auto flex items-center gap-1 text-[11px] text-foreground/30 hover:text-foreground/60 transition-colors"
                 >
                   Details
