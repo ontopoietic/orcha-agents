@@ -16,6 +16,9 @@ import {
   CheckCircle2,
   Clock,
   XCircle,
+  ChevronDown,
+  ChevronRight,
+  History,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAtomValue } from 'jotai'
@@ -24,7 +27,7 @@ import {
   Info_Page,
   Info_Section,
 } from '@/components/info'
-import type { LedgerData, LedgerSignal, LedgerCandidate, LedgerObligation } from '../../shared/ledger-activity'
+import type { LedgerData, LedgerSignal, LedgerCandidate, LedgerObligation, SyncHistory, SyncHistoryRun } from '../../shared/ledger-activity'
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -91,7 +94,7 @@ function obligationStatusColor(status: string): string {
   }
 }
 
-type Tab = 'signals' | 'candidates' | 'obligations'
+type Tab = 'signals' | 'candidates' | 'obligations' | 'history'
 
 // ─── LedgerDetailPage ────────────────────────────────────────────────────────
 
@@ -99,9 +102,10 @@ export default function LedgerDetailPage() {
   const workingDirectory = useAtomValue(ledgerWorkingDirAtom)
 
   const [data, setData] = React.useState<LedgerData | null>(null)
+  const [history, setHistory] = React.useState<SyncHistory>({ version: 1, runs: [] })
   const [loading, setLoading] = React.useState(true)
   const [error, setError] = React.useState<string | null>(null)
-  const [activeTab, setActiveTab] = React.useState<Tab>('signals')
+  const [activeTab, setActiveTab] = React.useState<Tab>('history')
 
   const loadData = React.useCallback(async () => {
     if (!workingDirectory) {
@@ -113,12 +117,12 @@ export default function LedgerDetailPage() {
     setLoading(true)
     setError(null)
     try {
-      const result = await window.electronAPI.ledgerRead(workingDirectory)
-      if (!result) {
-        setError('Keine .orcha-ledger.json im Arbeitsverzeichnis gefunden.')
-      } else {
-        setData(result)
-      }
+      const [result, hist] = await Promise.all([
+        window.electronAPI.ledgerRead(workingDirectory),
+        window.electronAPI.ledgerHistory?.(workingDirectory) ?? Promise.resolve({ version: 1 as const, runs: [] }),
+      ])
+      setData(result ?? null)
+      setHistory(hist)
     } catch (err) {
       setError('Fehler beim Laden des Ledger.')
     } finally {
@@ -144,9 +148,9 @@ export default function LedgerDetailPage() {
         }
       />
       <Info_Page.Content>
-        {data && (
-          <>
-            {/* Summary bar */}
+        <>
+          {/* Summary bar — only when ledger is loaded */}
+          {data && (
             <div className="flex items-center gap-3 px-4 py-2 border-b border-foreground/[0.06]">
               <span className="text-xs text-foreground/40">
                 Status: <span className="text-foreground/60 font-medium">{data.completionStatus}</span>
@@ -160,34 +164,44 @@ export default function LedgerDetailPage() {
                 </span>
               )}
             </div>
+          )}
 
-            {/* Tabs */}
-            <div className="flex border-b border-foreground/[0.06]">
-              <TabButton
-                active={activeTab === 'signals'}
-                onClick={() => setActiveTab('signals')}
-                label={`Signale (${data.signals.length})`}
-              />
-              <TabButton
-                active={activeTab === 'candidates'}
-                onClick={() => setActiveTab('candidates')}
-                label={`Candidates (${data.candidates.length})`}
-              />
-              <TabButton
-                active={activeTab === 'obligations'}
-                onClick={() => setActiveTab('obligations')}
-                label={`Obligations (${data.obligations.length})`}
-              />
-            </div>
+          {/* Tabs */}
+          <div className="flex border-b border-foreground/[0.06]">
+            <TabButton
+              active={activeTab === 'history'}
+              onClick={() => setActiveTab('history')}
+              label={`Sync History (${history.runs.length})`}
+            />
+            {data && (
+              <>
+                <TabButton
+                  active={activeTab === 'signals'}
+                  onClick={() => setActiveTab('signals')}
+                  label={`Signale (${data.signals.length})`}
+                />
+                <TabButton
+                  active={activeTab === 'candidates'}
+                  onClick={() => setActiveTab('candidates')}
+                  label={`Candidates (${data.candidates.length})`}
+                />
+                <TabButton
+                  active={activeTab === 'obligations'}
+                  onClick={() => setActiveTab('obligations')}
+                  label={`Obligations (${data.obligations.length})`}
+                />
+              </>
+            )}
+          </div>
 
-            {/* Tab content */}
-            <div className="flex-1 overflow-y-auto">
-              {activeTab === 'signals' && <SignalsTab signals={data.signals} />}
-              {activeTab === 'candidates' && <CandidatesTab candidates={data.candidates} signals={data.signals} />}
-              {activeTab === 'obligations' && <ObligationsTab obligations={data.obligations} />}
-            </div>
-          </>
-        )}
+          {/* Tab content */}
+          <div className="flex-1 overflow-y-auto">
+            {activeTab === 'history' && <HistoryTab runs={history.runs} />}
+            {data && activeTab === 'signals' && <SignalsTab signals={data.signals} />}
+            {data && activeTab === 'candidates' && <CandidatesTab candidates={data.candidates} signals={data.signals} />}
+            {data && activeTab === 'obligations' && <ObligationsTab obligations={data.obligations} />}
+          </div>
+        </>
       </Info_Page.Content>
     </Info_Page>
   )
@@ -253,7 +267,7 @@ function SignalsTab({ signals }: { signals: LedgerSignal[] }) {
           <Info_Section key={source} title={sourceLabel(source)} actions={<span className="text-xs text-foreground/40 bg-foreground/[0.06] px-1.5 py-0.5 rounded-full">{items.length}</span>}>
             <div className="space-y-0.5">
               {items.map(signal => (
-                <div key={signal.id} className="flex items-start gap-2.5 py-1.5 px-1 rounded-md hover:bg-foreground/[0.03]">
+                <div key={signal.id} className="flex items-start gap-2.5 py-1.5 px-3 rounded-md hover:bg-foreground/[0.03]">
                   <Icon className="h-3.5 w-3.5 mt-0.5 shrink-0" style={{ color: sourceColor(source) }} />
                   <div className="flex-1 min-w-0">
                     <span className="text-[13px] text-foreground/70 leading-snug block">
@@ -299,7 +313,7 @@ function CandidatesTab({ candidates, signals }: { candidates: LedgerCandidate[];
       <Info_Section title="Episodic Memory Candidates" actions={<span className="text-xs text-foreground/40 bg-foreground/[0.06] px-1.5 py-0.5 rounded-full">{candidates.length}</span>}>
         <div className="space-y-1">
           {candidates.map(c => (
-            <div key={c.id} className="py-2 px-1 rounded-md hover:bg-foreground/[0.03]">
+            <div key={c.id} className="py-2 px-3 rounded-md hover:bg-foreground/[0.03]">
               <div className="flex items-center gap-2">
                 <span className="text-[13px] text-foreground/70 font-medium">{c.title}</span>
                 <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-foreground/[0.06] text-foreground/40">
@@ -343,7 +357,7 @@ function ObligationsTab({ obligations }: { obligations: LedgerObligation[] }) {
           {obligations.map(o => {
             const Icon = obligationStatusIcon(o.status)
             return (
-              <div key={o.id} className="flex items-start gap-2.5 py-1.5 px-1 rounded-md hover:bg-foreground/[0.03]">
+              <div key={o.id} className="flex items-start gap-2.5 py-1.5 px-3 rounded-md hover:bg-foreground/[0.03]">
                 <Icon className="h-3.5 w-3.5 mt-0.5 shrink-0" style={{ color: obligationStatusColor(o.status) }} />
                 <div className="flex-1 min-w-0">
                   <span className="text-[13px] text-foreground/70">{o.description || o.id}</span>
@@ -368,6 +382,154 @@ function ObligationsTab({ obligations }: { obligations: LedgerObligation[] }) {
           })}
         </div>
       </Info_Section>
+    </div>
+  )
+}
+
+// ─── History Tab ─────────────────────────────────────────────────────────────
+
+function completionStatusColor(status: string): string {
+  switch (status) {
+    case 'completed':
+    case 'complete': return 'bg-green-500/10 text-green-500'
+    case 'in_progress': return 'bg-blue-500/10 text-blue-500'
+    case 'blocked': return 'bg-red-500/10 text-red-500'
+    default: return 'bg-foreground/[0.06] text-foreground/40'
+  }
+}
+
+function HistoryRunRow({ run, isFirst }: { run: SyncHistoryRun; isFirst: boolean }) {
+  const [expanded, setExpanded] = React.useState(isFirst)
+  const ChevronIcon = expanded ? ChevronDown : ChevronRight
+  const shortHash = run.commitHash ? run.commitHash.slice(0, 7) : '—'
+
+  return (
+    <div className={cn('border-b border-foreground/[0.04] last:border-0', isFirst && 'bg-foreground/[0.015]')}>
+      {/* Header row */}
+      <button
+        onClick={() => setExpanded(e => !e)}
+        className="w-full flex items-center gap-2.5 px-3 py-2.5 hover:bg-foreground/[0.03] transition-colors text-left"
+      >
+        <ChevronIcon className="h-3.5 w-3.5 shrink-0 text-foreground/30" />
+        <History className="h-3.5 w-3.5 shrink-0 text-foreground/25" />
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-[13px] text-foreground/70 font-medium">{formatDate(run.timestamp)}</span>
+            {isFirst && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-accent/10 text-accent">aktuell</span>
+            )}
+            <span className={cn('text-[10px] px-1.5 py-0.5 rounded-full', completionStatusColor(run.completionStatus))}>
+              {run.completionStatus}
+            </span>
+          </div>
+          <div className="flex items-center gap-3 mt-0.5">
+            <span className="text-[11px] text-foreground/30 font-mono">{shortHash}</span>
+            {run.branch && <span className="text-[11px] text-foreground/30">{run.branch}</span>}
+            <span className="text-[11px] text-foreground/25 ml-auto">
+              {run.signals.total}S · {run.candidates.total}C · {run.obligations.total}O
+            </span>
+          </div>
+        </div>
+      </button>
+
+      {/* Expanded details */}
+      {expanded && (
+        <div className="px-8 pb-3 space-y-3">
+          {/* Signals */}
+          {run.signals.total > 0 && (
+            <div>
+              <div className="flex items-center gap-2 mb-1">
+                <span className="text-[11px] text-foreground/40 font-medium uppercase tracking-wide">Signale</span>
+                <span className="text-[10px] text-foreground/30">{run.signals.total}</span>
+              </div>
+              <div className="space-y-0.5">
+                {run.signals.items.slice(0, 10).map(s => {
+                  const Icon = sourceIcon(s.source)
+                  return (
+                    <div key={s.id} className="flex items-start gap-2 py-0.5">
+                      <Icon className="h-3 w-3 mt-0.5 shrink-0" style={{ color: sourceColor(s.source) }} />
+                      <span className="text-[12px] text-foreground/55 leading-snug">{s.summary}</span>
+                    </div>
+                  )
+                })}
+                {run.signals.items.length > 10 && (
+                  <span className="text-[11px] text-foreground/25 pl-5">+{run.signals.items.length - 10} weitere</span>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Candidates */}
+          {run.candidates.total > 0 && (
+            <div>
+              <div className="flex items-center gap-2 mb-1">
+                <span className="text-[11px] text-foreground/40 font-medium uppercase tracking-wide">Candidates</span>
+                <span className="text-[10px] text-foreground/30">{run.candidates.total}</span>
+              </div>
+              <div className="space-y-0.5">
+                {run.candidates.items.slice(0, 8).map(c => (
+                  <div key={c.id} className="flex items-center gap-2 py-0.5">
+                    <span className="text-[12px] text-foreground/55">{c.title}</span>
+                    <span className="text-[10px] text-foreground/30 bg-foreground/[0.05] px-1 py-0.5 rounded">{c.category}</span>
+                  </div>
+                ))}
+                {run.candidates.items.length > 8 && (
+                  <span className="text-[11px] text-foreground/25">+{run.candidates.items.length - 8} weitere</span>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Obligations */}
+          {run.obligations.total > 0 && (
+            <div>
+              <div className="flex items-center gap-2 mb-1">
+                <span className="text-[11px] text-foreground/40 font-medium uppercase tracking-wide">Obligations</span>
+                <span className="text-[10px] text-foreground/30">
+                  {run.obligations.open} offen · {run.obligations.blocked} blockiert
+                </span>
+              </div>
+              <div className="space-y-0.5">
+                {run.obligations.items.slice(0, 8).map(o => {
+                  const Icon = obligationStatusIcon(o.status)
+                  return (
+                    <div key={o.id} className="flex items-start gap-2 py-0.5">
+                      <Icon className="h-3 w-3 mt-0.5 shrink-0" style={{ color: obligationStatusColor(o.status) }} />
+                      <span className="text-[12px] text-foreground/55">{o.description || o.id}</span>
+                    </div>
+                  )
+                })}
+                {run.obligations.items.length > 8 && (
+                  <span className="text-[11px] text-foreground/25 pl-5">+{run.obligations.items.length - 8} weitere</span>
+                )}
+              </div>
+            </div>
+          )}
+
+          {run.signals.total === 0 && run.candidates.total === 0 && run.obligations.total === 0 && (
+            <span className="text-[12px] text-foreground/25">Keine Einträge in diesem Sync.</span>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function HistoryTab({ runs }: { runs: SyncHistoryRun[] }) {
+  if (runs.length === 0) {
+    return <EmptyState text="Noch kein Sync durchgeführt." />
+  }
+
+  return (
+    <div className="py-2">
+      <div className="px-4 pb-2">
+        <span className="text-[11px] text-foreground/30">{runs.length} Sync{runs.length !== 1 ? 's' : ''} gespeichert</span>
+      </div>
+      <div>
+        {runs.map((run, i) => (
+          <HistoryRunRow key={run.id} run={run} isFirst={i === 0} />
+        ))}
+      </div>
     </div>
   )
 }

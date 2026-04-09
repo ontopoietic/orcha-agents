@@ -12,11 +12,12 @@
 import { watch, readFileSync, existsSync } from 'fs'
 import type { FSWatcher } from 'fs'
 import { join } from 'path'
-import type { LedgerActivityEvent, LedgerData, LedgerSignal, LedgerCandidate, LedgerObligation, LedgerSignalDelta } from '../shared/ledger-activity'
+import type { LedgerActivityEvent, LedgerData, LedgerSignal, LedgerCandidate, LedgerObligation, LedgerSignalDelta, SyncHistory } from '../shared/ledger-activity'
 
-export type { LedgerActivityEvent, LedgerData }
+export type { LedgerActivityEvent, LedgerData, SyncHistory }
 
 const LEDGER_FILE = '.orcha-ledger.json'
+const SYNC_HISTORY_FILE = '.orcha-sync-history.json'
 const DEBOUNCE_MS = 500
 
 interface PrevState {
@@ -132,6 +133,19 @@ export function stopLedgerWatch(): void {
   }
   prevState = null
   currentWorkingDir = null
+}
+
+/**
+ * Read the sync history file for the history tab.
+ */
+export function readSyncHistory(workingDir: string): SyncHistory {
+  const historyPath = join(workingDir, SYNC_HISTORY_FILE)
+  if (!existsSync(historyPath)) return { version: 1, runs: [] }
+  try {
+    return JSON.parse(readFileSync(historyPath, 'utf-8')) as SyncHistory
+  } catch {
+    return { version: 1, runs: [] }
+  }
 }
 
 /**
