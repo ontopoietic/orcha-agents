@@ -836,6 +836,11 @@ app.whenReady().then(async () => {
         return readFullLedger(workingDir)
       })
 
+      ipcMain.handle('ledger:history', (_event, workingDir: string) => {
+        const { readSyncHistory } = require('./ledger-watcher') as typeof import('./ledger-watcher')
+        return readSyncHistory(workingDir)
+      })
+
       ipcMain.on('__get-ws-port', (e) => {
         e.returnValue = instance.port
       })

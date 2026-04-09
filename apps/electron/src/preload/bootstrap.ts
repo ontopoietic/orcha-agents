@@ -421,6 +421,8 @@ client.onConnectionStateChanged((state) => {
   ipcRenderer.invoke('ledger:unwatch')
 ;(api as ElectronAPI).ledgerRead = (workingDir: string) =>
   ipcRenderer.invoke('ledger:read', workingDir)
+;(api as ElectronAPI).ledgerHistory = (workingDir: string) =>
+  ipcRenderer.invoke('ledger:history', workingDir)
 ;(api as ElectronAPI).onLedgerActivity = (callback) => {
   const handler = (_event: Electron.IpcRendererEvent, activityEvent: unknown) =>
     callback(activityEvent as import('../shared/ledger-activity').LedgerActivityEvent)

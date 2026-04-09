@@ -247,6 +247,7 @@ export interface ElectronAPI {
   ledgerWatch(workingDir: string): Promise<void>
   ledgerUnwatch(): Promise<void>
   ledgerRead(workingDir: string): Promise<import('./ledger-activity').LedgerData | null>
+  ledgerHistory(workingDir: string): Promise<import('./ledger-activity').SyncHistory>
   onLedgerActivity(callback: (event: import('./ledger-activity').LedgerActivityEvent) => void): () => void
   invokeOnServer(url: string, token: string, channel: string, ...args: any[]): Promise<any>
 
