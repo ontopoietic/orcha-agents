@@ -146,7 +146,7 @@ export function LedgerPanel() {
 
   const [events, setEvents] = React.useState<LedgerEvent[]>([])
   const [totals, setTotals] = React.useState({ signals: 0, candidates: 0, obligations: 0 })
-  const [isExpanded, setIsExpanded] = React.useState(false)
+  const [isExpanded, setIsExpanded] = React.useState(true)
   const [hasNew, setHasNew] = React.useState(false)
   const [newCount, setNewCount] = React.useState(0)
   const autoCollapseTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -157,6 +157,7 @@ export function LedgerPanel() {
     setTotals({ signals: 0, candidates: 0, obligations: 0 })
     setHasNew(false)
     setNewCount(0)
+    setIsExpanded(true)
   }, [workingDirectory])
 
   // Start/stop ledger watcher when working directory changes
