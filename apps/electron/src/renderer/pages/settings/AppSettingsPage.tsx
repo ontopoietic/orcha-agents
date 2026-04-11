@@ -320,33 +320,9 @@ export default function AppSettingsPage() {
                       )}
                     </div>
                   </SettingsRow>
-                  <SettingsRow label="Check for updates">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={handleCheckForUpdates}
-                      disabled={isCheckingForUpdates}
-                    >
-                      {isCheckingForUpdates ? (
-                        <>
-                          <Spinner className="mr-1.5" />
-                          Checking...
-                        </>
-                      ) : (
-                        'Check Now'
-                      )}
-                    </Button>
+                  <SettingsRow label="Updates">
+                    <span className="text-muted-foreground text-sm">Managed manually</span>
                   </SettingsRow>
-                  {updateChecker.isReadyToInstall && updateChecker.updateInfo?.latestVersion && (
-                    <SettingsRow label="Update ready">
-                      <Button
-                        size="sm"
-                        onClick={updateChecker.installUpdate}
-                      >
-                        Restart to Update to v{updateChecker.updateInfo.latestVersion}
-                      </Button>
-                    </SettingsRow>
-                  )}
                 </SettingsCard>
               </SettingsSection>
             </div>

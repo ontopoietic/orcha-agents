@@ -1,5 +1,5 @@
-appId: com.lukilabs.craft-agent
-productName: Craft Agents
+appId: com.ontopoietic.orcha-agents
+productName: Orcha Agents
 copyright: Copyright © 2026 Craft Docs Ltd.
 
 electronVersion: "39.2.7"
@@ -70,10 +70,10 @@ files:
 extraMetadata:
   main: dist/main.cjs
 
-# Auto-update: electron-updater fetches from this URL for update manifests (.yml files)
-publish:
-  provider: generic
-  url: https://agents.craft.do/electron/latest
+# Auto-update: disabled for fork — upstream URL would overwrite with original app
+# publish:
+#   provider: generic
+#   url: https://agents.craft.do/electron/latest
 
 # Disable ASAR to avoid decompression overhead and click delays
 asar: false
