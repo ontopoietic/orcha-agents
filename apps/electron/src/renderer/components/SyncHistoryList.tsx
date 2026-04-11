@@ -1,10 +1,9 @@
 import * as React from "react"
-import { History, Clock, GitCommit, ChevronRight, Trash2, CheckCircle2 } from "lucide-react"
+import { History, Clock, GitCommit, ChevronRight, Trash2, CheckCircle2, XCircle } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 import type { SyncHistory, SyncHistoryRun } from "../../shared/ledger-activity"
-import { useAtomValue } from "jotai"
-import { ledgerWorkingDirAtom } from "@/atoms/panel-stack"
+import { useNavigation } from "@/contexts/NavigationContext"
 
 function formatDate(iso: string): string {
   if (!iso) return "—"
@@ -34,19 +33,22 @@ function statusColor(status: string): string {
   }
 }
 
-function StatusIcon({ status }: { status: string }) {
-  switch (status) {
-    case "completed":
-    case "complete":
-      return CheckCircle2
-    case "in_progress":
-    case "incomplete":
-      return Clock
-    case "blocked":
-      return XCircle
-    default:
-      return GitCommit
-  }
+function StatusIcon({ status, className }: { status: string; className?: string }) {
+  const Icon = (() => {
+    switch (status) {
+      case "completed":
+      case "complete":
+        return CheckCircle2
+      case "in_progress":
+      case "incomplete":
+        return Clock
+      case "blocked":
+        return XCircle
+      default:
+        return GitCommit
+    }
+  })()
+  return <Icon className={className} />
 }
 
 interface SyncHistoryListProps {
