@@ -111,11 +111,15 @@ function broadcastDownloadProgress(progress: number): void {
 
 // ─── Configure electron-updater ───────────────────────────────────────────────
 
+// Fork: auto-update is disabled — the upstream update server (agents.craft.do)
+// would overwrite this fork with the original app. Updates are managed manually.
+const FORK_AUTO_UPDATE_DISABLED = true
+
 // Auto-download updates in the background after detection
-autoUpdater.autoDownload = true
+autoUpdater.autoDownload = false
 
 // Install on app quit (if update is downloaded but user hasn't clicked "Restart")
-autoUpdater.autoInstallOnAppQuit = true
+autoUpdater.autoInstallOnAppQuit = false
 
 // Use the logger for electron-updater internal logging
 autoUpdater.logger = {
@@ -413,6 +417,11 @@ export interface UpdateOnLaunchResult {
  * - Auto-downloads if update available
  */
 export async function checkForUpdatesOnLaunch(): Promise<UpdateOnLaunchResult> {
+  if (FORK_AUTO_UPDATE_DISABLED) {
+    mainLog.info('[auto-update] Auto-update disabled in fork — skipping launch check')
+    return { action: 'none' }
+  }
+
   mainLog.info('[auto-update] Checking for updates on launch...')
 
   const info = await checkForUpdates({ autoDownload: true })

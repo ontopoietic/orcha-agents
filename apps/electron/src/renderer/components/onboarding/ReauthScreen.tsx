@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next"
 import { AlertCircle, RefreshCw } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Spinner } from "@craft-agent/ui"
-import { CraftAgentsSymbol } from "@/components/icons/CraftAgentsSymbol"
+import { OrchaAgentsSymbol } from "@/components/icons/OrchaAgentsSymbol"
 import { StepFormLayout } from "./primitives"
 
 interface ReauthScreenProps {
@@ -51,7 +51,7 @@ export function ReauthScreen({ onLogin, onReset }: ReauthScreenProps) {
             <>
               {t("onboarding.reauth.expired")}
               <br />
-              {t("onboarding.reauth.loginAgain")}
+{t("onboarding.reauth.loginAgain")}
               <br />
               <span className="text-muted-foreground/70 text-xs mt-2 block">
                 {t("onboarding.reauth.preserved")}

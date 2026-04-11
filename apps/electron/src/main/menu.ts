@@ -16,7 +16,7 @@ let cachedClientResolver: ClientResolver | null = null
 
 /**
  * Creates and sets the application menu for macOS.
- * Includes only relevant items for the Craft Agents app.
+ * Includes only relevant items for the Orcha Agents app.
  *
  * Call rebuildMenu() when update state changes to refresh the menu.
  */
@@ -79,9 +79,9 @@ export async function rebuildMenu(): Promise<void> {
   const template: Electron.MenuItemConstructorOptions[] = [
     // App menu (macOS only)
     ...(isMac ? [{
-      label: 'Craft Agents',
+      label: 'Orcha Agents',
       submenu: [
-        { role: 'about' as const, label: i18n.t('menu.aboutCraftAgents') },
+{ role: 'about' as const, label: i18n.t('menu.aboutCraftAgents') },
         updateMenuItem,
         { type: 'separator' as const },
         {
@@ -91,7 +91,7 @@ export async function rebuildMenu(): Promise<void> {
           click: () => sendToRenderer(RPC_CHANNELS.menu.OPEN_SETTINGS)
         },
         { type: 'separator' as const },
-        { role: 'hide' as const, label: i18n.t('menu.hideCraftAgents') },
+{ role: 'hide' as const, label: i18n.t('menu.hideCraftAgents') },
         { role: 'hideOthers' as const },
         { role: 'unhide' as const },
         { type: 'separator' as const },
