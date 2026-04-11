@@ -206,7 +206,10 @@
   "pnpm": {
     "overrides": {
       "@sentry/core": "10.48.0",
-      "@sentry/react": "10.48.0"
+      "@sentry/react": "10.48.0",
+      "@sentry/node": "10.48.0",
+      "@sentry/electron": "7.11.0",
+      "@sentry/utils": "10.48.0"
     }
   }
 }
