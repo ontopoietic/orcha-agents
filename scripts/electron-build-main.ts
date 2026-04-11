@@ -288,6 +288,10 @@ async function main(): Promise<void> {
       "--format=cjs",
       "--outfile=apps/electron/dist/main.cjs",
       "--external:electron",
+      // Orcha Agents fork: set CRAFT_CONFIG_DIR before any module code evaluates.
+      // paths.ts reads this env var at module-load time as a constant, so it must
+      // be available before the first require() in the bundle.
+      `--banner:js=if(!process.env.CRAFT_CONFIG_DIR){process.env.CRAFT_CONFIG_DIR=require("os").homedir()+"/.orcha-agents";}`,
       ...buildDefines,
     ],
     cwd: ROOT_DIR,

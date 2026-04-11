@@ -107,10 +107,12 @@ import { validateGitBashPath, checkVCRedistInstalled } from '@craft-agent/server
 // Initialize electron-log for renderer process support
 log.initialize()
 
-// Orcha Agents fork: use a separate userData directory to avoid conflict with official Craft Agents.
-// This must be set before requestSingleInstanceLock() which uses the userData path.
+// Orcha Agents fork: use a separate data directory to avoid conflict with official Craft Agents.
+// CRAFT_CONFIG_DIR is set via esbuild banner (before any module code evaluates).
+// Here we only handle Electron's userData path for window state, caches, etc.
+const ORCHA_DATA_DIR = join(homedir(), '.orcha-agents')
 if (app.isPackaged && !process.env.CRAFT_USER_DATA_DIR) {
-  app.setPath('userData', '/tmp/craft-agents-fork-v2')
+  app.setPath('userData', join(ORCHA_DATA_DIR, 'electron-data'))
 }
 if (process.env.CRAFT_USER_DATA_DIR) {
   app.setPath('userData', process.env.CRAFT_USER_DATA_DIR)

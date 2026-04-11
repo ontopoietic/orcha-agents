@@ -243,6 +243,9 @@ export function applyAnthropicRuntimeBootstrap(
     } else if (strict) {
       throw new Error('Bundled Bun runtime not found. The app package may be corrupted.');
     }
+  } else if (process.env.CRAFT_BUN) {
+    // Dev mode: use CRAFT_BUN env var if set (e.g. when running fork alongside official app)
+    setExecutable(process.env.CRAFT_BUN);
   }
 }
 

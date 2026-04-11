@@ -30,6 +30,7 @@ type ApiToChannelMapKeys = Exclude<
   | 'ledgerWatch' // direct IPC — ledger watcher
   | 'ledgerUnwatch' // direct IPC — ledger watcher
   | 'ledgerRead' // direct IPC — ledger reader
+  | 'ledgerHistory' // direct IPC — sync history reader
   | 'onLedgerActivity' // direct IPC listener — ledger activity events
 > | BrowserPaneKeys
 type ChannelMapKeys = keyof typeof CHANNEL_MAP & string
