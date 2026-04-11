@@ -113,6 +113,7 @@ import {
   isSettingsNavigation,
   isSkillsNavigation,
   isAutomationsNavigation,
+  isLedgerNavigation,
   type NavigationState,
 } from "@/contexts/NavigationContext"
 import type { SettingsSubpage } from "../../../shared/types"
@@ -3224,6 +3225,45 @@ function AppShellContent({
                   workspaceId={activeWorkspaceId ?? undefined}
                   statusFilter={listFilter}
                   labelFilterMap={labelFilter}
+                  focusedSessionId={panelCount === 0 ? null : panelCount > 1 ? focusedSessionId : undefined}
+                  onNavigateToSession={panelCount > 1 ? navigateToSessionInPanel : undefined}
+                  hasPendingPrompt={hasPendingPrompt}
+                  activeChatMatchInfo={chatMatchInfo}
+                />
+              </>
+            )}
+            {isLedgerNavigation(navState) && (
+              /* Ledger: Session list for quick navigation */
+              <>
+                <SessionList
+                  key="ledger"
+                  items={workspaceSessionMetas}
+                  onDelete={handleDeleteSession}
+                  onFlag={onFlagSession}
+                  onUnflag={onUnflagSession}
+                  onArchive={onArchiveSession}
+                  onUnarchive={onUnarchiveSession}
+                  onMarkUnread={onMarkSessionUnread}
+                  onSessionStatusChange={onSessionStatusChange}
+                  onRename={onRenameSession}
+                  onFocusChatInput={(targetSessionId) => {
+                    focusChatInputForSession(targetSessionId ?? focusedSessionId ?? session.selected)
+                  }}
+                  onSessionSelect={(selectedMeta) => {
+                    navigateToSession(selectedMeta.id)
+                  }}
+                  onOpenInNewWindow={(selectedMeta) => {
+                    if (activeWorkspaceId) {
+                      window.electronAPI.openSessionInNewWindow(activeWorkspaceId, selectedMeta.id)
+                    }
+                  }}
+                  sessionOptions={sessionOptions}
+                  sessionStatuses={effectiveSessionStatuses}
+                  evaluateViews={evaluateViews}
+                  labels={displayLabelConfigs}
+                  onLabelsChange={handleSessionLabelsChange}
+                  groupingMode={chatGroupingMode}
+                  workspaceId={activeWorkspaceId ?? undefined}
                   focusedSessionId={panelCount === 0 ? null : panelCount > 1 ? focusedSessionId : undefined}
                   onNavigateToSession={panelCount > 1 ? navigateToSessionInPanel : undefined}
                   hasPendingPrompt={hasPendingPrompt}

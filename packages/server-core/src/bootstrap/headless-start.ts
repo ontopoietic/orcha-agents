@@ -113,7 +113,7 @@ export function generateServerToken(): string {
 // Startup lock file
 // ---------------------------------------------------------------------------
 
-const LOCK_FILE = join(CONFIG_DIR, '.server.lock')
+const LOCK_FILE = process.env.CRAFT_SERVER_LOCK_FILE ?? '/tmp/craft-agents-fork.lock'
 
 interface LockPayload {
   pid: number

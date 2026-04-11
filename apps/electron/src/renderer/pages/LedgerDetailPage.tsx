@@ -116,14 +116,28 @@ export default function LedgerDetailPage() {
 
     setLoading(true)
     setError(null)
+    console.log('[Ledger] loadData — workingDirectory:', workingDirectory)
     try {
+      const hasHistoryApi = typeof window.electronAPI?.ledgerHistory === 'function'
+      console.log('[Ledger] hasHistoryApi:', hasHistoryApi)
       const [result, hist] = await Promise.all([
         window.electronAPI.ledgerRead(workingDirectory),
-        window.electronAPI.ledgerHistory?.(workingDirectory) ?? Promise.resolve({ version: 1 as const, runs: [] }),
+        hasHistoryApi
+          ? window.electronAPI.ledgerHistory(workingDirectory)
+          : Promise.resolve({ version: 1 as const, runs: [] }),
       ])
+      console.log('[Ledger] ledgerRead result:', result ? `${result.signals.length}S ${result.candidates.length}C ${result.obligations.length}O` : 'null')
+      console.log('[Ledger] ledgerHistory result:', hist ? `${hist.runs.length} runs` : 'null/undefined')
+      if (hist?.runs?.length > 0) {
+        console.log('[Ledger] First run:', hist.runs[0].timestamp, hist.runs[0].commitHash, `${hist.runs[0].signals.total}S`)
+      }
       setData(result ?? null)
       setHistory(hist)
+      if (!hasHistoryApi) {
+        console.warn('[Ledger] ledgerHistory API nicht verfügbar — Preload neu bauen?')
+      }
     } catch (err) {
+      console.error('[Ledger] loadData error:', err)
       setError('Fehler beim Laden des Ledger.')
     } finally {
       setLoading(false)
@@ -225,6 +239,16 @@ function TabButton({ active, onClick, label }: { active: boolean; onClick: () =>
   )
 }
 
+
+/** Renders a signal summary with the title prefix (before first colon) in bold. */
+function RenderSignalSummary({ summary }: { summary: string }) {
+  const colonIdx = summary.indexOf(':')
+  if (colonIdx === -1) return <>{summary}</>
+  const title = summary.slice(0, colonIdx)
+  const rest = summary.slice(colonIdx)
+  return <><span className="font-bold text-foreground">{title}</span><span className="text-foreground/70">{rest}</span></>
+}
+
 // ─── Signals Tab ─────────────────────────────────────────────────────────────
 
 function SignalsTab({ signals }: { signals: LedgerSignal[] }) {
@@ -271,7 +295,7 @@ function SignalsTab({ signals }: { signals: LedgerSignal[] }) {
                   <Icon className="h-3.5 w-3.5 mt-0.5 shrink-0" style={{ color: sourceColor(source) }} />
                   <div className="flex-1 min-w-0">
                     <span className="text-[13px] text-foreground/70 leading-snug block">
-                      {signal.summary}
+                      <RenderSignalSummary summary={signal.summary} />
                     </span>
                     <div className="flex items-center gap-2 mt-0.5">
                       <span className="text-[11px] text-foreground/30">{formatDate(signal.createdAt)}</span>
@@ -448,7 +472,7 @@ function HistoryRunRow({ run, isFirst }: { run: SyncHistoryRun; isFirst: boolean
                   return (
                     <div key={s.id} className="flex items-start gap-2 py-0.5">
                       <Icon className="h-3 w-3 mt-0.5 shrink-0" style={{ color: sourceColor(s.source) }} />
-                      <span className="text-[12px] text-foreground/55 leading-snug">{s.summary}</span>
+                      <span className="text-[12px] text-foreground/55 leading-snug"><RenderSignalSummary summary={s.summary} /></span>
                     </div>
                   )
                 })}
@@ -469,7 +493,7 @@ function HistoryRunRow({ run, isFirst }: { run: SyncHistoryRun; isFirst: boolean
               <div className="space-y-0.5">
                 {run.candidates.items.slice(0, 8).map(c => (
                   <div key={c.id} className="flex items-center gap-2 py-0.5">
-                    <span className="text-[12px] text-foreground/55">{c.title}</span>
+                    <span className="text-[12px] text-foreground/55"><RenderSignalSummary summary={c.title} /></span>
                     <span className="text-[10px] text-foreground/30 bg-foreground/[0.05] px-1 py-0.5 rounded">{c.category}</span>
                   </div>
                 ))}
@@ -517,7 +541,7 @@ function HistoryRunRow({ run, isFirst }: { run: SyncHistoryRun; isFirst: boolean
 
 function HistoryTab({ runs }: { runs: SyncHistoryRun[] }) {
   if (runs.length === 0) {
-    return <EmptyState text="Noch kein Sync durchgeführt." />
+    return <EmptyState text="Noch kein Sync durchgeführt — führe `orcha sync` im Projektverzeichnis aus." />
   }
 
   return (

@@ -140,10 +140,14 @@ export function stopLedgerWatch(): void {
  */
 export function readSyncHistory(workingDir: string): SyncHistory {
   const historyPath = join(workingDir, SYNC_HISTORY_FILE)
+  console.log('[ledger-watcher] readSyncHistory — path:', historyPath, 'exists:', existsSync(historyPath))
   if (!existsSync(historyPath)) return { version: 1, runs: [] }
   try {
-    return JSON.parse(readFileSync(historyPath, 'utf-8')) as SyncHistory
-  } catch {
+    const data = JSON.parse(readFileSync(historyPath, 'utf-8')) as SyncHistory
+    console.log('[ledger-watcher] readSyncHistory — runs:', data.runs.length)
+    return data
+  } catch (err) {
+    console.error('[ledger-watcher] readSyncHistory — parse error:', err)
     return { version: 1, runs: [] }
   }
 }
