@@ -8,27 +8,21 @@ import { createHash, randomUUID } from 'crypto'
 import { hostname, homedir } from 'os'
 import * as Sentry from '@sentry/electron/main'
 
-// Initialize Sentry error tracking as early as possible after app import.
-// Only enabled in production (packaged) builds to avoid noise during development.
-// DSN is baked in at build time via esbuild --define (same pattern as OAuth secrets).
-//
-// NOTE: Source map upload is intentionally disabled. Stack traces in Sentry will show
-// bundled/minified code. To enable source map upload in the future:
-//   1. Add SENTRY_AUTH_TOKEN, SENTRY_ORG, SENTRY_PROJECT to CI secrets
-//   2. Re-enable the @sentry/vite-plugin in vite.config.ts (handles renderer maps)
-//   3. Add @sentry/esbuild-plugin to scripts/electron-build-main.ts (handles main process maps)
+// Sentry is DISABLED for the Orcha Agents fork.
+// The upstream project (Craft Agents) uses Sentry for error tracking,
+// but we do not want any data reported to the upstream Sentry project.
+// The import is kept so the code compiles, but init is skipped.
+const _sentryDisabled = true // eslint-disable-line @typescript-eslint/no-unused-vars
+Sentry.init({ enabled: false })
+// Original Sentry.init block preserved below for reference:
+/*
 Sentry.init({
   dsn: process.env.SENTRY_ELECTRON_INGEST_URL,
   environment: app.isPackaged ? 'production' : 'development',
   release: app.getVersion(),
-  // Enabled whenever the ingest URL is available — works in both production (baked via CI)
-  // and development (injected via .env / 1Password). Filter by environment in Sentry dashboard.
   enabled: !!process.env.SENTRY_ELECTRON_INGEST_URL,
 
-  // Scrub sensitive data before sending to Sentry.
-  // Removes authorization headers, API keys/tokens, and credential-like values.
   beforeSend(event) {
-    // Scrub request headers (authorization, cookies)
     if (event.request?.headers) {
       const sensitiveHeaders = ['authorization', 'cookie', 'x-api-key']
       for (const header of sensitiveHeaders) {
@@ -38,7 +32,6 @@ Sentry.init({
       }
     }
 
-    // Scrub breadcrumb data that may contain sensitive values
     if (event.breadcrumbs) {
       for (const breadcrumb of event.breadcrumbs) {
         if (breadcrumb.data) {
@@ -57,15 +50,15 @@ Sentry.init({
     return event
   },
 })
+*/
 
 // Initialize i18n for main process (menus, dialogs, etc.)
 import { setupI18n, i18n } from '@craft-agent/shared/i18n'
 setupI18n()
 
-// Set anonymous machine ID for Sentry user tracking (no PII — just a hash).
-// Uses hostname + homedir to produce a stable per-machine identifier.
-const machineId = createHash('sha256').update(hostname() + homedir()).digest('hex').slice(0, 16)
-Sentry.setUser({ id: machineId })
+// Sentry disabled for Orcha Agents fork
+// const machineId = createHash('sha256').update(hostname() + homedir()).digest('hex').slice(0, 16)
+// Sentry.setUser({ id: machineId })
 
 import { join, delimiter } from 'path'
 import { existsSync, readFileSync } from 'fs'
