@@ -11,8 +11,9 @@
  * Run: bun scripts/copy-assets.ts
  */
 
-import { cpSync, copyFileSync, mkdirSync, existsSync } from 'fs';
+import { cpSync, copyFileSync, mkdirSync, existsSync, unlinkSync } from 'fs';
 import { join, dirname } from 'path';
+import { execSync } from 'child_process';
 
 const ROOT_DIR = join(import.meta.dir, '..', '..', '..');
 
@@ -41,6 +42,37 @@ if (existsSync(piServerSrc)) {
   console.log('✓ Copied pi-agent-server → dist/resources/pi-agent-server/');
 } else {
   console.warn('⚠ pi-agent-server not found at', piServerSrc);
+}
+
+// Download Bun binary for Pi Agent Server subprocess (if not already present)
+// The Pi Agent Server is built with --target bun and needs Bun to run.
+const BUN_VERSION = 'bun-v1.3.9';
+const vendorBunDir = join('vendor', 'bun');
+const bunBinary = process.platform === 'win32' ? 'bun.exe' : 'bun';
+const vendorBunPath = join(vendorBunDir, bunBinary);
+
+if (!existsSync(vendorBunPath)) {
+  const platform = process.platform === 'win32' ? 'windows' : process.platform === 'darwin' ? 'darwin' : 'linux';
+  const arch = process.arch === 'arm64' ? 'aarch64' : 'x64';
+  const downloadName = `bun-${platform}-${arch}`;
+  const zipUrl = `https://github.com/oven-sh/bun/releases/download/${BUN_VERSION}/${downloadName}.zip`;
+
+  console.log(`⬇ Downloading Bun ${BUN_VERSION} for ${platform}-${arch}...`);
+  mkdirSync(vendorBunDir, { recursive: true });
+
+  try {
+    const tmpZip = join(vendorBunDir, 'bun.zip');
+    execSync(`curl -fsSL --retry 3 -o "${tmpZip}" "${zipUrl}"`);
+    execSync(`unzip -o -j "${tmpZip}" "${downloadName}/${bunBinary}" -d "${vendorBunDir}"`);
+    execSync(`chmod +x "${vendorBunPath}"`);
+    // Clean up zip
+    try { unlinkSync(tmpZip); } catch {}
+    console.log('✓ Downloaded Bun → vendor/bun/');
+  } catch (err) {
+    console.warn('⚠ Failed to download Bun. Pi Agent Server may not work:', (err as Error).message);
+  }
+} else {
+  console.log('✓ Bun binary already present in vendor/bun/');
 }
 
 // Copy PowerShell parser script (for Windows command validation in Explore mode)
