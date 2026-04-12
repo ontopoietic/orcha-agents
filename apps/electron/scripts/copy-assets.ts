@@ -11,13 +11,37 @@
  * Run: bun scripts/copy-assets.ts
  */
 
-import { cpSync, copyFileSync, mkdirSync } from 'fs';
-import { join } from 'path';
+import { cpSync, copyFileSync, mkdirSync, existsSync } from 'fs';
+import { join, dirname } from 'path';
+
+const ROOT_DIR = join(import.meta.dir, '..', '..', '..');
 
 // Copy all resources (icons, themes, docs, permissions, tool-icons, etc.)
 cpSync('resources', 'dist/resources', { recursive: true });
 
 console.log('✓ Copied resources/ → dist/resources/');
+
+// Copy session-mcp-server from packages/ build output
+const sessionServerSrc = join(ROOT_DIR, 'packages', 'session-mcp-server', 'dist', 'index.js');
+const sessionServerDest = join('dist', 'resources', 'session-mcp-server', 'index.js');
+if (existsSync(sessionServerSrc)) {
+  mkdirSync(dirname(sessionServerDest), { recursive: true });
+  copyFileSync(sessionServerSrc, sessionServerDest);
+  console.log('✓ Copied session-mcp-server → dist/resources/session-mcp-server/');
+} else {
+  console.warn('⚠ session-mcp-server not found at', sessionServerSrc);
+}
+
+// Copy pi-agent-server from packages/ build output
+const piServerSrc = join(ROOT_DIR, 'packages', 'pi-agent-server', 'dist', 'index.js');
+const piServerDest = join('dist', 'resources', 'pi-agent-server', 'index.js');
+if (existsSync(piServerSrc)) {
+  mkdirSync(dirname(piServerDest), { recursive: true });
+  copyFileSync(piServerSrc, piServerDest);
+  console.log('✓ Copied pi-agent-server → dist/resources/pi-agent-server/');
+} else {
+  console.warn('⚠ pi-agent-server not found at', piServerSrc);
+}
 
 // Copy PowerShell parser script (for Windows command validation in Explore mode)
 // Source: packages/shared/src/agent/powershell-parser.ps1
