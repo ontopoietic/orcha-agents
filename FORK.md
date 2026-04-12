@@ -11,6 +11,8 @@ Dieses Repository ist ein Fork von [lukilabs/craft-agents-oss](https://github.co
 | **Zuletzt gemerged** | v0.8.6 |
 | **Upstream-Stand** | v0.8.6 (aktuell) |
 | **Aktiver Branch** | `main` |
+| **Feature-Branch** | `feature/precompact-hooks` (auf main rebased) |
+| **Sentry** | Deaktiviert (main + renderer) — kein Reporting |
 
 ---
 
