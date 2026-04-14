@@ -311,6 +311,18 @@ export default function App() {
     }
   }, [isFullyReady, splashExiting])
 
+  // Safety timeout — force-hide splash if loading hangs for more than 10 seconds
+  useEffect(() => {
+    const timeout = setTimeout(() => {
+      if (!splashHidden) {
+        console.warn('[App] Splash screen timeout — forcing exit')
+        setSplashExiting(true)
+        setTimeout(() => setSplashHidden(true), 600)
+      }
+    }, 10_000)
+    return () => clearTimeout(timeout)
+  }, [splashHidden])
+
   // Handler for when splash exit animation completes
   const handleSplashExitComplete = useCallback(() => {
     setSplashHidden(true)
