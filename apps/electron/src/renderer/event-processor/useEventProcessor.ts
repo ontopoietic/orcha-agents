@@ -6,7 +6,11 @@
  */
 
 import { useCallback, useRef } from 'react'
-import * as Sentry from '@sentry/electron/renderer'
+// Sentry is DISABLED for the Orcha Agents fork — no reporting.
+// Replaced with a no-op stub so no @sentry code is loaded in the renderer.
+const Sentry = {
+  captureException: (..._: unknown[]) => {},
+} as unknown as typeof import('@sentry/electron/renderer')
 import type { Session } from '../../shared/types'
 import { processEvent } from './processor'
 import type { SessionState, AgentEvent, Effect, StreamingState, ErrorEvent, TypedErrorEvent } from './types'
