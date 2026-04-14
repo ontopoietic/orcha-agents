@@ -32,119 +32,29 @@ Resolve conflicts per-commit. Refer to FORK.md's "Konflikt-Kandidaten" section f
 3. **Keep Orcha branding** (icon imports, app name, update behavior) when upstream adds generic features.
 4. **Keep i18n key names unchanged** (e.g., `menu.aboutCraftAgents`) — only change values in locale JSON files.
 
-## Step 2: Post-Rebase Verification Checklist
+## Step 2: Run Verification Script
 
-After the rebase completes, run through these checks IN ORDER. Each item was a real failure discovered in previous upgrades:
+After the rebase completes, run the automated verification:
+
+```bash
+bash scripts/verify-orcha-build.sh
+```
+
+This checks **28 items** across 6 categories:
+1. **Branding** — No "Craft Agent(s)" in locales, correct HTML title, app name, Orcha icons
+2. **Sentry** — Disabled in main, no imports in renderer, AppErrorBoundary present
+3. **Package Versions** — Single @radix-ui/react-context, Sentry overrides, Tiptap pinned
+4. **Build Resources** — SDK path, pi-agent-server, session-mcp-server, Bun download
+5. **Workspace Setup** — pnpm-workspace.yaml, .npmrc, symlink
+6. **Installed App** — All critical files present (after build)
+
+Fix every ❌ before proceeding to Step 3.
+
+### Manual Checks (Script Cannot Verify)
+
+These require manual verification after build:
 
 ### 2.1 TypeScript Compilation
-```bash
-cd packages/shared && bun run tsc --noEmit
-```
-Fix any TS errors. Common issues:
-- New exports missing from `package.json` exports map
-- Type mismatches from API changes
-
-### 2.2 Orcha Branding Audit
-```bash
-# Check for BOTH plural and singular forms!
-grep -rn "Craft Agents" packages/shared/src/i18n/locales/ apps/electron/src/renderer/ --include='*.json' --include='*.tsx' --include='*.ts' | grep -v node_modules | grep -v '.test.'
-grep -rn "Craft Agent[^s]" packages/shared/src/i18n/locales/ apps/electron/src/renderer/ --include='*.json' --include='*.tsx' --include='*.ts' | grep -v node_modules | grep -v '.test.'
-```
-Replace ALL occurrences (both "Craft Agents" and "Craft Agent") with "Orcha Agents".
-Known singular occurrences: `menu.resetToDefaultsDetail`, `onboarding.gitBash.description`, `settings.preferences.basicInfoDesc`, `settings.preferences.nameDesc`, `settings.preferences.notesDesc`, `workspace.connectRemoteDesc`.
-Also check:
-- `apps/electron/src/renderer/index.html` — `<title>` tag
-- `apps/electron/src/main/index.ts` — `app.setName()`
-- `apps/electron/src/main/menu.ts` — menu labels
-
-### 2.3 Sentry — Disable for Fork
-The Orcha fork does NOT report errors to upstream Sentry. Verify:
-
-**Main process** (`apps/electron/src/main/index.ts`):
-- `Sentry.init({ enabled: false })` — must be set
-- All `Sentry.captureException()` / `Sentry.setTag()` calls become no-ops
-
-**Renderer process** (`apps/electron/src/renderer/main.tsx`):
-- NO Sentry imports at all (removed entirely)
-- Custom `AppErrorBoundary` class component wraps the app
-- `CrashFallback` shows actual error + stack for debugging
-
-### 2.4 Package Version Alignment
-Check for duplicate versions of critical packages:
-
-```bash
-# Check for duplicate @radix-ui/react-context (caused MenuPortal crash in v0.8.6)
-find node_modules/.pnpm -path '*radix-ui+react-context*/node_modules/@radix-ui/react-context/package.json' -exec grep '"version"' {} \; | grep -v yarn | sort | uniq -c
-```
-
-If multiple versions exist, add to `pnpm.overrides` in root `package.json`:
-```json
-"@radix-ui/react-context": "1.1.2"
-```
-
-Also verify Sentry alignment:
-```json
-"@sentry/core": "10.48.0",
-"@sentry/react": "10.48.0",
-"@sentry/node": "10.48.0",
-"@sentry/electron": "7.11.0",
-"@sentry/utils": "10.48.0"
-```
-
-### 2.5 Build Resources — Critical Path
-The following resources must be present in the built app. Each was a missing-file crash:
-
-**pi-agent-server** (Pi SDK sessions — GLM models, etc.):
-```bash
-ls packages/pi-agent-server/dist/index.js  # Must exist after build:main
-```
-Copied by `copy-assets.ts` → `dist/resources/pi-agent-server/index.js`
-
-**session-mcp-server** (SubmitPlan, config_validate, etc.):
-```bash
-ls packages/session-mcp-server/dist/index.js  # Must exist after build:main
-```
-Copied by `copy-assets.ts` → `dist/resources/session-mcp-server/index.js`
-
-**Bundled Bun** (Pi Agent Server needs Bun to run):
-- `copy-assets.ts` downloads it automatically to `vendor/bun/bun`
-- Verify `apps/electron/vendor/bun/bun` exists after build
-
-**Claude Code SDK** (`@anthropic-ai/claude-agent-sdk`):
-- Lives in root `node_modules/`, NOT `apps/electron/node_modules/`
-- `electron-builder.yml` uses `extraResources` with path `../../node_modules/@anthropic-ai/claude-agent-sdk`
-- If the `from:` path is wrong, SDK won't be included → "Claude Code SDK not found" error
-
-**Orcha Icons** (rebase may overwrite them):
-```bash
-# Restore from branding commit if overwritten
-git checkout 842b759 -- apps/electron/resources/icon.icns apps/electron/resources/icon.png apps/electron/resources/icon.ico apps/electron/resources/icon.svg apps/electron/resources/source.png
-```
-
-### 2.6 Workspace Symlink Fix
-After `rm -rf node_modules`, `packages/ui` loses its symlink to `@craft-agent/shared`:
-
-```bash
-mkdir -p packages/ui/node_modules/@craft-agent
-ln -sf ../../../shared packages/ui/node_modules/@craft-agent/shared
-```
-
-Without this, Vite/Rollup fails with `Could not resolve "@craft-agent/shared/utils/toolNames"`.
-
-Also verify `pnpm-workspace.yaml` exists (not tracked by git):
-```yaml
-packages:
-  - "packages/*"
-  - "apps/*"
-  - "!apps/online-docs"
-```
-
-And `.npmrc`:
-```
-shamefully-hoist=true
-node-linker=hoisted
-public-hoist-pattern[]=*
-```
 
 ## Step 3: Build & Test
 
