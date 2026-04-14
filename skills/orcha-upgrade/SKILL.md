@@ -46,10 +46,13 @@ Fix any TS errors. Common issues:
 
 ### 2.2 Orcha Branding Audit
 ```bash
-# Check for any remaining "Craft Agents" in user-facing strings
+# Check for BOTH plural and singular forms!
 grep -rn "Craft Agents" packages/shared/src/i18n/locales/ apps/electron/src/renderer/ --include='*.json' --include='*.tsx' --include='*.ts' | grep -v node_modules | grep -v '.test.'
+grep -rn "Craft Agent[^s]" packages/shared/src/i18n/locales/ apps/electron/src/renderer/ --include='*.json' --include='*.tsx' --include='*.ts' | grep -v node_modules | grep -v '.test.'
 ```
-Replace all with "Orcha Agents". Also check:
+Replace ALL occurrences (both "Craft Agents" and "Craft Agent") with "Orcha Agents".
+Known singular occurrences: `menu.resetToDefaultsDetail`, `onboarding.gitBash.description`, `settings.preferences.basicInfoDesc`, `settings.preferences.nameDesc`, `settings.preferences.notesDesc`, `workspace.connectRemoteDesc`.
+Also check:
 - `apps/electron/src/renderer/index.html` — `<title>` tag
 - `apps/electron/src/main/index.ts` — `app.setName()`
 - `apps/electron/src/main/menu.ts` — menu labels
@@ -245,3 +248,5 @@ Add any new conflict candidates or lessons learned.
 | Orcha icons overwritten | Rebase replaced branding files | Restore from commit `842b759` |
 | `pnpm-workspace.yaml` missing | Not tracked by git | Create manually with workspace packages |
 | Window title says "Craft Agents" | `index.html` `<title>` not updated | Change to "Orcha Agents" |
+| Dev mode exits immediately | `CRAFT_CONFIG_DIR` empty in `electron-dev.ts` env | Set `CRAFT_CONFIG_DIR=~/.orcha-agents` or run with env var |
+| "Craft Agent" (singular) in UI | Only "Craft Agents" (plural) was replaced in first pass | Grep for both forms, replace all |
