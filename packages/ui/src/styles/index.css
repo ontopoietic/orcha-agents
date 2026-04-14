@@ -273,6 +273,24 @@ html[data-font="inter"] {
   --shadow-lg: var(--shadow-lg);
   --shadow-xl: var(--shadow-xl);
   --shadow-2xl: var(--shadow-2xl);
+
+  /* === Z-INDEX SCALE === */
+  --z-base: var(--z-base);
+  --z-local: var(--z-local);
+  --z-sticky: var(--z-sticky);
+  --z-titlebar: var(--z-titlebar);
+  --z-panel: var(--z-panel);
+  --z-dropdown: var(--z-dropdown);
+  --z-tooltip: var(--z-tooltip);
+  --z-modal: var(--z-modal);
+  --z-overlay: var(--z-overlay);
+  --z-fullscreen: var(--z-fullscreen);
+  --z-floating-backdrop: var(--z-floating-backdrop);
+  --z-floating-menu: var(--z-floating-menu);
+  --z-island-overlay: var(--z-island-overlay);
+  --z-island: var(--z-island);
+  --z-island-popover: var(--z-island-popover);
+  --z-splash: var(--z-splash);
 }
 
 /* =============================================================================
