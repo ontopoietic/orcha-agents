@@ -820,6 +820,8 @@ interface ManagedSession {
   // Pending auth request tracking (for unified auth flow)
   pendingAuthRequestId?: string
   pendingAuthRequest?: AuthRequest
+  // Safety watchdog: auto-recovers sessions stuck in isProcessing after timeout
+  processingTimeout?: ReturnType<typeof setTimeout>
   // Auth retry tracking (for mid-session token expiry)
   // Store last sent message/attachments to enable retry after token refresh
   lastSentMessage?: string
@@ -1027,9 +1029,26 @@ export class SessionManager implements ISessionManager {
    * Automatically notifies the power manager on transitions (true→false, false→true)
    * so callers don't need to remember to call onSessionStarted/onSessionStopped.
    */
+  private static readonly PROCESSING_TIMEOUT_MS = 5 * 60 * 1000 // 5 minutes
+
   private setProcessing(managed: ManagedSession, processing: boolean): void {
     const was = managed.isProcessing
     managed.isProcessing = processing
+
+    // Watchdog: auto-recover stuck sessions after timeout
+    if (processing) {
+      if (managed.processingTimeout) clearTimeout(managed.processingTimeout)
+      managed.processingTimeout = setTimeout(() => {
+        if (managed.isProcessing) {
+          sessionLog.warn(`Session ${managed.id} stuck in processing for >${SessionManager.PROCESSING_TIMEOUT_MS / 1000}s, forcing recovery`)
+          this.onProcessingStopped(managed.id, 'timeout')
+        }
+      }, SessionManager.PROCESSING_TIMEOUT_MS)
+    } else if (managed.processingTimeout) {
+      clearTimeout(managed.processingTimeout)
+      managed.processingTimeout = undefined
+    }
+
     if (!was && processing) {
       sessionRuntimeHooks.onSessionStarted()
     } else if (was && !processing) {
@@ -4990,7 +5009,24 @@ export class SessionManager implements ISessionManager {
     const sendSpan = perf.span('session.sendMessage', { sessionId })
 
     // Get or create the agent (lazy loading)
-    const agent = await this.getOrCreateAgent(managed)
+    let agent: AgentInstance
+    try {
+      agent = await this.getOrCreateAgent(managed)
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Failed to initialize agent'
+      sessionLog.error(`Agent initialization failed for session ${sessionId}:`, err)
+      sessionRuntimeHooks.captureException(
+        err instanceof Error ? err : new Error(errorMessage),
+        { errorSource: 'agent-init', sessionId }
+      )
+      this.sendEvent({
+        type: 'error',
+        sessionId,
+        error: errorMessage,
+      }, managed.workspace.id)
+      this.onProcessingStopped(sessionId, 'error')
+      return
+    }
     sendSpan.mark('agent.ready')
 
     // Always set all sources for context (even if none are enabled), including built-ins

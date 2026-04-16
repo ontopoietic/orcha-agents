@@ -234,7 +234,9 @@ export function applyAnthropicRuntimeBootstrap(
   if (paths.claudeInterceptorPath) {
     setInterceptorPath(paths.claudeInterceptorPath);
   } else if (strict) {
-    throw new Error('Network interceptor not found. The app package may be corrupted.');
+    // Warn but don't throw — interceptor handles tool metadata enrichment (_intent, _displayName),
+    // not core chat functionality. Sessions can operate without it.
+    console.warn('[runtime] Network interceptor not found — tool metadata will be unavailable');
   }
 
   if (hostRuntime.isPackaged) {
