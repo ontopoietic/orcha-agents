@@ -110,7 +110,7 @@
   "browser.newWindow": "Nueva ventana del navegador",
   "browser.readyDescription": "Pídele a cualquier sesión que use este navegador (o abre otro) para completar tareas como investigación, llenado de formularios, revisiones de QA o extracción de datos.",
   "browser.readyTitle": "Este navegador está listo para tus agentes... ¡y para ti también ;)",
-  "browser.safetyHint": "Craft Agents solo controla las ventanas del navegador cuando tú lo pides.",
+  "browser.safetyHint": "Orcha Agents solo controla las ventanas del navegador cuando tú lo pides.",
   "browser.stopLoading": "Detener carga",
   "browser.urlPlaceholder": "Ingresa URL o busca…",
   "chat.adminApprovalRequired": "Aprobación del administrador requerida",
