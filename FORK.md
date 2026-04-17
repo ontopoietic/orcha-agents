@@ -1,13 +1,13 @@
 # Orcha Agents — Fork von Craft Agents
 
-Dieses Repository ist ein Fork von [lukilabs/craft-agents-oss](https://github.com/lukilabs/craft-agents-oss).
+Dieses Repository ist ein Fork von [lukilabs/orcha-agents](https://github.com/lukilabs/orcha-agents).
 
 ## Fork-Metadaten
 
 | | |
 |---|---|
-| **Upstream** | `https://github.com/lukilabs/craft-agents-oss.git` |
-| **Unser Remote** | `https://github.com/ontopoietic/craft-agents-oss.git` |
+| **Upstream** | `https://github.com/lukilabs/orcha-agents.git` |
+| **Unser Remote** | `https://github.com/ontopoietic/orcha-agents.git` |
 | **Zuletzt gemerged** | v0.8.6 |
 | **Upstream-Stand** | v0.8.6 (aktuell) |
 | **Aktiver Branch** | `main` |

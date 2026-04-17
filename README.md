@@ -75,8 +75,8 @@ irm https://agents.craft.do/install-app.ps1 | iex
 ### Build from Source
 
 ```bash
-git clone https://github.com/lukilabs/craft-agents-oss.git
-cd craft-agents-oss
+git clone https://github.com/lukilabs/orcha-agents.git
+cd orcha-agents
 bun install
 bun run electron:start
 ```
