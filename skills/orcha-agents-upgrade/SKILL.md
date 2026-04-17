@@ -32,6 +32,11 @@ Resolve conflicts per-commit. Refer to FORK.md's "Konflikt-Kandidaten" section f
 3. **Keep Orcha branding** (icon imports, app name, update behavior) when upstream adds generic features.
 4. **Keep i18n key names unchanged** (e.g., `menu.aboutCraftAgents`) — only change values in locale JSON files.
 
+**Fork-specific resilience fixes — preserve during rebase:**
+These files contain fixes that don't exist upstream. If conflicts arise, keep our changes:
+- `packages/server-core/src/sessions/SessionManager.ts` — try-catch around `getOrCreateAgent()` in `sendMessage()`, 5-min processing watchdog in `setProcessing()`
+- `packages/shared/src/agent/backend/internal/runtime-resolver.ts` — interceptor not found dowgraded from fatal throw to warning
+
 ## Step 2: Run Verification Script
 
 After the rebase completes, run the automated verification:
@@ -113,6 +118,7 @@ The user must verify these manually:
 4. **Sidebar shows "Orcha"** branding
 5. **Window title shows "Orcha Agents"**
 6. **No Sentry errors in console** (filter for "sentry" in DevTools)
+7. **Queue recovery** — If agent init fails (e.g. wrong model), session should show an error and NOT stay stuck on "queued". Subsequent messages should process normally.
 
 ## Step 4: Commit & Push
 
@@ -160,3 +166,5 @@ Add any new conflict candidates or lessons learned.
 | Window title says "Craft Agents" | `index.html` `<title>` not updated | Change to "Orcha Agents" |
 | Dev mode exits immediately | `CRAFT_CONFIG_DIR` empty in `electron-dev.ts` env | Set `CRAFT_CONFIG_DIR=~/.orcha-agents` or run with env var |
 | "Craft Agent" (singular) in UI | Only "Craft Agents" (plural) was replaced in first pass | Grep for both forms, replace all |
+| `Network interceptor not found` | Interceptor path not resolved after rebase (upstream path changes) | Since `aad9907` only a warning, not fatal — sessions work without tool metadata. Verify `interceptor.cjs` in build |
+| Session stuck on "queued" after auth error | `getOrCreateAgent()` throws, `onProcessingStopped()` never called, `isProcessing` stays true | Fixed in `aad9907`: try-catch around agent init + 5-min watchdog. Preserve these changes during rebase |
