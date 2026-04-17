@@ -8,8 +8,8 @@ Dieses Repository ist ein Fork von [lukilabs/orcha-agents](https://github.com/lu
 |---|---|
 | **Upstream** | `https://github.com/lukilabs/orcha-agents.git` |
 | **Unser Remote** | `https://github.com/ontopoietic/orcha-agents.git` |
-| **Zuletzt gemerged** | v0.8.6 |
-| **Upstream-Stand** | v0.8.6 (aktuell) |
+| **Zuletzt gemerged** | v0.8.9 |
+| **Upstream-Stand** | v0.8.9 (aktuell) |
 | **Aktiver Branch** | `main` |
 | **Feature-Branch** | `feature/precompact-hooks` (auf main rebased) |
 | **Sentry** | Deaktiviert (main + renderer) — kein Reporting |
@@ -180,6 +180,7 @@ Diese Änderungen liegen im separaten Repository `~/Developer/orcha/` und sind *
 | Fork-Basis | — | v0.8.3 | — | Timo |
 | 2026-04-10 | v0.8.3 | v0.8.3+fork | Keine (kein Upstream-Rebase) | Timo + Craft Agent |
 | 2026-04-11 | v0.8.3+fork | v0.8.6 | 10 Konflikte (trivial: Branding+i18n Overlay) | Timo + Craft Agent |
+| 2026-04-17 | v0.8.7 | v0.8.9 | 8 Konflikte (Branding, i18n locales, Local-Connection-Gruppe) | Timo + Craft Agent |
 
 ---
 
