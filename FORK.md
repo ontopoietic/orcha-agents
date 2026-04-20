@@ -39,7 +39,17 @@ Signal-Summaries (Format `"Titel: Beschreibung"`) zeigen den Teil vor dem ersten
 **Berührt Upstream-Dateien (Konflikt-Kandidaten):**
 - `apps/electron/src/renderer/pages/LedgerDetailPage.tsx` — `+RenderSignalSummary`, 3x angewendet: Signals-Tab (`signal.summary`), Accordion-Signale (`s.summary`), Accordion-Candidates (`c.title`). Zudem Debug-Logging und verbesserter Empty-State-Text.
 
-#### 1c. Ledger UI Basis
+#### 1c. Sync-Skill Indikator
+Ein kleiner Punkt (grau/grün) im Ledger-Header zeigt an, ob der Agent den Sync-Skill gelesen hat. Nutzt das bestehende Label-System: Agent setzt Label `sync_skill_loaded` nach dem Lesen der SKILL.md.
+
+**Neue Dateien (kein Upstream-Konflikt):**
+- `skills/sync/SKILL.md` — Sync-Skill mit Pflicht-Instruktion zum Setzen des Labels
+- `labels/config.json` — Label-Definitionen, inkl. `sync_skill_loaded` (system-Kategorie)
+
+**Berührt Upstream-Dateien (Konflikt-Kandidaten):**
+- `apps/electron/src/renderer/components/app-shell/LedgerPanel.tsx` — `+syncSkillLoaded` Indikator-Dot im Header (prüft `sessionMetaMap` auf Label `sync_skill_loaded`)
+
+#### 1d. Ledger UI Basis
 Echtzeitanzeige des `.orcha-ledger.json` im App-Sidebar und als eigene Detailseite. Zeigt Signale, Kandidaten, Obligations und Sync-History.
 
 **Neue Dateien (kein Upstream-Konflikt):**
