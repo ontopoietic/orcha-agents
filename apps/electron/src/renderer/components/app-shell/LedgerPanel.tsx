@@ -229,6 +229,24 @@ export function LedgerPanel() {
         />
         <span className="text-[13px] font-medium text-foreground/60 flex-1">Ledger</span>
 
+        {/* Sync-skill indicator */}
+        {(() => {
+          const syncSkillLoaded = focusedSessionId
+            ? sessionMetaMap.get(focusedSessionId)?.labels?.includes('sync_skill_loaded') ?? false
+            : false
+          return (
+            <span
+              className="h-1.5 w-1.5 rounded-full shrink-0"
+              style={{
+                backgroundColor: syncSkillLoaded
+                  ? "var(--success)"
+                  : "color-mix(in oklch, var(--foreground) 25%, transparent)",
+              }}
+              title={syncSkillLoaded ? "Sync-Skill geladen" : "Sync-Skill nicht geladen"}
+            />
+          )
+        })()}
+
         {/* New-activity pulse dot */}
         <AnimatePresence>
           {hasNew && (
