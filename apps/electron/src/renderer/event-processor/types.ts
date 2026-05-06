@@ -141,6 +141,15 @@ export interface LabelsChangedEvent {
 }
 
 /**
+ * Anchors changed event (Orcha framework references — Feature, Befund, Anliegen)
+ */
+export interface AnchorsChangedEvent {
+  type: 'anchors_changed'
+  sessionId: string
+  anchors: import('@craft-agent/shared/sessions').AnchorRef[]
+}
+
+/**
  * Todo state changed event (external metadata change or agent tool)
  */
 export interface SessionStatusChangedEvent {

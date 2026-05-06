@@ -86,8 +86,8 @@ describe('validateAnchorsLenient', () => {
     const mixed = [sample, { type: 'task', id: 'x' }, { ...sample, id: '' }, { ...sample, id: 'feat-2' }];
     const result = validateAnchorsLenient(mixed);
     expect(result.length).toBe(2);
-    expect(result[0].id).toBe('feat-abc-123');
-    expect(result[1].id).toBe('feat-2');
+    expect(result[0]?.id).toBe('feat-abc-123');
+    expect(result[1]?.id).toBe('feat-2');
   });
 });
 

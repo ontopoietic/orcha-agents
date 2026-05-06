@@ -13,6 +13,7 @@ import type {
   TypedErrorEvent,
   SourcesChangedEvent,
   LabelsChangedEvent,
+  AnchorsChangedEvent,
   SessionStatusChangedEvent,
   SessionFlaggedEvent,
   SessionUnflaggedEvent,
@@ -646,6 +647,27 @@ export function handleLabelsChanged(
       session: {
         ...session,
         labels: event.labels,
+      },
+      streaming,
+    },
+    effects: [],
+  }
+}
+
+/**
+ * Handle anchors_changed - update session's anchors (Orcha framework refs)
+ */
+export function handleAnchorsChanged(
+  state: SessionState,
+  event: AnchorsChangedEvent
+): ProcessResult {
+  const { session, streaming } = state
+
+  return {
+    state: {
+      session: {
+        ...session,
+        anchors: event.anchors,
       },
       streaming,
     },

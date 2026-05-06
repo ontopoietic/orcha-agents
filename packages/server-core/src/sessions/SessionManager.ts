@@ -69,6 +69,8 @@ import {
   type SessionStatus,
   type SessionHeader,
   pickSessionFields,
+  type AnchorRef,
+  validateAnchorsLenient,
 } from '@craft-agent/shared/sessions'
 import { loadWorkspaceSources, loadAllSources, getSourcesBySlugs, isSourceUsable, type LoadedSource, type McpServerConfig, getSourcesNeedingAuth, getSourceCredentialManager, getSourceServerBuilder, type SourceWithCredential, isApiOAuthProvider, hasRenewEndpoint, SERVER_BUILD_ERRORS, TokenRefreshManager, createTokenGetter } from '@craft-agent/shared/sources'
 import { ConfigWatcher, type ConfigWatcherCallbacks } from '@craft-agent/shared/config'
@@ -775,6 +777,8 @@ interface ManagedSession {
   enabledSourceSlugs?: string[]
   // Labels applied to this session (additive tags, many-per-session)
   labels?: string[]
+  // Anchors to Orcha framework artifacts (Feature, Befund, Anliegen)
+  anchors?: AnchorRef[]
   // Working directory for this session (used by agent for bash commands)
   workingDirectory?: string
   // SDK cwd for session storage - set once at creation, never changes.
@@ -6387,6 +6391,35 @@ export class SessionManager implements ISessionManager {
       const watcher = this.configWatchers.get(managed.workspace.rootPath)
       watcher?.notifyFileChange(`sessions/${sessionId}/session.jsonl`)
     }
+  }
+
+  /**
+   * Set anchors for a session — references to Orcha framework artifacts
+   * (Feature, Befund, Anliegen). Mirrors setSessionLabels in shape and
+   * persistence semantics so the UI relies on the same event/flush path.
+   *
+   * Invalid anchor entries are dropped (lenient) rather than throwing —
+   * the RPC boundary has already shaped the payload, and partial render
+   * beats whole-mutation rejection.
+   */
+  async setSessionAnchors(sessionId: string, anchors: AnchorRef[]): Promise<void> {
+    const managed = this.sessions.get(sessionId)
+    if (!managed) return
+
+    const validated = validateAnchorsLenient(anchors)
+    managed.anchors = validated
+    this.setMetadataWriteGuard(managed)
+
+    this.sendEvent({
+      type: 'anchors_changed',
+      sessionId: managed.id,
+      anchors: managed.anchors,
+    }, managed.workspace.id)
+
+    this.persistSession(managed)
+    await this.flushSession(managed.id)
+    const watcher = this.configWatchers.get(managed.workspace.rootPath)
+    watcher?.notifyFileChange(`sessions/${sessionId}/session.jsonl`)
   }
 
   /**
