@@ -7,11 +7,11 @@ Dieses Repository ist ein Fork von [lukilabs/craft-agents-oss](https://github.co
 | | |
 |---|---|
 | **Upstream** | `https://github.com/lukilabs/craft-agents-oss.git` |
-| **Unser Remote** | `https://github.com/ontopoietic/craft-agents-oss.git` |
-| **Zuletzt gemerged** | v0.8.6 |
-| **Upstream-Stand** | v0.8.6 (aktuell) |
+| **Unser Remote** | `https://github.com/ontopoietic/orcha-agents.git` |
+| **Zuletzt gemerged** | v0.9.1 |
+| **Upstream-Stand** | v0.9.1 (aktuell) |
 | **Aktiver Branch** | `main` |
-| **Feature-Branch** | `feature/precompact-hooks` (auf main rebased) |
+| **Feature-Branch** | `feature/sync-skill-indicator` (auf main rebased) |
 | **Sentry** | Deaktiviert (main + renderer) — kein Reporting |
 
 ---
@@ -180,6 +180,8 @@ Diese Änderungen liegen im separaten Repository `~/Developer/orcha/` und sind *
 | Fork-Basis | — | v0.8.3 | — | Timo |
 | 2026-04-10 | v0.8.3 | v0.8.3+fork | Keine (kein Upstream-Rebase) | Timo + Craft Agent |
 | 2026-04-11 | v0.8.3+fork | v0.8.6 | 10 Konflikte (trivial: Branding+i18n Overlay) | Timo + Craft Agent |
+| 2026-04-17 | v0.8.7 | v0.8.9 | 8 Konflikte (Branding, i18n locales, Local-Connection-Gruppe) | Timo + Craft Agent |
+| 2026-05-06 | v0.8.9 | v0.9.1 | 12 Konflikte (channel-map-parity, Branding, i18n locales, electron-builder SDK-Pfad, runtime-resolver Refactor, pi-agent backendName, package.json Tiptap+ripgrep, FreeFormInput Local-Group). v0.9.0 Native-Binary SDK-Migration: build-dmg.sh erforderlich für SDK+ripgrep-Copy. Sentry-Import in InputErrorBoundary entfernt. Motivation: cold-session hydration fix `d5a31774` für UI-Freeze bei stale `api-error.json`. | Timo + Craft Agent |
 
 ---
 
