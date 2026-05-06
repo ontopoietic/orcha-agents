@@ -1,0 +1,18 @@
+{
+  "id": "ws_4f6964b4",
+  "name": "Orcha Agents",
+  "slug": "orcha-agents",
+  "defaults": {
+    "permissionMode": "safe",
+    "cyclablePermissionModes": [
+      "safe",
+      "allow-all"
+    ],
+    "enabledSourceSlugs": []
+  },
+  "localMcpServers": {
+    "enabled": true
+  },
+  "createdAt": 1775832329380,
+  "updatedAt": 1775832329381
+}

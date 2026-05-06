@@ -1,0 +1,7 @@
+{
+  "compaction": {
+    "enabled": true
+  },
+  "defaultProvider": "zai",
+  "defaultModel": "glm-5.1"
+}

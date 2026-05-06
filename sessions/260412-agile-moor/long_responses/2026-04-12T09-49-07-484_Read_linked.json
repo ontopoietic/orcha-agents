@@ -1,0 +1,22 @@
+[
+  {
+    "type": "image",
+    "source": {
+      "type": "base64",
+      "data": {
+        "assetRef": {
+          "path": "/Users/timokurz/Developer/craft-agents-oss/sessions/260412-agile-moor/downloads/assets/Read_f60f89878de5cf04.png",
+          "relativePath": "downloads/assets/Read_f60f89878de5cf04.png",
+          "mimeType": "image/png",
+          "ext": ".png",
+          "size": 158374,
+          "sizeHuman": "154.7 KB",
+          "sha256": "f60f89878de5cf04085eeef7c7f532256568a57b9cbf8f0ce4e3326f7dad6d0b",
+          "jsonPath": "$[0].source.data",
+          "source": "raw-base64"
+        }
+      },
+      "media_type": "image/png"
+    }
+  }
+]
