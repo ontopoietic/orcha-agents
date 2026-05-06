@@ -33,6 +33,8 @@ type ApiToChannelMapKeys = Exclude<
   | 'ledgerRead' // direct IPC — ledger reader
   | 'ledgerHistory' // direct IPC — sync history reader
   | 'onLedgerActivity' // direct IPC listener — ledger activity events
+  | 'listAnchorables' // direct IPC — orcha CLI bridge for anchor picker
+  | 'clearAnchorablesCache' // direct IPC — orcha CLI bridge cache invalidation
   | BrowserPaneKeys
 type ChannelMapKeys = keyof typeof CHANNEL_MAP & string
 

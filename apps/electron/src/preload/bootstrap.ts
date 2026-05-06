@@ -423,6 +423,12 @@ client.onConnectionStateChanged((state) => {
   ipcRenderer.invoke('ledger:read', workingDir)
 ;(api as ElectronAPI).ledgerHistory = (workingDir: string) =>
   ipcRenderer.invoke('ledger:history', workingDir)
+
+// Orcha CLI bridge — anchor picker data source
+;(api as ElectronAPI).listAnchorables = (type, workingDir) =>
+  ipcRenderer.invoke('orcha:list-anchorables', type, workingDir)
+;(api as ElectronAPI).clearAnchorablesCache = (type, workingDir) =>
+  ipcRenderer.invoke('orcha:clear-anchorables-cache', type, workingDir)
 ;(api as ElectronAPI).onLedgerActivity = (callback) => {
   const handler = (_event: Electron.IpcRendererEvent, activityEvent: unknown) =>
     callback(activityEvent as import('../shared/ledger-activity').LedgerActivityEvent)

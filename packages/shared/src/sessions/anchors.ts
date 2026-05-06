@@ -79,6 +79,38 @@ export function validateAnchor(value: unknown): AnchorRef {
 }
 
 /**
+ * Lightweight projection of an Orcha artifact for the anchor picker UI.
+ * Shaped from CLI output by `orcha-bridge`. Keep it small — the picker only
+ * needs enough to render and to construct a fresh AnchorRef on selection.
+ */
+export interface AnchorableItem {
+  type: AnchorType;
+  id: string;
+  title: string;
+  /** Optional secondary line (status, parent name, category, ...) */
+  subtitle?: string;
+}
+
+/**
+ * Convert an AnchorableItem into a fresh AnchorRef ready to attach to a session.
+ * Stamps `addedAt` from a clock function (defaults to Date.now) and caller-provided
+ * `addedBy`. The title becomes the snapshot.
+ */
+export function anchorFromItem(
+  item: AnchorableItem,
+  addedBy: AnchorRef['addedBy'],
+  now: () => string = () => new Date().toISOString(),
+): AnchorRef {
+  return {
+    type: item.type,
+    id: item.id,
+    title: item.title,
+    addedAt: now(),
+    addedBy,
+  };
+}
+
+/**
  * Validate an array of AnchorRefs, dropping invalid entries with a console
  * warning rather than throwing. Used when loading persisted data where we
  * prefer best-effort recovery over hard failure.

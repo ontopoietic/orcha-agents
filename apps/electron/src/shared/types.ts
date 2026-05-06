@@ -249,6 +249,16 @@ export interface ElectronAPI {
   ledgerRead(workingDir: string): Promise<import('./ledger-activity').LedgerData | null>
   ledgerHistory(workingDir: string): Promise<import('./ledger-activity').SyncHistory>
   onLedgerActivity(callback: (event: import('./ledger-activity').LedgerActivityEvent) => void): () => void
+
+  // Orcha CLI bridge — anchor picker data source (Feature, Befund, Anliegen)
+  listAnchorables(
+    type: import('@craft-agent/shared/sessions').AnchorType,
+    workingDir: string,
+  ): Promise<import('@craft-agent/shared/sessions').AnchorableItem[]>
+  clearAnchorablesCache(
+    type?: import('@craft-agent/shared/sessions').AnchorType,
+    workingDir?: string,
+  ): Promise<void>
   invokeOnServer(url: string, token: string, channel: string, ...args: any[]): Promise<any>
 
   // Remote session transfer (main-process orchestrated, supports chunked upload)

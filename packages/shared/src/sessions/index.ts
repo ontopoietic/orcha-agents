@@ -27,11 +27,13 @@ export { SESSION_PERSISTENT_FIELDS } from './types.ts';
 export type {
   AnchorRef,
   AnchorType,
+  AnchorableItem,
 } from './anchors.ts';
 export {
   ANCHOR_TYPES,
   anchorKey,
   anchorsEqual,
+  anchorFromItem,
   validateAnchor,
   validateAnchorsLenient,
 } from './anchors.ts';
