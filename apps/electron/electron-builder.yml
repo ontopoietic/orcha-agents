@@ -107,7 +107,9 @@ mac:
   entitlementsInherit: build/entitlements.mac.plist
   extraResources:
     # Thin core SDK (sdk.mjs + types). ~4 MB — present on every platform.
-    - from: node_modules/@anthropic-ai/claude-agent-sdk
+    # Path is `../../node_modules/...` because pnpm hoists to repo root,
+    # not into apps/electron/node_modules (no direct dep).
+    - from: ../../node_modules/@anthropic-ai/claude-agent-sdk
       to: app/node_modules/@anthropic-ai/claude-agent-sdk
     # Stable alias pointing at the target-arch native binary package.
     # Populated by build-dmg.sh / build-linux.sh / build-win.ps1 before
