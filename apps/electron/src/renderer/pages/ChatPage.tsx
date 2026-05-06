@@ -11,6 +11,7 @@ import { useAtomValue, useSetAtom } from 'jotai'
 import { AlertCircle, Globe, Copy, RefreshCw, Link2Off, Info } from 'lucide-react'
 import { ChatDisplay, type ChatDisplayHandle } from '@/components/app-shell/ChatDisplay'
 import { PanelHeader } from '@/components/app-shell/PanelHeader'
+import { SessionAnchorBar } from '@/components/anchors/SessionAnchorBar'
 import { SessionMenu } from '@/components/app-shell/SessionMenu'
 import { SessionInfoPopover } from '@/components/app-shell/SessionInfoPopover'
 import { RenameDialog } from '@/components/ui/rename-dialog'
@@ -656,6 +657,9 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
         <>
           <div className="h-full flex flex-col">
             <PanelHeader  title={displayTitle} titleMenu={titleMenu} leadingAction={leadingAction} actions={headerActions} rightSidebarButton={rightSidebarButton} isRegeneratingTitle={isAsyncOperationOngoing} />
+            <div className="px-4 py-1.5 border-b border-border/40">
+              <SessionAnchorBar sessionId={sessionId} workingDir={sessionMeta.workingDirectory} />
+            </div>
             <div className="flex-1 flex flex-col min-h-0">
               <ChatDisplay
                 ref={chatDisplayRef}
@@ -728,6 +732,9 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
     <>
       <div className="h-full flex flex-col">
         <PanelHeader  title={displayTitle} titleMenu={titleMenu} leadingAction={leadingAction} actions={headerActions} rightSidebarButton={rightSidebarButton} isRegeneratingTitle={isAsyncOperationOngoing} />
+        <div className="px-4 py-1.5 border-b border-border/40">
+          <SessionAnchorBar sessionId={sessionId} workingDir={session.workingDirectory} />
+        </div>
         <div className="flex-1 flex flex-col min-h-0">
           <ChatDisplay
             ref={chatDisplayRef}
