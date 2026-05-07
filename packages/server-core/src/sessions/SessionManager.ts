@@ -3801,6 +3801,9 @@ export class SessionManager implements ISessionManager {
         setSessionLabelsFn: async (sessionId: string | undefined, labels: string[]) => {
           await this.setSessionLabels(sessionId ?? managed.id, labels)
         },
+        setSessionAnchorsFn: async (sessionId, anchors) => {
+          await this.setSessionAnchors(sessionId ?? managed.id, anchors)
+        },
         setSessionStatusFn: async (sessionId: string | undefined, status: string) => {
           await this.setSessionStatus(sessionId ?? managed.id, status as SessionStatus)
         },

@@ -53,6 +53,11 @@ export interface SessionScopedToolCallbacks {
 
   /** Set labels on a session (defaults to current). */
   setSessionLabelsFn?: (sessionId: string | undefined, labels: string[]) => void | Promise<void>;
+  /** Set anchors on a session — Orcha framework refs (defaults to current). */
+  setSessionAnchorsFn?: (
+    sessionId: string | undefined,
+    anchors: Array<{ type: 'feature' | 'befund' | 'anliegen'; id: string; title?: string; addedAt: string; addedBy: 'user' | 'agent' }>,
+  ) => void | Promise<void>;
   /** Set status on a session (defaults to current). */
   setSessionStatusFn?: (sessionId: string | undefined, status: string) => void | Promise<void>;
   /** Get detailed info about a session (defaults to current). */

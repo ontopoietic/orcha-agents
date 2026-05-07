@@ -313,6 +313,16 @@ export interface SessionToolContext {
   /** Set labels on a session. Defaults to current session if no ID given. Injected by backend. */
   setSessionLabels?(sessionId: string | undefined, labels: string[]): void | Promise<void>;
 
+  /**
+   * Set anchors on a session — references to Orcha framework artifacts
+   * (Feature, Befund, Anliegen). Defaults to current session if no ID given.
+   * Injected by backend.
+   */
+  setSessionAnchors?(
+    sessionId: string | undefined,
+    anchors: Array<{ type: 'feature' | 'befund' | 'anliegen'; id: string; title?: string; addedAt: string; addedBy: 'user' | 'agent' }>,
+  ): void | Promise<void>;
+
   /** Set status on a session. Defaults to current session if no ID given. Injected by backend. */
   setSessionStatus?(sessionId: string | undefined, status: string): void | Promise<void>;
 
