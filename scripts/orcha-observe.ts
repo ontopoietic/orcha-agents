@@ -3,14 +3,20 @@
  * Orcha Observer — PreCompact Command-Action
  *
  * Triggered by automations.json PreCompact hook via buildSdkHooks().
- * Reads new messages since watermark, extracts structured signals
- * (pattern-based, no LLM), writes them to the ledger, updates watermark.
+ * Reads new messages since watermark, extracts structured signals using
+ * the same LLM pattern Mastra observational-memory uses (Pivotal /
+ * Question / Context with strict assertion-vs-question discipline),
+ * writes them to the ledger, updates watermark.
  *
- * Usage:
- *   npx tsx scripts/orcha-observe.ts [session-dir]
+ * Resolution order for the session being observed:
+ *   1. CLI arg
+ *   2. CRAFT_SESSION_ID env (set by AutomationSystem.buildSdkHooks)
+ *   3. Auto-detect most recent session under sessions/
  *
- * If no session-dir is provided, auto-detects the most recently active
- * session by scanning sessions/ for the newest session.jsonl.
+ * Resolution order for the LLM extractor:
+ *   1. ORCHA_OBSERVER_PROVIDER + ORCHA_OBSERVER_API_KEY env (explicit override)
+ *   2. ANTHROPIC_API_KEY (default Anthropic, Haiku 4.5)
+ *   3. Fallback: pattern-only extraction (logs a warning)
  *
  * Called automatically by the SDK before compaction via buildSdkHooks().
  * stdout is returned as the hook "reason" visible to the agent.
@@ -87,11 +93,12 @@ async function main(): Promise<void> {
   }
 
   if (!sessionDir) {
-    sessionDir = findMostRecentSession();
-    if (!sessionDir) {
+    const detected = findMostRecentSession();
+    if (!detected) {
       console.log('Observer: No active session found.');
       return;
     }
+    sessionDir = detected;
   }
 
   const expandedDir = sessionDir.replace(/^~/, process.env.HOME || '~');
@@ -115,8 +122,8 @@ async function main(): Promise<void> {
     return;
   }
 
-  // 3. Extract observations
-  const observations = extractObservations(messages);
+  // 3. Extract observations — LLM-first, pattern fallback
+  const observations = await extractObservationsViaLlm(messages);
 
   if (observations.length === 0) {
     console.log('Observer: No extractable observations found.');
@@ -169,12 +176,206 @@ interface Observation {
 }
 
 // ============================================================================
-// Pattern-Based Extraction
+// LLM-Based Extraction (primary path — Mastra observational-memory pattern)
+// ============================================================================
+
+interface LlmExtractor {
+  /** API endpoint, e.g. 'https://api.anthropic.com/v1/messages' */
+  endpoint: string;
+  /** Bearer token for the LLM provider */
+  apiKey: string;
+  /** Model id, e.g. 'claude-haiku-4-5' */
+  model: string;
+  /** Provider type — controls request shape */
+  provider: 'anthropic';
+  /** Optional API version header */
+  apiVersion?: string;
+}
+
+/**
+ * Resolve which LLM to use for extraction. Returns null if no credentials
+ * are available — caller falls back to pattern matching with a warning.
+ *
+ * Env-var contract (in priority order):
+ *   ORCHA_OBSERVER_PROVIDER=anthropic
+ *   ORCHA_OBSERVER_API_KEY=sk-...
+ *   ORCHA_OBSERVER_MODEL=claude-haiku-4-5
+ *
+ * Falls back to ANTHROPIC_API_KEY if the explicit override is not set.
+ */
+function resolveExtractor(): LlmExtractor | null {
+  const provider = (process.env.ORCHA_OBSERVER_PROVIDER ?? 'anthropic').toLowerCase();
+  const apiKey = process.env.ORCHA_OBSERVER_API_KEY ?? process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) return null;
+
+  if (provider === 'anthropic') {
+    return {
+      provider: 'anthropic',
+      apiKey,
+      model: process.env.ORCHA_OBSERVER_MODEL ?? 'claude-haiku-4-5',
+      endpoint: 'https://api.anthropic.com/v1/messages',
+      apiVersion: '2023-06-01',
+    };
+  }
+  // Future: openai/gemini providers here.
+  return null;
+}
+
+/**
+ * Build the Mastra-style observer prompt. Discipline lines distilled from
+ * Mastra's reference implementation — they materially affect quality.
+ */
+function buildObserverSystemPrompt(): string {
+  return `You are an Observational Memory writer. Your job: read a slice of an ongoing conversation and emit a JSON list of structured observations that future turns of the assistant will read INSTEAD OF the raw messages.
+
+Discipline (MUST follow):
+1. CRITICAL: USER ASSERTIONS TAKE PRECEDENCE over user questions. If a user states a fact, decision, or constraint, that is a "pivotal" observation. If the user merely asks something, that is a "question".
+2. Distinguish assertions from questions. "Use feature branches" is pivotal. "Should we use feature branches?" is a question.
+3. Represent state changes as overrides, not appends. If a user switches from option A to option B, write the new state, not the history.
+4. Use precise verbs. "Subscribed to channel X" beats "got channel X".
+5. Split multiple events into separate observations.
+6. Time-anchor every observation: include a short bracketed reference like [user, msg-abc] so later turns can locate the source.
+7. Do not invent facts. If a turn is ambiguous, skip it rather than guess.
+8. Salience taxonomy:
+   - "pivotal" 🔴: user assertions, decisions, constraints, corrections, schema/architecture choices
+   - "question" 🟡: open questions awaiting answers
+   - "context" 🟢: ambient state, completed steps, references — useful but not load-bearing
+
+Output: a JSON object { "observations": Observation[] } where Observation = {
+  summary: string,                           // 1-2 dense lines
+  salience: "pivotal" | "question" | "context",
+  actor: "user" | "agent",
+  messageRange: { from: string, to: string }, // message IDs from the input
+  excerpt: string                            // ~120 chars from the source message
+}.
+
+Return ONLY valid JSON. No prose around it.`;
+}
+
+function buildObserverUserPrompt(messages: ObservableMessage[]): string {
+  const lines = messages.map((m) => {
+    const id = m.id;
+    const actor = m.type === 'user' ? 'user' : m.type === 'assistant' ? 'agent' : m.type;
+    const text = m.content.replace(/\s+/g, ' ').trim().slice(0, 1500);
+    return `[${actor} ${id}] ${text}`;
+  });
+  return `Conversation slice (${messages.length} messages):\n\n${lines.join('\n')}\n\nReturn JSON.`;
+}
+
+interface AnthropicMessagesResponse {
+  content?: Array<{ type: string; text?: string }>;
+  error?: { message?: string };
+}
+
+async function callAnthropic(extractor: LlmExtractor, system: string, user: string): Promise<string | null> {
+  const body = {
+    model: extractor.model,
+    max_tokens: 4096,
+    temperature: 0.3,
+    system,
+    messages: [{ role: 'user', content: user }],
+  };
+  const res = await fetch(extractor.endpoint, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-api-key': extractor.apiKey,
+      'anthropic-version': extractor.apiVersion ?? '2023-06-01',
+    },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    console.warn(`Observer: Anthropic call failed (${res.status}): ${text.slice(0, 200)}`);
+    return null;
+  }
+  const json = (await res.json()) as AnthropicMessagesResponse;
+  if (json.error) {
+    console.warn(`Observer: Anthropic error: ${json.error.message ?? 'unknown'}`);
+    return null;
+  }
+  // content is an array of blocks — concatenate all text blocks
+  return (json.content ?? [])
+    .filter((b) => b.type === 'text' && typeof b.text === 'string')
+    .map((b) => b.text as string)
+    .join('\n')
+    .trim();
+}
+
+function parseObservationsJson(raw: string): Observation[] | null {
+  // The model sometimes wraps JSON in code fences; strip them defensively.
+  let text = raw.trim();
+  if (text.startsWith('```')) {
+    text = text.replace(/^```[a-zA-Z]*\n?/, '').replace(/```$/, '').trim();
+  }
+  try {
+    const parsed = JSON.parse(text) as { observations?: unknown };
+    const arr = parsed.observations;
+    if (!Array.isArray(arr)) return null;
+    const result: Observation[] = [];
+    for (const entry of arr) {
+      if (!entry || typeof entry !== 'object') continue;
+      const o = entry as Record<string, unknown>;
+      const summary = typeof o.summary === 'string' ? o.summary : null;
+      const salience = o.salience === 'pivotal' || o.salience === 'question' || o.salience === 'context' ? o.salience : null;
+      const actor = o.actor === 'user' || o.actor === 'agent' ? o.actor : null;
+      const range = o.messageRange as Record<string, unknown> | undefined;
+      const from = range && typeof range.from === 'string' ? range.from : null;
+      const to = range && typeof range.to === 'string' ? range.to : null;
+      const excerpt = typeof o.excerpt === 'string' ? o.excerpt : '';
+      if (!summary || !salience || !actor || !from || !to) continue;
+      result.push({ summary, salience, actor, messageRange: { from, to }, excerpt });
+    }
+    return result;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Extract observations using an LLM. Falls back to pattern matching if no
+ * credentials are configured or the call fails — keeps the observer running
+ * even in degraded environments.
+ */
+async function extractObservationsViaLlm(messages: ObservableMessage[]): Promise<Observation[]> {
+  // Filter out tool / system / error messages up-front so the LLM sees only
+  // user/agent dialogue. Saves tokens and matches the prior pattern path.
+  const dialogue = messages.filter((m) => (m.type === 'user' || m.type === 'assistant') && m.content.trim().length >= 10);
+  if (dialogue.length === 0) return [];
+
+  const extractor = resolveExtractor();
+  if (!extractor) {
+    console.warn('Observer: No LLM credentials (ORCHA_OBSERVER_API_KEY or ANTHROPIC_API_KEY). Falling back to pattern matching — quality will be lower.');
+    return extractObservations(messages);
+  }
+
+  try {
+    const raw = await callAnthropic(extractor, buildObserverSystemPrompt(), buildObserverUserPrompt(dialogue));
+    if (!raw) {
+      console.warn('Observer: Empty LLM response, falling back to pattern matching.');
+      return extractObservations(messages);
+    }
+    const parsed = parseObservationsJson(raw);
+    if (!parsed) {
+      console.warn('Observer: Could not parse LLM JSON output, falling back to pattern matching.');
+      return extractObservations(messages);
+    }
+    console.log(`Observer: LLM extracted ${parsed.length} observations from ${dialogue.length} messages (model=${extractor.model}).`);
+    return parsed;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn(`Observer: LLM call threw, falling back to pattern matching: ${msg}`);
+    return extractObservations(messages);
+  }
+}
+
+// ============================================================================
+// Pattern-Based Extraction (fallback only)
 // ============================================================================
 
 /**
  * Extract observations from messages using pattern matching.
- * No LLM — deterministic, fast, testable.
+ * Used only when no LLM credentials are configured.
  */
 function extractObservations(messages: ObservableMessage[]): Observation[] {
   const observations: Observation[] = [];
