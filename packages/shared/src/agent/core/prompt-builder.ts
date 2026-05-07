@@ -12,16 +12,21 @@
  * - Format user preferences for prompt injection
  */
 
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { isLocalMcpEnabled } from '../../workspaces/storage.ts';
 import { formatPreferencesForPrompt } from '../../config/preferences.ts';
 import { formatSessionState } from '../mode-manager.ts';
 import { getDateTimeContext, getWorkingDirectoryContext } from '../../prompts/system.ts';
 import { getSessionPlansPath, getSessionDataPath, getSessionPath } from '../../sessions/storage.ts';
+import { createLogger } from '../../utils/debug.ts';
 import type {
   PromptBuilderConfig,
   ContextBlockOptions,
   RecoveryMessage,
 } from './types.ts';
+
+const log = createLogger('prompt-builder');
 
 /**
  * PromptBuilder provides utilities for building prompts and context blocks.
@@ -98,6 +103,14 @@ export class PromptBuilder {
       parts.push(workingDirContext);
     }
 
+    // Add session observations (from observer)
+    if (sessionId) {
+      const observationsBlock = this.getSessionObservations(sessionId);
+      if (observationsBlock) {
+        parts.push(observationsBlock);
+      }
+    }
+
     return parts;
   }
 
@@ -133,6 +146,83 @@ export class PromptBuilder {
       isSessionRoot,
       this.config.session?.sdkCwd
     );
+  }
+
+  // ============================================================
+  // Session Observations (from Observer)
+  // ============================================================
+
+  /** Max characters for the observations block */
+  private static readonly MAX_OBSERVATIONS_CHARS = 3000;
+  /** Max observations to include */
+  private static readonly MAX_OBSERVATIONS_COUNT = 50;
+
+  /**
+   * Read observations from session data and format as a context block.
+   * Returns null if no observations exist.
+   *
+   * The block persists across SDK compaction — the agent sees structured
+   * memory of past conversation turns even after the original messages
+   * are compacted away.
+   */
+  getSessionObservations(sessionId: string): string | null {
+    const sessionDir = getSessionPath(this.workspaceRootPath, sessionId);
+    const observationsPath = join(sessionDir, 'data', 'observations.json');
+
+    if (!existsSync(observationsPath)) return null;
+
+    try {
+      const raw = readFileSync(observationsPath, 'utf-8');
+      const parsed = JSON.parse(raw);
+      const signals: Array<Record<string, unknown>> = parsed.signals ?? parsed;
+
+      if (!Array.isArray(signals) || signals.length === 0) return null;
+
+      // Sort: pivotal → question → context, then by recency within each group
+      const salienceOrder: Record<string, number> = { pivotal: 0, question: 1, context: 2 };
+      const sorted = [...signals].sort((a, b) => {
+        const sa = salienceOrder[(a as Record<string, unknown>).salience as string] ?? 3;
+        const sb = salienceOrder[(b as Record<string, unknown>).salience as string] ?? 3;
+        if (sa !== sb) return sa - sb;
+        // Within same salience, newer first
+        return ((b as Record<string, unknown>).createdAt as string ?? '').localeCompare(
+          (a as Record<string, unknown>).createdAt as string ?? ''
+        );
+      });
+
+      // Build lines, respecting max count and max chars
+      const lines: string[] = [];
+      let totalChars = 0;
+      const maxChars = PromptBuilder.MAX_OBSERVATIONS_CHARS;
+      const maxCount = PromptBuilder.MAX_OBSERVATIONS_COUNT;
+
+      for (let i = 0; i < sorted.length && i < maxCount; i++) {
+        const signal = sorted[i];
+        const summary = (signal as Record<string, unknown>).summary as string;
+        if (!summary) continue;
+
+        const line = summary;
+        if (totalChars + line.length + 1 > maxChars) break;
+
+        lines.push(line);
+        totalChars += line.length + 1;
+      }
+
+      if (lines.length === 0) return null;
+
+      // Build the block
+      const header = '<session_memory>';
+      const footer = '</session_memory>';
+      const intro = 'Structured observations from past conversation turns. These persist across compaction — the agent does NOT need to re-derive them.';
+      const stats = `${signals.length} observations total, showing last ${lines.length}`;
+
+      log.debug(`[getSessionObservations] Injecting ${lines.length} observations for session ${sessionId}`);
+
+      return `${header}\n${intro}\n\n${lines.join('\n')}\n\n${stats}\n${footer}`;
+    } catch (err) {
+      log.debug('[getSessionObservations] Failed to read observations:', err);
+      return null;
+    }
   }
 
   // ============================================================
