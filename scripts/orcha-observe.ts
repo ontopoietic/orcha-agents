@@ -7,9 +7,12 @@
  * (pattern-based, no LLM), writes them to the ledger, updates watermark.
  *
  * Usage:
- *   npx tsx scripts/orcha-observe.ts <session-dir>
+ *   npx tsx scripts/orcha-observe.ts [session-dir]
  *
- * Called automatically by the SDK before compaction.
+ * If no session-dir is provided, auto-detects the most recently active
+ * session by scanning sessions/ for the newest session.jsonl.
+ *
+ * Called automatically by the SDK before compaction via buildSdkHooks().
  * stdout is returned as the hook "reason" visible to the agent.
  */
 
@@ -21,18 +24,66 @@ import {
   type ObservableMessage,
   type ObservationWatermark,
 } from '../packages/shared/src/sessions/observation-watermark.ts';
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync } from 'node:fs';
 import { join, dirname } from 'node:path';
+
+// ============================================================================
+// Session Auto-Detection
+// ============================================================================
+
+/**
+ * Find the most recently active session by scanning sessions/ directories.
+ * Looks for the session.jsonl with the newest mtime.
+ * Returns the absolute session directory path, or null.
+ */
+function findMostRecentSession(): string | null {
+  // workspace root = cwd (set by buildSdkHooks)
+  const workspaceRoot = process.cwd();
+  const sessionsDir = join(workspaceRoot, 'sessions');
+
+  if (!existsSync(sessionsDir)) return null;
+
+  let newestDir: string | null = null;
+  let newestMtime = 0;
+
+  try {
+    const entries = readdirSync(sessionsDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const jsonlPath = join(sessionsDir, entry.name, 'session.jsonl');
+      if (!existsSync(jsonlPath)) continue;
+
+      try {
+        const stat = statSync(jsonlPath);
+        if (stat.mtimeMs > newestMtime) {
+          newestMtime = stat.mtimeMs;
+          newestDir = join(sessionsDir, entry.name);
+        }
+      } catch {
+        // Skip inaccessible files
+      }
+    }
+  } catch {
+    return null;
+  }
+
+  return newestDir;
+}
 
 // ============================================================================
 // Main
 // ============================================================================
 
 async function main(): Promise<void> {
-  const sessionDir = process.argv[2];
+  let sessionDir = process.argv[2];
+
+  // Auto-detect most recently active session if not provided
   if (!sessionDir) {
-    console.error('Usage: orcha-observe.ts <session-dir>');
-    process.exit(1);
+    sessionDir = findMostRecentSession();
+    if (!sessionDir) {
+      console.log('Observer: No active session found.');
+      return;
+    }
   }
 
   const expandedDir = sessionDir.replace(/^~/, process.env.HOME || '~');
