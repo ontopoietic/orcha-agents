@@ -146,7 +146,7 @@ export interface LabelsChangedEvent {
 export interface AnchorsChangedEvent {
   type: 'anchors_changed'
   sessionId: string
-  anchors: import('@craft-agent/shared/sessions').AnchorRef[]
+  anchors: import('@craft-agent/shared/sessions/anchors').AnchorRef[]
 }
 
 /**

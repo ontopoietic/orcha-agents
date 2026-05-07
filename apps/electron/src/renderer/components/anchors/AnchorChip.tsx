@@ -8,7 +8,7 @@
 
 import * as React from 'react'
 import { Package, Bug, Inbox, X } from 'lucide-react'
-import type { AnchorRef, AnchorType } from '@craft-agent/shared/sessions'
+import type { AnchorRef, AnchorType } from '@craft-agent/shared/sessions/anchors'
 import { cn } from '@/lib/utils'
 
 export interface AnchorChipProps {

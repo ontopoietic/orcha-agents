@@ -11,7 +11,7 @@
  */
 
 import { useState, useEffect, useCallback } from 'react'
-import type { AnchorType, AnchorableItem } from '@craft-agent/shared/sessions'
+import type { AnchorType, AnchorableItem } from '@craft-agent/shared/sessions/anchors'
 
 export interface UseAnchorablesResult {
   items: AnchorableItem[]

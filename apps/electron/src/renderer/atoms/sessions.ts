@@ -12,7 +12,7 @@ import { atom } from 'jotai'
 import type { Getter, Setter } from 'jotai/vanilla'
 import { atomFamily } from 'jotai-family'
 import type { Session, Message } from '../../shared/types'
-import type { AnchorRef } from '@craft-agent/shared/sessions'
+import type { AnchorRef } from '@craft-agent/shared/sessions/anchors'
 
 /**
  * Session metadata for list display (lightweight, no messages)

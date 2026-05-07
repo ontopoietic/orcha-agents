@@ -23,7 +23,7 @@ import {
   type AnchorableItem,
   anchorFromItem,
   ANCHOR_TYPES,
-} from '@craft-agent/shared/sessions'
+} from '@craft-agent/shared/sessions/anchors'
 import { useAnchorables } from '@/hooks/useAnchorables'
 
 export interface AnchorPickerProps {

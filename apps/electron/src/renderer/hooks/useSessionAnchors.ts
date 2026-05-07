@@ -13,8 +13,8 @@
 
 import { useCallback } from 'react'
 import { useAtomValue } from 'jotai'
-import type { AnchorRef } from '@craft-agent/shared/sessions'
-import { anchorKey, anchorsEqual } from '@craft-agent/shared/sessions'
+import type { AnchorRef } from '@craft-agent/shared/sessions/anchors'
+import { anchorKey, anchorsEqual } from '@craft-agent/shared/sessions/anchors'
 import { sessionMetaMapAtom } from '../atoms/sessions'
 
 export interface UseSessionAnchorsResult {
