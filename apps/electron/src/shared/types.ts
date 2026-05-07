@@ -250,6 +250,12 @@ export interface ElectronAPI {
   ledgerHistory(workingDir: string): Promise<import('./ledger-activity').SyncHistory>
   onLedgerActivity(callback: (event: import('./ledger-activity').LedgerActivityEvent) => void): () => void
 
+  // Observation watcher — watch meta/observation-watermark.json in session dir
+  observationWatch(sessionDir: string): Promise<void>
+  observationUnwatch(): Promise<void>
+  observationRead(sessionDir: string): Promise<import('../../../packages/shared/src/sessions/observation-watermark').ObservationWatermark | null>
+  onObservationStatus(callback: (status: import('../../../packages/shared/src/sessions/observation-watermark').ObservationWatermark) => void): () => void
+
   // Orcha CLI bridge — anchor picker data source (Feature, Befund, Anliegen)
   listAnchorables(
     type: import('@craft-agent/shared/sessions').AnchorType,

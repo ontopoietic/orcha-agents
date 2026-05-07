@@ -26,7 +26,7 @@ const sampleWatermark: ObservationWatermark = {
   lastSignalCount: 2,
 };
 
-function makeJsonl(messages: Array<{ id: string; content: string; type: string }>): string {
+function makeJsonl(messages: Array<Record<string, unknown>>): string {
   const header = JSON.stringify({
     id: 'test-session-001',
     workspaceRootPath: '~/test',
@@ -46,7 +46,7 @@ const sampleMessages = [
   { id: 'msg-004', content: 'Ich möchte pnpm verwenden', type: 'user', timestamp: 1003 },
   { id: 'msg-005', content: 'Warum funktioniert das nicht?', type: 'user', timestamp: 1004 },
   { id: 'msg-006', content: 'Let me check the error', type: 'assistant', timestamp: 1005 },
-];
+] as Array<{ id: string; content: string | unknown[]; type: string; timestamp: number; toolName?: string }>;
 
 // ============================================================================
 // Tests
@@ -129,8 +129,8 @@ describe('observation-watermark', () => {
       writeFileSync(TEST_JSONL, makeJsonl(sampleMessages), 'utf-8');
       const msgs = messagesSinceWatermark(TEST_JSONL, 'msg-003');
       expect(msgs.length).toBe(3); // msg-004, msg-005, msg-006
-      expect(msgs[0].id).toBe('msg-004');
-      expect(msgs[2].id).toBe('msg-006');
+      expect(msgs[0]!.id).toBe('msg-004');
+      expect(msgs[2]!.id).toBe('msg-006');
     });
 
     it('returns empty array when watermark is the last message', () => {
@@ -153,14 +153,14 @@ describe('observation-watermark', () => {
     });
 
     it('extracts text content from string and array content', () => {
-      const messages = [
+      const messages: Array<{ id: string; content: string | unknown[]; type: string; timestamp: number }> = [
         { id: 'msg-a', content: 'simple string', type: 'user', timestamp: 1 },
         { id: 'msg-b', content: [{ type: 'text', text: 'array content' }], type: 'assistant', timestamp: 2 },
       ];
       writeFileSync(TEST_JSONL, makeJsonl(messages), 'utf-8');
       const msgs = messagesSinceWatermark(TEST_JSONL, 'msg-a');
       expect(msgs.length).toBe(1);
-      expect(msgs[0].content).toBe('array content');
+      expect(msgs[0]!.content).toBe('array content');
     });
   });
 
@@ -169,7 +169,7 @@ describe('observation-watermark', () => {
       writeFileSync(TEST_JSONL, makeJsonl(sampleMessages), 'utf-8');
       const msgs = readAllMessages(TEST_JSONL);
       expect(msgs.length).toBe(6);
-      expect(msgs[0].id).toBe('msg-001');
+      expect(msgs[0]!.id).toBe('msg-001');
     });
 
     it('skips corrupted message lines', () => {
@@ -202,7 +202,7 @@ describe('observation-watermark', () => {
       const msgs1 = readAllMessages(TEST_JSONL).slice(-50);
       const wm1: ObservationWatermark = {
         sessionId: 'test-session-001',
-        lastObservedMessageId: msgs1[msgs1.length - 1].id,
+        lastObservedMessageId: msgs1[msgs1.length - 1]!.id,
         lastObservedAt: new Date().toISOString(),
         observedCount: msgs1.length,
         lastSignalCount: 3,
@@ -218,24 +218,24 @@ describe('observation-watermark', () => {
       writeFileSync(TEST_JSONL, makeJsonl(moreMessages), 'utf-8');
 
       const wm1read = readWatermark(TEST_DIR)!;
-      const msgs2 = messagesSinceWatermark(TEST_JSONL, wm1read.lastObservedMessageId);
+      const msgs2 = messagesSinceWatermark(TEST_JSONL, wm1read!.lastObservedMessageId);
       expect(msgs2.length).toBe(2);
-      expect(msgs2[0].id).toBe('msg-007');
-      expect(msgs2[1].id).toBe('msg-008');
+      expect(msgs2[0]!.id).toBe('msg-007');
+      expect(msgs2[1]!.id).toBe('msg-008');
 
       // Update watermark
       const wm2: ObservationWatermark = {
         ...wm1read,
-        lastObservedMessageId: msgs2[msgs2.length - 1].id,
+        lastObservedMessageId: msgs2[msgs2.length - 1]!.id,
         lastObservedAt: new Date().toISOString(),
-        observedCount: wm1read.observedCount + msgs2.length,
+        observedCount: wm1read!.observedCount + msgs2.length,
         lastSignalCount: 1,
       };
       writeWatermark(TEST_DIR, wm2);
 
       // Round 3: No new messages
       const wm2read = readWatermark(TEST_DIR)!;
-      const msgs3 = messagesSinceWatermark(TEST_JSONL, wm2read.lastObservedMessageId);
+      const msgs3 = messagesSinceWatermark(TEST_JSONL, wm2read!.lastObservedMessageId);
       expect(msgs3.length).toBe(0);
     });
   });

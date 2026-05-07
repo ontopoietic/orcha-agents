@@ -436,6 +436,20 @@ client.onConnectionStateChanged((state) => {
   return () => ipcRenderer.removeListener('ledger:activity', handler)
 }
 
+// Observation watcher — watch meta/observation-watermark.json in session dir
+;(api as ElectronAPI).observationWatch = (sessionDir: string) =>
+  ipcRenderer.invoke('observation:watch', sessionDir)
+;(api as ElectronAPI).observationUnwatch = () =>
+  ipcRenderer.invoke('observation:unwatch')
+;(api as ElectronAPI).observationRead = (sessionDir: string) =>
+  ipcRenderer.invoke('observation:read', sessionDir)
+;(api as ElectronAPI).onObservationStatus = (callback) => {
+  const handler = (_event: Electron.IpcRendererEvent, status: unknown) =>
+    callback(status as import('../../packages/shared/src/sessions/observation-watermark').ObservationWatermark)
+  ipcRenderer.on('observation:status', handler)
+  return () => ipcRenderer.removeListener('observation:status', handler)
+}
+
 // System warnings — expose env-based flags set during main process startup
 // (preload-only: reads env var directly, no IPC round-trip needed)
 ;(api as ElectronAPI).getSystemWarnings = async () => ({

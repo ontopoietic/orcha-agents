@@ -13,15 +13,18 @@
 
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
-import { Plus } from 'lucide-react'
+import { Eye, Plus } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { AnchorChip } from './AnchorChip'
 import { AnchorPicker } from './AnchorPicker'
 import { useSessionAnchors } from '@/hooks/useSessionAnchors'
+import { useObservationStatus } from '@/hooks/useObservationStatus'
 
 export interface SessionAnchorBarProps {
   sessionId: string | null | undefined
   workingDir: string | null | undefined
+  /** Absolute path to the session directory (for observation watcher) */
+  sessionDir?: string | null
   /** Override for the empty-state hint (default: "Add anchor") */
   addLabelKey?: string
   className?: string
@@ -31,6 +34,8 @@ export function SessionAnchorBar({ sessionId, workingDir, addLabelKey, className
   const { t } = useTranslation()
   const [pickerOpen, setPickerOpen] = React.useState(false)
   const { anchors, add, remove } = useSessionAnchors(sessionId)
+
+  const observation = useObservationStatus(sessionDir ?? null)
 
   if (!sessionId) return null
 
@@ -58,6 +63,21 @@ export function SessionAnchorBar({ sessionId, workingDir, addLabelKey, className
           <Plus className="h-3 w-3" />
           <span>{t(addLabelKey ?? (anchors.length === 0 ? 'anchors.addFirst' : 'anchors.add'))}</span>
         </button>
+
+        {/* Observation status badge */}
+        {observation.hasObserved && (
+          <div
+            className={cn(
+              'inline-flex items-center gap-1 h-6 px-2 rounded-md text-xs',
+              'border border-border bg-foreground/5 text-muted',
+              'select-none',
+            )}
+            title={`Observer: ${observation.observedCount} messages observed, ${observation.lastSignalCount} signals extracted`}
+          >
+            <Eye className="h-3 w-3 opacity-70" />
+            <span>{observation.lastSignalCount} observed{observation.relativeTime ? ` · ${observation.relativeTime}` : ''}</span>
+          </div>
+        )}
       </div>
 
       <AnchorPicker

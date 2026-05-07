@@ -905,6 +905,26 @@ app.whenReady().then(async () => {
         return readSyncHistory(workingDir)
       })
 
+      // Observation watcher — watch meta/observation-watermark.json in session dir
+      ipcMain.handle('observation:watch', (event, sessionDir: string) => {
+        const { startObservationWatch } = require('./observation-watcher') as typeof import('./observation-watcher')
+        startObservationWatch(sessionDir, (status) => {
+          if (!event.sender.isDestroyed()) {
+            event.sender.send('observation:status', status)
+          }
+        })
+      })
+
+      ipcMain.handle('observation:unwatch', () => {
+        const { stopObservationWatch } = require('./observation-watcher') as typeof import('./observation-watcher')
+        stopObservationWatch()
+      })
+
+      ipcMain.handle('observation:read', (_event, sessionDir: string) => {
+        const { readObservationStatusSync } = require('./observation-watcher') as typeof import('./observation-watcher')
+        return readObservationStatusSync(sessionDir)
+      })
+
       // Orcha CLI bridge — list features/befunde/anliegen for the anchor picker
       ipcMain.handle('orcha:list-anchorables', async (_event, type: string, workingDir: string) => {
         const { listAnchorables } = require('./orcha-bridge') as typeof import('./orcha-bridge')

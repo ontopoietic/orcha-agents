@@ -126,7 +126,9 @@ export function messagesSinceWatermark(
 
   for (let i = 0; i < messageLines.length; i++) {
     try {
-      const parsed = JSON.parse(messageLines[i]);
+      const line = messageLines[i];
+      if (!line) continue;
+      const parsed = JSON.parse(line);
       if (parsed.id === sinceMessageId) {
         watermarkIndex = i;
         break;

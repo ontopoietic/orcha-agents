@@ -658,7 +658,7 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
           <div className="h-full flex flex-col">
             <PanelHeader  title={displayTitle} titleMenu={titleMenu} leadingAction={leadingAction} actions={headerActions} rightSidebarButton={rightSidebarButton} isRegeneratingTitle={isAsyncOperationOngoing} />
             <div className="px-4 py-1.5 border-b border-border/40">
-              <SessionAnchorBar sessionId={sessionId} workingDir={sessionMeta.workingDirectory} />
+              <SessionAnchorBar sessionId={sessionId} workingDir={sessionMeta.workingDirectory} sessionDir={session?.sessionFolderPath} />
             </div>
             <div className="flex-1 flex flex-col min-h-0">
               <ChatDisplay
@@ -733,7 +733,7 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
       <div className="h-full flex flex-col">
         <PanelHeader  title={displayTitle} titleMenu={titleMenu} leadingAction={leadingAction} actions={headerActions} rightSidebarButton={rightSidebarButton} isRegeneratingTitle={isAsyncOperationOngoing} />
         <div className="px-4 py-1.5 border-b border-border/40">
-          <SessionAnchorBar sessionId={sessionId} workingDir={session.workingDirectory} />
+          <SessionAnchorBar sessionId={sessionId} workingDir={session.workingDirectory} sessionDir={session?.sessionFolderPath} />
         </div>
         <div className="flex-1 flex flex-col min-h-0">
           <ChatDisplay
