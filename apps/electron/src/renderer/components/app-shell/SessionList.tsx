@@ -342,6 +342,27 @@ export function SessionList({
         anliegen: '📥',
       }
 
+      // Header titles render on a single line. Truncate to keep the chevron,
+      // counter, and (in collapsed state) the count visible without wrapping.
+      const HEADER_MAX_TITLE_LEN = 28
+      const truncateTitle = (s: string): string =>
+        s.length <= HEADER_MAX_TITLE_LEN ? s : s.slice(0, HEADER_MAX_TITLE_LEN - 1).trimEnd() + '…'
+
+      // Pre-pass over the full items list (not just `rows` which is filtered to
+      // visible/expanded items): build a key → AnchorRef map so collapsed
+      // anchor groups can render the snapshot title even when none of their
+      // sessions are currently in `rows`. Without this, a collapsed bucket
+      // falls back to the bare UUID — visually useless.
+      const titleByKey = new Map<string, { title: string; type: 'feature' | 'befund' | 'anliegen' }>()
+      for (const item of items) {
+        const first = item.anchors?.[0]
+        if (!first) continue
+        const key = `anchor-${first.type}:${first.id}`
+        if (!titleByKey.has(key)) {
+          titleByKey.set(key, { title: first.title || first.id, type: first.type })
+        }
+      }
+
       for (const row of rows) {
         const first = row.item.anchors?.[0]
         if (first) {
@@ -352,7 +373,7 @@ export function SessionList({
             groupsByKey.set(key, {
               rows: [],
               sortKey: `${first.type}:${title.toLowerCase()}`,
-              label: `${icon} ${title}`.trim(),
+              label: `${icon} ${truncateTitle(title)}`.trim(),
               type: first.type,
             })
           }
@@ -371,20 +392,38 @@ export function SessionList({
         }
       }
 
-      // Insert collapsed placeholder groups
+      // Insert collapsed placeholder groups — use the title cache from the
+      // pre-pass so collapsed buckets show the proper name, not the UUID.
       for (const meta of collapsedGroupsMeta) {
         if (!meta.key.startsWith('anchor-')) continue
         if (!groupsByKey.has(meta.key)) {
           if (meta.key === 'anchor-none') {
             groupsByKey.set(meta.key, { rows: [], sortKey: '~~~ohne-fokus', label: t('sidebar.unanchored'), type: 'none' })
           } else {
-            // Format: anchor-feature:uuid → reconstruct minimal label
-            const remainder = meta.key.replace(/^anchor-/, '')
-            const colonIdx = remainder.indexOf(':')
-            const type = (colonIdx >= 0 ? remainder.slice(0, colonIdx) : '') as 'feature' | 'befund' | 'anliegen' | 'none'
-            const id = colonIdx >= 0 ? remainder.slice(colonIdx + 1) : remainder
-            const icon = ANCHOR_TYPE_ICON[type] ?? ''
-            groupsByKey.set(meta.key, { rows: [], sortKey: `${type}:${id}`, label: `${icon} ${id}`.trim(), type })
+            const cached = titleByKey.get(meta.key)
+            if (cached) {
+              const icon = ANCHOR_TYPE_ICON[cached.type] ?? ''
+              groupsByKey.set(meta.key, {
+                rows: [],
+                sortKey: `${cached.type}:${cached.title.toLowerCase()}`,
+                label: `${icon} ${truncateTitle(cached.title)}`.trim(),
+                type: cached.type,
+              })
+            } else {
+              // Anchor referenced in collapsed-meta but no longer present in any
+              // session (anchor was removed from every session in the bucket).
+              // Fallback: show the icon + a placeholder, sort last among its type.
+              const remainder = meta.key.replace(/^anchor-/, '')
+              const colonIdx = remainder.indexOf(':')
+              const type = (colonIdx >= 0 ? remainder.slice(0, colonIdx) : '') as 'feature' | 'befund' | 'anliegen' | 'none'
+              const icon = ANCHOR_TYPE_ICON[type] ?? ''
+              groupsByKey.set(meta.key, {
+                rows: [],
+                sortKey: `${type}:~~~missing`,
+                label: `${icon} ${t('sidebar.unanchored')}`.trim(),
+                type,
+              })
+            }
           }
         }
       }
