@@ -443,6 +443,8 @@ client.onConnectionStateChanged((state) => {
   ipcRenderer.invoke('observation:unwatch')
 ;(api as ElectronAPI).observationRead = (sessionDir: string) =>
   ipcRenderer.invoke('observation:read', sessionDir)
+;(api as ElectronAPI).observationReadList = (sessionDir: string) =>
+  ipcRenderer.invoke('observation:read-observations', sessionDir)
 ;(api as ElectronAPI).onObservationStatus = (callback) => {
   const handler = (_event: Electron.IpcRendererEvent, status: unknown) =>
     callback(status as import('../../packages/shared/src/sessions/observation-watermark').ObservationWatermark)

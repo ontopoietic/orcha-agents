@@ -143,6 +143,7 @@ export {
 export type {
   ObservationWatermark,
   ObservableMessage,
+  ObservationSignal,
 } from './observation-watermark.ts';
 export {
   readWatermark,

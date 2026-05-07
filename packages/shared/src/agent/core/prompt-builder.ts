@@ -111,7 +111,52 @@ export class PromptBuilder {
       }
     }
 
+    // Add anchor reminder if the session has no anchors
+    if (sessionId) {
+      const anchorReminder = this.getAnchorReminder(sessionId);
+      if (anchorReminder) {
+        parts.push(anchorReminder);
+      }
+    }
+
     return parts;
+  }
+
+  // ============================================================
+  // Anchor Reminder (nudges the agent to set anchors when missing)
+  // ============================================================
+
+  /**
+   * Build a reminder block when the session has no anchors. The agent then
+   * knows to apply the `orcha-anchor-discipline` skill if a clear Orcha
+   * artifact is referenced. Returns null if the session already has at least
+   * one anchor or if anchors cannot be determined.
+   */
+  getAnchorReminder(sessionId: string): string | null {
+    try {
+      const sessionDir = getSessionPath(this.workspaceRootPath, sessionId);
+      const jsonlPath = join(sessionDir, 'session.jsonl');
+      if (!existsSync(jsonlPath)) return null;
+
+      // Read just the header (first line) to check anchors.
+      const raw = readFileSync(jsonlPath, 'utf-8');
+      const firstNewline = raw.indexOf('\n');
+      const firstLine = firstNewline > 0 ? raw.slice(0, firstNewline) : raw;
+      const header = JSON.parse(firstLine) as { anchors?: unknown[] };
+
+      const anchors = Array.isArray(header.anchors) ? header.anchors : [];
+      if (anchors.length > 0) return null;
+
+      return `<anchor_reminder>
+This session has no anchors set. Anchors (Feature, Befund, Anliegen) scope the session to an Orcha artifact and let later memory aggregation group sessions correctly.
+
+If the user has made the focus explicit, or it is unambiguous from context (e.g. "Lass uns am Modul-System weitermachen", or working on a feature visible via \`orcha feature list\`), apply the \`orcha-anchor-discipline\` skill and call \`set_session_anchors\` with the right anchor.
+
+Do NOT guess. Wrong anchors are worse than no anchors. If the user is just exploring or the target is unclear, leave anchors empty — this reminder is a nudge, not a requirement.
+</anchor_reminder>`;
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -156,6 +201,88 @@ export class PromptBuilder {
   private static readonly MAX_OBSERVATIONS_CHARS = 3000;
   /** Max observations to include */
   private static readonly MAX_OBSERVATIONS_COUNT = 50;
+  /**
+   * Don't inject observations until the conversation has at least this many
+   * lines in session.jsonl (header counts). Below this threshold the raw
+   * messages still fit in context — injection adds noise without value.
+   * Override via env: ORCHA_OBSERVER_INJECT_MIN_LINES.
+   */
+  private static get MIN_LINES_BEFORE_INJECTION(): number {
+    const fromEnv = process.env.ORCHA_OBSERVER_INJECT_MIN_LINES;
+    if (fromEnv) {
+      const n = parseInt(fromEnv, 10);
+      if (Number.isFinite(n) && n >= 0) return n;
+    }
+    return 20; // ~10 user-turns rough proxy
+  }
+
+  /**
+   * Count newlines in a file without loading it fully.
+   * Returns 0 on error (caller should treat 0 as "below threshold").
+   */
+  private countJsonlLines(jsonlPath: string): number {
+    try {
+      const raw = readFileSync(jsonlPath, 'utf-8');
+      // Trailing newline is fine — we only need a lower bound.
+      let count = 0;
+      for (let i = 0; i < raw.length; i++) {
+        if (raw.charCodeAt(i) === 10) count++;
+      }
+      return count;
+    } catch {
+      return 0;
+    }
+  }
+
+  /**
+   * Read the session's anchors from the JSONL header. Returns empty array
+   * if the file does not exist or is malformed. Used by the anchor-filter
+   * in `getSessionObservations`.
+   */
+  private readSessionAnchors(sessionId: string): Array<{ type: string; id: string }> {
+    try {
+      const sessionDir = getSessionPath(this.workspaceRootPath, sessionId);
+      const jsonlPath = join(sessionDir, 'session.jsonl');
+      if (!existsSync(jsonlPath)) return [];
+      const raw = readFileSync(jsonlPath, 'utf-8');
+      const firstNewline = raw.indexOf('\n');
+      const firstLine = firstNewline > 0 ? raw.slice(0, firstNewline) : raw;
+      const header = JSON.parse(firstLine) as { anchors?: unknown };
+      if (!Array.isArray(header.anchors)) return [];
+      return header.anchors
+        .filter((a): a is { type: string; id: string } =>
+          !!a && typeof a === 'object' &&
+          typeof (a as Record<string, unknown>).type === 'string' &&
+          typeof (a as Record<string, unknown>).id === 'string')
+        .map((a) => ({ type: a.type, id: a.id }));
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Decide whether an observation belongs in this session's view.
+   * Rules:
+   * - If session has no anchors → show all observations (no filter)
+   * - If session has anchors → show observations whose anchorRefs intersect,
+   *   PLUS anchor-less observations (treated as session-local)
+   */
+  private observationMatchesSessionScope(
+    obsAnchors: unknown,
+    sessionAnchors: Array<{ type: string; id: string }>,
+  ): boolean {
+    if (sessionAnchors.length === 0) return true;
+    if (!Array.isArray(obsAnchors) || obsAnchors.length === 0) return true;
+    const sessionKeys = new Set(sessionAnchors.map((a) => `${a.type}:${a.id}`));
+    for (const a of obsAnchors) {
+      if (!a || typeof a !== 'object') continue;
+      const r = a as Record<string, unknown>;
+      if (typeof r.type === 'string' && typeof r.id === 'string') {
+        if (sessionKeys.has(`${r.type}:${r.id}`)) return true;
+      }
+    }
+    return false;
+  }
 
   /**
    * Read observations from session data and format as a context block.
@@ -164,12 +291,26 @@ export class PromptBuilder {
    * The block persists across SDK compaction — the agent sees structured
    * memory of past conversation turns even after the original messages
    * are compacted away.
+   *
+   * Gated by:
+   * - Conversation length (skip injection on short sessions where raw
+   *   messages still fit cheaply)
+   * - Anchor-scope: when session has anchors, only show observations
+   *   whose anchors intersect (or are anchor-less)
    */
   getSessionObservations(sessionId: string): string | null {
     const sessionDir = getSessionPath(this.workspaceRootPath, sessionId);
     const observationsPath = join(sessionDir, 'data', 'observations.json');
+    const jsonlPath = join(sessionDir, 'session.jsonl');
 
     if (!existsSync(observationsPath)) return null;
+
+    // Length gate — short conversations don't need observation injection
+    const lineCount = this.countJsonlLines(jsonlPath);
+    if (lineCount < PromptBuilder.MIN_LINES_BEFORE_INJECTION) {
+      log.debug(`[getSessionObservations] Below length threshold (${lineCount} < ${PromptBuilder.MIN_LINES_BEFORE_INJECTION}), skipping injection`);
+      return null;
+    }
 
     try {
       const raw = readFileSync(observationsPath, 'utf-8');
@@ -178,9 +319,16 @@ export class PromptBuilder {
 
       if (!Array.isArray(signals) || signals.length === 0) return null;
 
+      // Anchor-scope filter
+      const sessionAnchors = this.readSessionAnchors(sessionId);
+      const scoped = signals.filter((s) =>
+        this.observationMatchesSessionScope((s as Record<string, unknown>).anchorRefs, sessionAnchors)
+      );
+      if (scoped.length === 0) return null;
+
       // Sort: pivotal → question → context, then by recency within each group
       const salienceOrder: Record<string, number> = { pivotal: 0, question: 1, context: 2 };
-      const sorted = [...signals].sort((a, b) => {
+      const sorted = [...scoped].sort((a, b) => {
         const sa = salienceOrder[(a as Record<string, unknown>).salience as string] ?? 3;
         const sb = salienceOrder[(b as Record<string, unknown>).salience as string] ?? 3;
         if (sa !== sb) return sa - sb;
@@ -214,7 +362,10 @@ export class PromptBuilder {
       const header = '<session_memory>';
       const footer = '</session_memory>';
       const intro = 'Structured observations from past conversation turns. These persist across compaction — the agent does NOT need to re-derive them.';
-      const stats = `${signals.length} observations total, showing last ${lines.length}`;
+      const scopeNote = sessionAnchors.length > 0
+        ? ` · scoped to ${sessionAnchors.length} anchor${sessionAnchors.length === 1 ? '' : 's'}`
+        : '';
+      const stats = `${signals.length} observations total, ${scoped.length} in scope, showing ${lines.length}${scopeNote}`;
 
       log.debug(`[getSessionObservations] Injecting ${lines.length} observations for session ${sessionId}`);
 

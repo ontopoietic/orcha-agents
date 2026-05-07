@@ -254,6 +254,7 @@ export interface ElectronAPI {
   observationWatch(sessionDir: string): Promise<void>
   observationUnwatch(): Promise<void>
   observationRead(sessionDir: string): Promise<import('../../../packages/shared/src/sessions/observation-watermark').ObservationWatermark | null>
+  observationReadList(sessionDir: string): Promise<import('../../../packages/shared/src/sessions/observation-watermark').ObservationSignal[]>
   onObservationStatus(callback: (status: import('../../../packages/shared/src/sessions/observation-watermark').ObservationWatermark) => void): () => void
 
   // Orcha CLI bridge — anchor picker data source (Feature, Befund, Anliegen)

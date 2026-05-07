@@ -11,6 +11,7 @@
 import { watch, readFileSync, existsSync } from 'fs'
 import type { FSWatcher } from 'fs'
 import { join } from 'path'
+import type { ObservationSignal } from '@craft-agent/shared/sessions'
 
 const WATERMARK_FILE = 'observation-watermark.json'
 const DEBOUNCE_MS = 300
@@ -115,4 +116,22 @@ export function stopObservationWatch(): void {
  */
 export function readObservationStatusSync(sessionDir: string): ObservationStatus | null {
   return readObservationStatus(sessionDir)
+}
+
+/**
+ * Read all observations for a session. Returns [] if the file does not
+ * exist or is malformed (best-effort — the UI should still render).
+ */
+export function readObservationsList(sessionDir: string): ObservationSignal[] {
+  const filePath = join(sessionDir, 'data', 'observations.json')
+  if (!existsSync(filePath)) return []
+
+  try {
+    const raw = JSON.parse(readFileSync(filePath, 'utf-8'))
+    const arr = Array.isArray(raw) ? raw : raw.signals
+    if (!Array.isArray(arr)) return []
+    return arr as ObservationSignal[]
+  } catch {
+    return []
+  }
 }

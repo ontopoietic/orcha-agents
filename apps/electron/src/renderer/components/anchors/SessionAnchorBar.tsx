@@ -16,10 +16,11 @@
 
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
-import { Eye, Plus } from 'lucide-react'
+import { Eye, Plus, Pin } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { AnchorChip } from './AnchorChip'
 import { AnchorPicker } from './AnchorPicker'
+import { ObservationsViewer } from './ObservationsViewer'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { useSessionAnchors } from '@/hooks/useSessionAnchors'
 import { useObservationStatus } from '@/hooks/useObservationStatus'
@@ -38,6 +39,7 @@ export function SessionAnchorBar({ sessionId, workingDir, sessionDir, addLabelKe
   const { t } = useTranslation()
   const [pickerOpen, setPickerOpen] = React.useState(false)
   const [observerOpen, setObserverOpen] = React.useState(false)
+  const [viewerOpen, setViewerOpen] = React.useState(false)
   const { anchors, add, remove } = useSessionAnchors(sessionId)
   const observation = useObservationStatus(sessionDir ?? null)
 
@@ -57,14 +59,19 @@ export function SessionAnchorBar({ sessionId, workingDir, sessionDir, addLabelKe
         <button
           type="button"
           onClick={() => setPickerOpen(true)}
+          title={anchors.length === 0
+            ? 'Set a focus anchor (Feature, Befund, Anliegen) so observations get scoped correctly'
+            : undefined}
           className={cn(
-            'inline-flex items-center gap-1 h-6 px-2 rounded-md text-xs',
-            'border border-dashed border-border text-muted',
-            'hover:border-foreground/30 hover:text-foreground hover:bg-foreground/5',
-            'transition-colors',
+            'inline-flex items-center gap-1 h-6 px-2 rounded-md text-xs transition-colors',
+            anchors.length === 0
+              // Empty state — more prominent: filled bg, accent text, pin icon
+              ? 'border border-foreground/20 bg-foreground/[0.04] text-foreground/80 hover:bg-foreground/[0.08] hover:text-foreground'
+              // Has anchors — discreet "+" affordance
+              : 'border border-dashed border-border text-muted hover:border-foreground/30 hover:text-foreground hover:bg-foreground/5',
           )}
         >
-          <Plus className="h-3 w-3" />
+          {anchors.length === 0 ? <Pin className="h-3 w-3" /> : <Plus className="h-3 w-3" />}
           <span>{t(addLabelKey ?? (anchors.length === 0 ? 'anchors.addFirst' : 'anchors.add'))}</span>
         </button>
 
@@ -129,6 +136,19 @@ export function SessionAnchorBar({ sessionId, workingDir, sessionDir, addLabelKe
                         <span>Context observations</span>
                       </div>
                     </div>
+
+                    <div className="border-t border-border pt-2 mt-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setObserverOpen(false)
+                          setViewerOpen(true)
+                        }}
+                        className="w-full text-left text-xs text-foreground hover:text-foreground/80 hover:bg-foreground/5 rounded px-2 py-1.5 transition-colors"
+                      >
+                        View all observations →
+                      </button>
+                    </div>
                   </>
                 ) : (
                   <p className="text-muted">
@@ -148,6 +168,12 @@ export function SessionAnchorBar({ sessionId, workingDir, sessionDir, addLabelKe
         workingDir={workingDir}
         existing={anchors}
         onSelect={(anchor) => void add(anchor)}
+      />
+
+      <ObservationsViewer
+        open={viewerOpen}
+        onOpenChange={setViewerOpen}
+        sessionDir={sessionDir}
       />
     </>
   )

@@ -925,6 +925,11 @@ app.whenReady().then(async () => {
         return readObservationStatusSync(sessionDir)
       })
 
+      ipcMain.handle('observation:read-observations', (_event, sessionDir: string) => {
+        const { readObservationsList } = require('./observation-watcher') as typeof import('./observation-watcher')
+        return readObservationsList(sessionDir)
+      })
+
       // Orcha CLI bridge — list features/befunde/anliegen for the anchor picker
       ipcMain.handle('orcha:list-anchorables', async (_event, type: string, workingDir: string) => {
         const { listAnchorables } = require('./orcha-bridge') as typeof import('./orcha-bridge')
