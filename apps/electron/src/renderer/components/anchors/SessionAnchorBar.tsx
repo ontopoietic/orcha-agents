@@ -30,7 +30,7 @@ export interface SessionAnchorBarProps {
   className?: string
 }
 
-export function SessionAnchorBar({ sessionId, workingDir, addLabelKey, className }: SessionAnchorBarProps) {
+export function SessionAnchorBar({ sessionId, workingDir, sessionDir, addLabelKey, className }: SessionAnchorBarProps) {
   const { t } = useTranslation()
   const [pickerOpen, setPickerOpen] = React.useState(false)
   const { anchors, add, remove } = useSessionAnchors(sessionId)
