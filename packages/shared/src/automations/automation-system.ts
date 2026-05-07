@@ -521,11 +521,21 @@ export class AutomationSystem implements AutomationsConfigProvider {
    * shell command and return stdout as the hook reason. This makes command
    * output visible to the agent (e.g., PreCompact warnings).
    */
-  buildSdkHooks(): Partial<Record<AgentEvent, SdkAutomationCallbackMatcher[]>> {
+  buildSdkHooks(sessionId?: string): Partial<Record<AgentEvent, SdkAutomationCallbackMatcher[]>> {
     if (!this.config) return {};
 
     const hooks: Partial<Record<AgentEvent, SdkAutomationCallbackMatcher[]>> = {};
     const workingDir = this.options.workingDir ?? this.options.workspaceRootPath;
+
+    // Pass workspace + session context to command actions via env vars so
+    // PreCompact / SessionEnd / PostToolUse scripts can find the right session
+    // without auto-detection heuristics.
+    const baseEnv: Record<string, string> = {
+      ...process.env as Record<string, string>,
+      CRAFT_WORKSPACE_ROOT: this.options.workspaceRootPath,
+      CRAFT_WORKSPACE_ID: this.options.workspaceId,
+    };
+    if (sessionId) baseEnv.CRAFT_SESSION_ID = sessionId;
 
     for (const event of AGENT_EVENTS) {
       const matchers = this.config.automations[event];
@@ -552,6 +562,7 @@ export class AutomationSystem implements AutomationsConfigProvider {
                 encoding: 'utf-8',
                 timeout,
                 cwd: workingDir,
+                env: baseEnv,
                 stdio: ['pipe', 'pipe', 'pipe'],
               }).trim();
 

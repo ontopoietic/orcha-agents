@@ -75,9 +75,17 @@ function findMostRecentSession(): string | null {
 // ============================================================================
 
 async function main(): Promise<void> {
+  // Resolution order:
+  //   1. Explicit CLI arg
+  //   2. CRAFT_SESSION_ID env (set by AutomationSystem.buildSdkHooks)
+  //   3. Auto-detect most recently active session (last-resort fallback)
   let sessionDir = process.argv[2];
 
-  // Auto-detect most recently active session if not provided
+  if (!sessionDir && process.env.CRAFT_SESSION_ID) {
+    const root = process.env.CRAFT_WORKSPACE_ROOT ?? process.cwd();
+    sessionDir = join(root, 'sessions', process.env.CRAFT_SESSION_ID);
+  }
+
   if (!sessionDir) {
     sessionDir = findMostRecentSession();
     if (!sessionDir) {

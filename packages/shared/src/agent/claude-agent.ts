@@ -986,7 +986,7 @@ export class ClaudeAgent extends BaseAgent {
         // User hooks from automations.json are merged with internal hooks
         hooks: (() => {
           // Build user-defined hooks from automations.json using the workspace-level AutomationSystem
-          const userHooks: Partial<Record<string, SdkAutomationCallbackMatcher[]>> = this.automationSystem?.buildSdkHooks() ?? {};
+          const userHooks: Partial<Record<string, SdkAutomationCallbackMatcher[]>> = this.automationSystem?.buildSdkHooks(this.config.session?.id) ?? {};
           if (Object.keys(userHooks).length > 0) {
             debug('[CraftAgent] User SDK hooks loaded:', Object.keys(userHooks).join(', '));
           }
