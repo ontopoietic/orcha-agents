@@ -139,4 +139,17 @@ export {
   MAX_BUNDLE_SIZE_BYTES,
 } from './bundle.ts';
 
+// Observation watermark (tracks last-observed message for pre-compaction observer)
+export type {
+  ObservationWatermark,
+  ObservableMessage,
+} from './observation-watermark.ts';
+export {
+  readWatermark,
+  writeWatermark,
+  messagesSinceWatermark,
+  readAllMessages,
+  watermarkPath,
+} from './observation-watermark.ts';
+
 

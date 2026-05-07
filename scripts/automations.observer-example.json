@@ -1,0 +1,17 @@
+{
+  "automations": {
+    "PreCompact": [
+      {
+        "id": "observer01",
+        "name": "Observer: Extract signals before compaction",
+        "actions": [
+          {
+            "type": "command",
+            "command": "npx tsx scripts/orcha-observe.ts \"$CRAFT_SESSION_DIR\"",
+            "timeout": 30000
+          }
+        ]
+      }
+    ]
+  }
+}
