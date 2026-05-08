@@ -19,6 +19,7 @@ import { formatPreferencesForPrompt } from '../../config/preferences.ts';
 import { formatSessionState } from '../mode-manager.ts';
 import { getDateTimeContext, getWorkingDirectoryContext } from '../../prompts/system.ts';
 import { getSessionPlansPath, getSessionDataPath, getSessionPath } from '../../sessions/storage.ts';
+import { maybeTriggerObserver } from '../../sessions/observation-trigger.ts';
 import { createLogger } from '../../utils/debug.ts';
 import type {
   PromptBuilderConfig,
@@ -103,8 +104,19 @@ export class PromptBuilder {
       parts.push(workingDirContext);
     }
 
-    // Add session observations (from observer)
+    // Add session observations (from observer) — also fires the
+    // token-aware observer trigger as a side-effect, fire-and-forget.
     if (sessionId) {
+      const sessionDir = getSessionPath(this.workspaceRootPath, sessionId);
+      try {
+        const decision = maybeTriggerObserver(sessionDir, sessionId);
+        if (decision.triggered) {
+          log.debug(`[buildContextParts] Observer triggered: ${decision.reason}`);
+        }
+      } catch (err) {
+        log.debug('[buildContextParts] Observer trigger threw:', err);
+      }
+
       const observationsBlock = this.getSessionObservations(sessionId);
       if (observationsBlock) {
         parts.push(observationsBlock);
