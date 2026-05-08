@@ -229,13 +229,14 @@ export function SessionAnchorBar({ sessionId, workingDir, sessionDir, addLabelKe
                     <div
                       className={cn(
                         'text-[11px] rounded px-2 py-1.5 mt-1 whitespace-pre-wrap break-words',
+                        'max-h-48 overflow-y-auto font-mono',
                         runResult.ok
                           ? 'bg-green-500/10 text-green-700 dark:text-green-400'
                           : 'bg-red-500/10 text-red-700 dark:text-red-400',
                       )}
                     >
-                      {runResult.message.length > 300
-                        ? runResult.message.slice(0, 300) + '…'
+                      {runResult.message.length > 4000
+                        ? runResult.message.slice(0, 4000) + '\n… (truncated)'
                         : runResult.message}
                     </div>
                   )}

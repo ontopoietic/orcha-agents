@@ -32,24 +32,33 @@ import { getValidClaudeOAuthToken } from '@craft-agent/shared/auth/state'
  */
 async function resolveObserverAuthEnv(): Promise<Record<string, string>> {
   if (process.env.CLAUDE_CODE_OAUTH_TOKEN) {
+    console.log('[observation-watcher] auth: reusing CLAUDE_CODE_OAUTH_TOKEN from process.env')
     return { CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN }
   }
   if (process.env.ANTHROPIC_API_KEY) {
+    console.log('[observation-watcher] auth: reusing ANTHROPIC_API_KEY from process.env')
     return { ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY }
   }
   try {
     const conns = getLlmConnections()
-    // Prefer connections that look Anthropic-OAuth-shaped
+    console.log(`[observation-watcher] auth: ${conns.length} LLM connections in config`)
+    if (conns.length === 0) return {}
     const candidate = conns.find((c) =>
       c.providerType === 'anthropic' && (c as Record<string, unknown>).authType === 'oauth'
     ) ?? conns.find((c) => c.providerType === 'anthropic')
-    if (!candidate) return {}
+    if (!candidate) {
+      console.warn(`[observation-watcher] auth: no Anthropic connection found among [${conns.map(c => c.slug + ':' + c.providerType).join(', ')}]`)
+      return {}
+    }
+    console.log(`[observation-watcher] auth: trying connection ${candidate.slug} (provider=${candidate.providerType})`)
     const result = await getValidClaudeOAuthToken(candidate.slug)
     if (result.accessToken) {
+      console.log(`[observation-watcher] auth: got OAuth token (length=${result.accessToken.length})`)
       return { CLAUDE_CODE_OAUTH_TOKEN: result.accessToken }
     }
-  } catch {
-    // Fall through to empty env — script will warn about missing auth.
+    console.warn(`[observation-watcher] auth: getValidClaudeOAuthToken returned no token for ${candidate.slug}`)
+  } catch (err) {
+    console.warn('[observation-watcher] auth: lookup threw:', err instanceof Error ? err.message : err)
   }
   return {}
 }
@@ -204,8 +213,17 @@ export async function runObserverNow(sessionDir: string): Promise<string> {
 
     let stdout = ''
     let stderr = ''
-    child.stdout.on('data', (d) => { stdout += d.toString() })
-    child.stderr.on('data', (d) => { stderr += d.toString() })
+    child.stdout.on('data', (d) => {
+      const s = d.toString()
+      stdout += s
+      // Mirror to main-process stdout for live visibility in dev terminal
+      process.stdout.write(s)
+    })
+    child.stderr.on('data', (d) => {
+      const s = d.toString()
+      stderr += s
+      process.stderr.write(s)
+    })
 
     const killer = setTimeout(() => {
       child.kill('SIGTERM')
@@ -263,8 +281,17 @@ export async function rewriteEchoes(sessionDir: string): Promise<string> {
 
     let stdout = ''
     let stderr = ''
-    child.stdout.on('data', (d) => { stdout += d.toString() })
-    child.stderr.on('data', (d) => { stderr += d.toString() })
+    child.stdout.on('data', (d) => {
+      const s = d.toString()
+      stdout += s
+      // Mirror to main-process stdout for live visibility in dev terminal
+      process.stdout.write(s)
+    })
+    child.stderr.on('data', (d) => {
+      const s = d.toString()
+      stderr += s
+      process.stderr.write(s)
+    })
 
     const killer = setTimeout(() => {
       child.kill('SIGTERM')
