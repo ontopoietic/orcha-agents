@@ -22,7 +22,11 @@
  */
 
 import { readFileSync, writeFileSync, existsSync, copyFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+// ESM-safe equivalent of __dirname
+const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 
 interface ObservationSignal {
   id: string;
@@ -81,7 +85,7 @@ function findClaudeBinary(): string | null {
   // Heuristic fallback for when CRAFT_APP_ROOT is missing — script lives in
   // orcha-agents/scripts so its parent's node_modules holds the binary.
   candidates.push(
-    join(__dirname, '..', 'node_modules', '@anthropic-ai', 'claude-agent-sdk-darwin-arm64', 'claude'),
+    join(SCRIPT_DIR, '..', 'node_modules', '@anthropic-ai', 'claude-agent-sdk-darwin-arm64', 'claude'),
   );
   for (const p of candidates) {
     if (existsSync(p)) return p;
