@@ -184,6 +184,63 @@ export async function runObserverNow(sessionDir: string): Promise<string> {
 }
 
 /**
+ * Run the echo-rewrite script manually for a session. Re-extracts any
+ * observation whose summary mirrors its excerpt, using whichever LLM
+ * auth is currently available (CLAUDE_CODE_OAUTH_TOKEN takes precedence).
+ *
+ * Returns stdout on success, throws on failure or auth-missing.
+ */
+export async function rewriteEchoes(sessionDir: string): Promise<string> {
+  const { spawn } = await import('node:child_process')
+  const { resolve } = await import('node:path')
+
+  const appRoot = process.env.CRAFT_APP_ROOT
+  if (!appRoot) {
+    throw new Error('CRAFT_APP_ROOT not set — cannot locate rewrite script')
+  }
+  const scriptPath = join(appRoot, 'scripts', 'orcha-observe-rewrite-echoes.ts')
+  if (!existsSync(scriptPath)) {
+    throw new Error(`Rewrite script not found at ${scriptPath}.`)
+  }
+  const workspaceRoot = resolve(sessionDir, '..', '..')
+
+  return new Promise((resolveOut, rejectOut) => {
+    const child = spawn('npx', ['tsx', scriptPath, sessionDir], {
+      cwd: appRoot,
+      env: {
+        ...process.env,
+        CRAFT_WORKSPACE_ROOT: workspaceRoot,
+      },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    })
+
+    let stdout = ''
+    let stderr = ''
+    child.stdout.on('data', (d) => { stdout += d.toString() })
+    child.stderr.on('data', (d) => { stderr += d.toString() })
+
+    const killer = setTimeout(() => {
+      child.kill('SIGTERM')
+      rejectOut(new Error('Rewrite script timed out after 5min'))
+    }, 5 * 60_000)
+
+    child.on('close', (code) => {
+      clearTimeout(killer)
+      if (code === 0) {
+        resolveOut(stdout.trim() || 'Rewrite ran (no output).')
+      } else {
+        rejectOut(new Error(`Rewrite exited with code ${code}: ${stderr.trim() || stdout.trim()}`))
+      }
+    })
+
+    child.on('error', (err) => {
+      clearTimeout(killer)
+      rejectOut(err)
+    })
+  })
+}
+
+/**
  * Read all observations for a session. Returns [] if the file does not
  * exist or is malformed (best-effort — the UI should still render).
  */

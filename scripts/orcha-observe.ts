@@ -179,45 +179,83 @@ interface Observation {
 // LLM-Based Extraction (primary path — Mastra observational-memory pattern)
 // ============================================================================
 
-interface LlmExtractor {
-  /** API endpoint, e.g. 'https://api.anthropic.com/v1/messages' */
-  endpoint: string;
-  /** Bearer token for the LLM provider */
-  apiKey: string;
-  /** Model id, e.g. 'claude-haiku-4-5' */
-  model: string;
-  /** Provider type — controls request shape */
-  provider: 'anthropic';
-  /** Optional API version header */
-  apiVersion?: string;
-}
+type ExtractorMode =
+  | { kind: 'cli'; cliPath: string; model: string }
+  | { kind: 'api'; apiKey: string; model: string; endpoint: string; apiVersion: string };
 
 /**
- * Resolve which LLM to use for extraction. Returns null if no credentials
- * are available — caller falls back to pattern matching with a warning.
+ * Resolve which LLM path to use for extraction. Returns null if no auth
+ * is available — caller falls back to pattern matching with a warning.
  *
- * Env-var contract (in priority order):
- *   ORCHA_OBSERVER_PROVIDER=anthropic
- *   ORCHA_OBSERVER_API_KEY=sk-...
- *   ORCHA_OBSERVER_MODEL=claude-haiku-4-5
+ * Resolution order:
+ *   1. CLI path: if CLAUDE_CODE_OAUTH_TOKEN is in env (Pro subscription /
+ *      OAuth-authenticated parent process), spawn the bundled `claude`
+ *      binary with --print. The CLI handles OAuth headers automatically.
+ *      Most orcha-agents users land here because the Electron app uses
+ *      OAuth, not API keys.
+ *   2. API key path: if ANTHROPIC_API_KEY is set, use raw fetch. Useful
+ *      for CI / scripted runs.
+ *   3. null: caller falls back to pattern matching.
  *
- * Falls back to ANTHROPIC_API_KEY if the explicit override is not set.
+ * Env vars consulted:
+ *   CLAUDE_CODE_OAUTH_TOKEN    OAuth token (set by Electron app on spawn)
+ *   ORCHA_OBSERVER_API_KEY     overrides ANTHROPIC_API_KEY for the observer
+ *   ANTHROPIC_API_KEY          fallback API key
+ *   ORCHA_OBSERVER_MODEL       model id; defaults to claude-sonnet-4-6
+ *   ORCHA_OBSERVER_CLI_PATH    explicit override for the claude binary
  */
-function resolveExtractor(): LlmExtractor | null {
-  const provider = (process.env.ORCHA_OBSERVER_PROVIDER ?? 'anthropic').toLowerCase();
-  const apiKey = process.env.ORCHA_OBSERVER_API_KEY ?? process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) return null;
+function resolveExtractor(): ExtractorMode | null {
+  const model = process.env.ORCHA_OBSERVER_MODEL ?? 'claude-sonnet-4-6';
 
-  if (provider === 'anthropic') {
+  // CLI path takes precedence — the OAuth token is the most common auth in
+  // orcha-agents and the CLI hides the header complexity.
+  const oauth = process.env.CLAUDE_CODE_OAUTH_TOKEN;
+  if (oauth) {
+    const cliPath = process.env.ORCHA_OBSERVER_CLI_PATH ?? findClaudeBinary();
+    if (cliPath) {
+      return { kind: 'cli', cliPath, model };
+    }
+  }
+
+  const apiKey = process.env.ORCHA_OBSERVER_API_KEY ?? process.env.ANTHROPIC_API_KEY;
+  if (apiKey) {
     return {
-      provider: 'anthropic',
+      kind: 'api',
       apiKey,
-      model: process.env.ORCHA_OBSERVER_MODEL ?? 'claude-sonnet-4-6',
+      model,
       endpoint: 'https://api.anthropic.com/v1/messages',
       apiVersion: '2023-06-01',
     };
   }
-  // Future: openai/gemini providers here.
+
+  return null;
+}
+
+/**
+ * Locate the bundled `claude` CLI binary. Looks in the most likely places
+ * relative to CRAFT_APP_ROOT (set by the Electron main process) and falls
+ * back to scanning the npm-installed sdk package.
+ */
+function findClaudeBinary(): string | null {
+  const candidates: string[] = [];
+  const appRoot = process.env.CRAFT_APP_ROOT;
+  if (appRoot) {
+    candidates.push(
+      join(appRoot, 'node_modules', '@anthropic-ai', 'claude-agent-sdk-darwin-arm64', 'claude'),
+      join(appRoot, 'node_modules', '@anthropic-ai', 'claude-agent-sdk-binary', 'claude'),
+      join(appRoot, 'apps', 'electron', 'node_modules', '@anthropic-ai', 'claude-agent-sdk-binary', 'claude'),
+    );
+  }
+  // Process resourcesPath (packaged Electron) — claude binary lives in app bundle
+  const resourcesPath = (process as unknown as { resourcesPath?: string }).resourcesPath;
+  if (resourcesPath) {
+    candidates.push(
+      join(resourcesPath, 'app', 'node_modules', '@anthropic-ai', 'claude-agent-sdk-binary', 'claude'),
+    );
+  }
+  for (const p of candidates) {
+    if (existsSync(p)) return p;
+  }
   return null;
 }
 
@@ -300,22 +338,67 @@ interface AnthropicMessagesResponse {
   error?: { message?: string };
 }
 
-async function callAnthropic(extractor: LlmExtractor, system: string, user: string): Promise<string | null> {
+/**
+ * Run the LLM via the bundled `claude` CLI in --print mode. The CLI
+ * handles OAuth headers from CLAUDE_CODE_OAUTH_TOKEN automatically — no
+ * raw API surface for us to get wrong.
+ */
+async function callClaudeCLI(cliPath: string, model: string, system: string, user: string): Promise<string | null> {
+  const { spawn } = await import('node:child_process');
+  return new Promise((resolve) => {
+    const child = spawn(cliPath, [
+      '--print',
+      '--model', model,
+      '--append-system-prompt', system,
+      '--disable-slash-commands',
+      '--exclude-dynamic-system-prompt-sections',
+      user,
+    ], {
+      env: process.env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
+    child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
+    const timer = setTimeout(() => {
+      child.kill('SIGTERM');
+      console.warn('Observer: claude CLI timed out after 60s');
+      resolve(null);
+    }, 60_000);
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      if (code === 0) {
+        resolve(stdout.trim() || null);
+      } else {
+        console.warn(`Observer: claude CLI exited ${code}: ${stderr.trim().slice(0, 300) || stdout.trim().slice(0, 300)}`);
+        resolve(null);
+      }
+    });
+    child.on('error', (err) => {
+      clearTimeout(timer);
+      console.warn(`Observer: claude CLI spawn error: ${err.message}`);
+      resolve(null);
+    });
+  });
+}
+
+async function callAnthropicAPI(apiKey: string, model: string, endpoint: string, apiVersion: string, system: string, user: string): Promise<string | null> {
   const body = {
-    model: extractor.model,
+    model,
     max_tokens: 4096,
-    // 0.3 was too deterministic — Haiku regressed to copy-paste.
+    // 0.3 was too deterministic — the model regressed to copy-paste.
     // Slightly higher temp encourages reformulation without going off-spec.
     temperature: 0.6,
     system,
     messages: [{ role: 'user', content: user }],
   };
-  const res = await fetch(extractor.endpoint, {
+  const res = await fetch(endpoint, {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
-      'x-api-key': extractor.apiKey,
-      'anthropic-version': extractor.apiVersion ?? '2023-06-01',
+      'x-api-key': apiKey,
+      'anthropic-version': apiVersion,
     },
     body: JSON.stringify(body),
   });
@@ -329,12 +412,18 @@ async function callAnthropic(extractor: LlmExtractor, system: string, user: stri
     console.warn(`Observer: Anthropic error: ${json.error.message ?? 'unknown'}`);
     return null;
   }
-  // content is an array of blocks — concatenate all text blocks
   return (json.content ?? [])
     .filter((b) => b.type === 'text' && typeof b.text === 'string')
     .map((b) => b.text as string)
     .join('\n')
     .trim();
+}
+
+async function callExtractor(mode: ExtractorMode, system: string, user: string): Promise<string | null> {
+  if (mode.kind === 'cli') {
+    return callClaudeCLI(mode.cliPath, mode.model, system, user);
+  }
+  return callAnthropicAPI(mode.apiKey, mode.model, mode.endpoint, mode.apiVersion, system, user);
 }
 
 /**
@@ -405,12 +494,12 @@ async function extractObservationsViaLlm(messages: ObservableMessage[]): Promise
 
   const extractor = resolveExtractor();
   if (!extractor) {
-    console.warn('Observer: No LLM credentials (ORCHA_OBSERVER_API_KEY or ANTHROPIC_API_KEY). Falling back to pattern matching — quality will be lower.');
+    console.warn('Observer: No LLM auth (CLAUDE_CODE_OAUTH_TOKEN, ORCHA_OBSERVER_API_KEY, or ANTHROPIC_API_KEY). Falling back to pattern matching — quality will be lower.');
     return extractObservations(messages);
   }
 
   try {
-    const raw = await callAnthropic(extractor, buildObserverSystemPrompt(), buildObserverUserPrompt(dialogue));
+    const raw = await callExtractor(extractor, buildObserverSystemPrompt(), buildObserverUserPrompt(dialogue));
     if (!raw) {
       console.warn('Observer: Empty LLM response, falling back to pattern matching.');
       return extractObservations(messages);
@@ -420,7 +509,7 @@ async function extractObservationsViaLlm(messages: ObservableMessage[]): Promise
       console.warn('Observer: Could not parse LLM JSON output, falling back to pattern matching.');
       return extractObservations(messages);
     }
-    console.log(`Observer: LLM extracted ${parsed.length} observations from ${dialogue.length} messages (model=${extractor.model}).`);
+    console.log(`Observer: LLM extracted ${parsed.length} observations from ${dialogue.length} messages (mode=${extractor.kind}, model=${extractor.model}).`);
     return parsed;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

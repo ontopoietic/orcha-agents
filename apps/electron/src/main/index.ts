@@ -940,6 +940,16 @@ app.whenReady().then(async () => {
         }
       })
 
+      ipcMain.handle('observation:rewrite-echoes', async (_event, sessionDir: string) => {
+        const { rewriteEchoes } = require('./observation-watcher') as typeof import('./observation-watcher')
+        try {
+          const output = await rewriteEchoes(sessionDir)
+          return { ok: true as const, output }
+        } catch (err) {
+          return { ok: false as const, error: err instanceof Error ? err.message : String(err) }
+        }
+      })
+
       // Orcha CLI bridge — list features/befunde/anliegen for the anchor picker
       ipcMain.handle('orcha:list-anchorables', async (_event, type: string, workingDir: string) => {
         const { listAnchorables } = require('./orcha-bridge') as typeof import('./orcha-bridge')

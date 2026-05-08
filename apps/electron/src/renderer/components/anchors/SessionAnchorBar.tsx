@@ -63,6 +63,24 @@ export function SessionAnchorBar({ sessionId, workingDir, sessionDir, addLabelKe
     }
   }, [sessionDir, runningObserver])
 
+  const handleRewriteEchoes = React.useCallback(async () => {
+    if (!sessionDir || runningObserver) return
+    setRunningObserver(true)
+    setRunResult(null)
+    try {
+      const result = await window.electronAPI.observationRewriteEchoes(sessionDir)
+      if (result.ok) {
+        setRunResult({ ok: true, message: result.output })
+      } else {
+        setRunResult({ ok: false, message: result.error })
+      }
+    } catch (err) {
+      setRunResult({ ok: false, message: err instanceof Error ? err.message : String(err) })
+    } finally {
+      setRunningObserver(false)
+    }
+  }, [sessionDir, runningObserver])
+
   if (!sessionId) return null
 
   return (
@@ -179,7 +197,21 @@ export function SessionAnchorBar({ sessionId, workingDir, sessionDir, addLabelKe
                       'disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent',
                     )}
                   >
-                    {runningObserver ? 'Running observer…' : 'Run observer now'}
+                    {runningObserver ? 'Working…' : 'Run observer now'}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => void handleRewriteEchoes()}
+                    disabled={runningObserver || !sessionDir}
+                    className={cn(
+                      'w-full text-left text-xs rounded px-2 py-1.5 transition-colors',
+                      'text-foreground hover:bg-foreground/5',
+                      'disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent',
+                    )}
+                    title="Re-extract any observation that mirrors its source message"
+                  >
+                    Rewrite echoes
                   </button>
 
                   <button
