@@ -12,6 +12,47 @@ import { watch, readFileSync, existsSync } from 'fs'
 import type { FSWatcher } from 'fs'
 import { join } from 'path'
 import type { ObservationSignal } from '@craft-agent/shared/sessions'
+import { getLlmConnections } from '@craft-agent/shared/config/storage'
+import { getValidClaudeOAuthToken } from '@craft-agent/shared/auth/state'
+
+/**
+ * Resolve auth env vars for the observer subprocess. The observer doesn't
+ * have a persistent agent attached, so we can't rely on claude-agent.ts
+ * having populated process.env. Instead, look up the first Anthropic
+ * OAuth connection in the user's config and fetch a fresh token from
+ * the credential manager. Returns an env-overrides object suitable for
+ * spreading into a spawn() options.env.
+ *
+ * Precedence:
+ *   1. CLAUDE_CODE_OAUTH_TOKEN already in process.env (an active agent
+ *      session set it) → reuse
+ *   2. ANTHROPIC_API_KEY in env or config → reuse / inject
+ *   3. Look up Anthropic OAuth connection → fetch token
+ *   4. Empty object → script falls back to pattern matching with a warning
+ */
+async function resolveObserverAuthEnv(): Promise<Record<string, string>> {
+  if (process.env.CLAUDE_CODE_OAUTH_TOKEN) {
+    return { CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN }
+  }
+  if (process.env.ANTHROPIC_API_KEY) {
+    return { ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY }
+  }
+  try {
+    const conns = getLlmConnections()
+    // Prefer connections that look Anthropic-OAuth-shaped
+    const candidate = conns.find((c) =>
+      c.providerType === 'anthropic' && (c as Record<string, unknown>).authType === 'oauth'
+    ) ?? conns.find((c) => c.providerType === 'anthropic')
+    if (!candidate) return {}
+    const result = await getValidClaudeOAuthToken(candidate.slug)
+    if (result.accessToken) {
+      return { CLAUDE_CODE_OAUTH_TOKEN: result.accessToken }
+    }
+  } catch {
+    // Fall through to empty env — script will warn about missing auth.
+  }
+  return {}
+}
 
 const WATERMARK_FILE = 'observation-watermark.json'
 const DEBOUNCE_MS = 300
@@ -146,12 +187,16 @@ export async function runObserverNow(sessionDir: string): Promise<string> {
 
   // The session under observation lives in the workspace, not the source repo.
   const workspaceRoot = resolve(sessionDir, '..', '..')
+  // Eagerly fetch auth — the observer subprocess can't hit OAuth-protected
+  // endpoints unless CLAUDE_CODE_OAUTH_TOKEN is in env.
+  const authEnv = await resolveObserverAuthEnv()
 
   return new Promise((resolveOut, rejectOut) => {
     const child = spawn('npx', ['tsx', scriptPath, sessionDir], {
       cwd: appRoot, // run from source repo so node_modules/tsx resolves
       env: {
         ...process.env,
+        ...authEnv,
         CRAFT_WORKSPACE_ROOT: workspaceRoot,
       },
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -203,12 +248,14 @@ export async function rewriteEchoes(sessionDir: string): Promise<string> {
     throw new Error(`Rewrite script not found at ${scriptPath}.`)
   }
   const workspaceRoot = resolve(sessionDir, '..', '..')
+  const authEnv = await resolveObserverAuthEnv()
 
   return new Promise((resolveOut, rejectOut) => {
     const child = spawn('npx', ['tsx', scriptPath, sessionDir], {
       cwd: appRoot,
       env: {
         ...process.env,
+        ...authEnv,
         CRAFT_WORKSPACE_ROOT: workspaceRoot,
       },
       stdio: ['pipe', 'pipe', 'pipe'],
