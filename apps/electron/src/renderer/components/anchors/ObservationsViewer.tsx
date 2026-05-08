@@ -70,12 +70,12 @@ function ObservationCard({ obs }: { obs: ObservationSignal }) {
   const excerpt = obs.conversation?.excerpt
 
   return (
-    <div className="rounded-md border border-border p-3 space-y-2 bg-foreground/[0.02]">
+    <div className="rounded-md border border-border p-3 space-y-2 bg-background">
       <div className="flex items-start gap-2">
         <span className={cn('inline-block w-2 h-2 rounded-full mt-1.5 shrink-0', meta.dot)} />
         <div className="flex-1 min-w-0">
           <div className="text-sm text-foreground leading-snug">{stripPrefix(obs.summary)}</div>
-          <div className="flex items-center gap-2 mt-1 text-[11px] text-muted">
+          <div className="flex items-center gap-2 mt-1 text-[11px] text-foreground/60">
             {actor && <span className="capitalize">{actor}</span>}
             {actor && <span>·</span>}
             <span>{formatTime(obs.createdAt)}</span>
@@ -93,7 +93,7 @@ function ObservationCard({ obs }: { obs: ObservationSignal }) {
         </div>
       </div>
       {excerpt && (
-        <div className="text-xs text-muted/80 italic pl-4 border-l-2 border-border ml-1">
+        <div className="text-xs text-foreground/70 italic pl-4 border-l-2 border-border ml-1">
           “{excerpt.length > 240 ? excerpt.slice(0, 240) + '…' : excerpt}”
         </div>
       )}
@@ -135,7 +135,7 @@ export function ObservationsViewer({ open, onOpenChange, sessionDir }: Observati
           <DialogTitle className="flex items-center gap-2">
             <Eye className="h-4 w-4" />
             Observations
-            <span className="text-xs font-normal text-muted ml-2">
+            <span className="text-xs font-normal text-foreground/70 ml-2">
               {totals.all} total · 🔴 {totals.pivotal} · 🟡 {totals.question} · 🟢 {totals.context}
             </span>
           </DialogTitle>
@@ -143,11 +143,11 @@ export function ObservationsViewer({ open, onOpenChange, sessionDir }: Observati
 
         <div className="flex-1 overflow-y-auto -mx-6 px-6 space-y-6">
           {loading && observations.length === 0 && (
-            <div className="text-sm text-muted py-8 text-center">Loading observations…</div>
+            <div className="text-sm text-foreground/70 py-8 text-center">Loading observations…</div>
           )}
 
           {!loading && observations.length === 0 && (
-            <div className="text-sm text-muted py-8 text-center">
+            <div className="text-sm text-foreground/70 py-8 text-center">
               No observations yet. The observer runs before context compaction
               (or when triggered manually) and writes structured signals here.
             </div>
@@ -159,7 +159,7 @@ export function ObservationsViewer({ open, onOpenChange, sessionDir }: Observati
             const meta = SALIENCE_META[salience]
             return (
               <section key={salience} className="space-y-2">
-                <h3 className="text-xs font-semibold uppercase tracking-wide text-muted flex items-center gap-2">
+                <h3 className="text-xs font-semibold uppercase tracking-wide text-foreground/75 flex items-center gap-2">
                   <span className={cn('inline-block w-2 h-2 rounded-full', meta.dot)} />
                   {meta.label} ({items.length})
                 </h3>
@@ -173,7 +173,7 @@ export function ObservationsViewer({ open, onOpenChange, sessionDir }: Observati
           })}
         </div>
 
-        <div className="flex items-center justify-between pt-2 border-t border-border text-xs text-muted">
+        <div className="flex items-center justify-between pt-2 border-t border-border text-xs text-foreground/65">
           <span>Source: <code className="text-foreground/70">data/observations.json</code></span>
           <button
             type="button"

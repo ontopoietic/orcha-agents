@@ -103,10 +103,12 @@ export function SessionAnchorBar({ sessionId, workingDir, sessionDir, addLabelKe
                 type="button"
                 className={cn(
                   'inline-flex items-center gap-1 h-6 px-2 rounded-md text-xs',
-                  'border border-border select-none transition-colors',
+                  'border select-none transition-colors',
                   observation.hasObserved
-                    ? 'bg-foreground/5 text-muted hover:bg-foreground/10'
-                    : 'bg-transparent text-muted/50 hover:text-muted hover:bg-foreground/5',
+                    // Active: full foreground text on subtle bg, clear border
+                    ? 'border-foreground/20 bg-foreground/[0.06] text-foreground hover:bg-foreground/[0.10]'
+                    // Idle: dimmer but still legible
+                    : 'border-border bg-transparent text-foreground/70 hover:text-foreground hover:bg-foreground/5',
                 )}
               >
                 <Eye className="h-3 w-3" />
@@ -133,32 +135,32 @@ export function SessionAnchorBar({ sessionId, workingDir, sessionDir, addLabelKe
 
                 {observation.hasObserved ? (
                   <>
-                    <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-muted">
-                      <span className="text-foreground/60">Last run</span>
-                      <span>{observation.relativeTime ?? 'just now'}</span>
-                      <span className="text-foreground/60">Messages</span>
-                      <span>{observation.observedCount} observed</span>
-                      <span className="text-foreground/60">Signals</span>
-                      <span>{observation.lastSignalCount} extracted</span>
+                    <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+                      <span className="text-foreground/55">Last run</span>
+                      <span className="text-foreground">{observation.relativeTime ?? 'just now'}</span>
+                      <span className="text-foreground/55">Messages</span>
+                      <span className="text-foreground">{observation.observedCount} observed</span>
+                      <span className="text-foreground/55">Signals</span>
+                      <span className="text-foreground">{observation.lastSignalCount} extracted</span>
                     </div>
 
                     <div className="border-t border-border pt-2 mt-2 space-y-1">
-                      <div className="flex items-center gap-2 text-muted">
+                      <div className="flex items-center gap-2 text-foreground/85">
                         <span className="inline-block w-2 h-2 rounded-full bg-red-500" />
                         <span>Pivotal assertions</span>
                       </div>
-                      <div className="flex items-center gap-2 text-muted">
+                      <div className="flex items-center gap-2 text-foreground/85">
                         <span className="inline-block w-2 h-2 rounded-full bg-yellow-500" />
                         <span>Open questions</span>
                       </div>
-                      <div className="flex items-center gap-2 text-muted">
+                      <div className="flex items-center gap-2 text-foreground/85">
                         <span className="inline-block w-2 h-2 rounded-full bg-green-500" />
                         <span>Context observations</span>
                       </div>
                     </div>
                   </>
                 ) : (
-                  <p className="text-muted leading-relaxed">
+                  <p className="text-foreground/80 leading-relaxed">
                     No observations yet. The observer fires when the SDK
                     compacts the conversation (large token threshold), or
                     when triggered manually. Short sessions usually never
