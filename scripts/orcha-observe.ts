@@ -212,7 +212,7 @@ function resolveExtractor(): LlmExtractor | null {
     return {
       provider: 'anthropic',
       apiKey,
-      model: process.env.ORCHA_OBSERVER_MODEL ?? 'claude-haiku-4-5',
+      model: process.env.ORCHA_OBSERVER_MODEL ?? 'claude-sonnet-4-6',
       endpoint: 'https://api.anthropic.com/v1/messages',
       apiVersion: '2023-06-01',
     };
@@ -304,7 +304,9 @@ async function callAnthropic(extractor: LlmExtractor, system: string, user: stri
   const body = {
     model: extractor.model,
     max_tokens: 4096,
-    temperature: 0.3,
+    // 0.3 was too deterministic — Haiku regressed to copy-paste.
+    // Slightly higher temp encourages reformulation without going off-spec.
+    temperature: 0.6,
     system,
     messages: [{ role: 'user', content: user }],
   };
