@@ -241,12 +241,45 @@ Discipline (MUST follow):
    - "question" 🟡: open questions awaiting answers
    - "context" 🟢: ambient state, completed steps, references — useful but not load-bearing
 
+ABSOLUTE RULE — DO NOT ECHO:
+The summary is NOT the message. It is a *fact extracted from* the message,
+written from the outside, in the third person. NEVER paraphrase by reordering;
+NEVER copy a sentence from the conversation as the summary; NEVER include
+"the user said X" boilerplate — write the resulting state.
+
+Hard target: summary ≤ 140 characters. Excerpt is the verbatim slice — that
+is where the original wording lives. The summary must be DIFFERENT prose.
+
+Examples:
+
+  BAD (echo):
+    summary: "The fix worked. Now the next thing: some edges reference back
+              to previous nodes. These edges are still curved and run behind
+              other nodes. They should go around the outside…"
+
+  GOOD (extracted fact):
+    summary: "Backward edges still route through other nodes; user wants
+              outside routing"
+
+  BAD (echo):
+    summary: "Should we use Cloudflare D1 or Turso?"
+  GOOD:
+    summary: "Open question: D1 vs. Turso for the database"
+
+  BAD (echo):
+    summary: "Lass uns am Modul-System weitermachen"
+  GOOD:
+    summary: "Focus shifted to Modul-System feature"
+
+If you cannot produce a summary that is genuinely shorter and reformulated
+from the source, SKIP that turn — emitting an echo is worse than no entry.
+
 Output: a JSON object { "observations": Observation[] } where Observation = {
-  summary: string,                           // 1-2 dense lines
+  summary: string,                           // ≤ 140 chars, third-person fact
   salience: "pivotal" | "question" | "context",
   actor: "user" | "agent",
   messageRange: { from: string, to: string }, // message IDs from the input
-  excerpt: string                            // ~120 chars from the source message
+  excerpt: string                            // ~120 chars verbatim from the source message
 }.
 
 Return ONLY valid JSON. No prose around it.`;
@@ -302,6 +335,27 @@ async function callAnthropic(extractor: LlmExtractor, system: string, user: stri
     .trim();
 }
 
+/**
+ * Heuristic echo detector — true if the summary is essentially a copy of
+ * the excerpt rather than an extracted fact. Catches the common LLM
+ * failure mode where Haiku returns the user message as the "summary".
+ *
+ * Cheap normalization (lowercase, collapse whitespace) + prefix check on
+ * 50 chars. False positives are acceptable — the viewer also flags any
+ * surviving echoes visually.
+ */
+function isEcho(summary: string, excerpt: string): boolean {
+  if (!summary || !excerpt) return false;
+  const norm = (s: string) => s.toLowerCase().replace(/\s+/g, ' ').trim();
+  // Strip the salience prefix the LLM sometimes still adds.
+  const s = norm(summary).replace(/^[^a-z0-9]*(user stated|user asked|observed):\s*/, '');
+  const e = norm(excerpt);
+  if (s.length < 30) return false;
+  const head = s.slice(0, 50);
+  // Either direction — summary inside excerpt OR excerpt inside summary
+  return e.startsWith(head) || s.startsWith(e.slice(0, 50));
+}
+
 function parseObservationsJson(raw: string): Observation[] | null {
   // The model sometimes wraps JSON in code fences; strip them defensively.
   let text = raw.trim();
@@ -324,6 +378,10 @@ function parseObservationsJson(raw: string): Observation[] | null {
       const to = range && typeof range.to === 'string' ? range.to : null;
       const excerpt = typeof o.excerpt === 'string' ? o.excerpt : '';
       if (!summary || !salience || !actor || !from || !to) continue;
+      // Drop echoes — summary that mirrors the excerpt is not an
+      // observation, it's a quote. The viewer flags surviving echoes
+      // visually but we shouldn't waste storage on the obvious ones.
+      if (isEcho(summary, excerpt)) continue;
       result.push({ summary, salience, actor, messageRange: { from, to }, excerpt });
     }
     return result;

@@ -62,6 +62,10 @@ function stripPrefix(summary: string): string {
   return summary.replace(/^[\p{Emoji}]?\s?(USER STATED|USER ASKED|OBSERVED):\s*/u, '')
 }
 
+/** Visible-line cap before a "Show more" toggle is rendered. */
+const SUMMARY_CLAMP_CHARS = 200
+const EXCERPT_CLAMP_CHARS = 240
+
 function ObservationCard({ obs }: { obs: ObservationSignal }) {
   const salience = normalizeSalience(obs.salience)
   const meta = SALIENCE_META[salience]
@@ -69,13 +73,43 @@ function ObservationCard({ obs }: { obs: ObservationSignal }) {
   const range = obs.conversation?.messageRange
   const excerpt = obs.conversation?.excerpt
 
+  const [expanded, setExpanded] = React.useState(false)
+
+  const fullSummary = stripPrefix(obs.summary)
+  const summaryLong = fullSummary.length > SUMMARY_CLAMP_CHARS
+  const summaryShown = expanded || !summaryLong
+    ? fullSummary
+    : fullSummary.slice(0, SUMMARY_CLAMP_CHARS).trimEnd() + '…'
+
+  const excerptLong = (excerpt?.length ?? 0) > EXCERPT_CLAMP_CHARS
+  const excerptShown = excerpt
+    ? expanded || !excerptLong
+      ? excerpt
+      : excerpt.slice(0, EXCERPT_CLAMP_CHARS).trimEnd() + '…'
+    : null
+
+  // Detect "echo" — summary equals or is a prefix of excerpt. Indicates the
+  // LLM extractor copy-pasted the user message instead of summarizing. Marked
+  // visually so the user can spot quality issues without reading every entry.
+  const looksLikeEcho = excerpt && fullSummary.length > 30 && (
+    excerpt.startsWith(fullSummary.slice(0, 60)) ||
+    fullSummary.startsWith(excerpt.slice(0, 60))
+  )
+
+  const canExpand = summaryLong || excerptLong
+
   return (
-    <div className="rounded-md border border-border p-3 space-y-2 bg-background">
+    <div
+      className={cn(
+        'rounded-md border p-3 space-y-2 bg-background',
+        looksLikeEcho ? 'border-yellow-500/40' : 'border-border',
+      )}
+    >
       <div className="flex items-start gap-2">
         <span className={cn('inline-block w-2 h-2 rounded-full mt-1.5 shrink-0', meta.dot)} />
         <div className="flex-1 min-w-0">
-          <div className="text-sm text-foreground leading-snug">{stripPrefix(obs.summary)}</div>
-          <div className="flex items-center gap-2 mt-1 text-[11px] text-foreground/60">
+          <div className="text-sm text-foreground leading-snug whitespace-pre-wrap break-words">{summaryShown}</div>
+          <div className="flex items-center gap-2 mt-1 text-[11px] text-foreground/60 flex-wrap">
             {actor && <span className="capitalize">{actor}</span>}
             {actor && <span>·</span>}
             <span>{formatTime(obs.createdAt)}</span>
@@ -89,13 +123,30 @@ function ObservationCard({ obs }: { obs: ObservationSignal }) {
                 </span>
               </>
             )}
+            {looksLikeEcho && (
+              <>
+                <span>·</span>
+                <span className="text-yellow-600 dark:text-yellow-400" title="Summary mirrors source message — extractor likely echoed instead of summarizing">
+                  echo?
+                </span>
+              </>
+            )}
           </div>
         </div>
       </div>
-      {excerpt && (
-        <div className="text-xs text-foreground/70 italic pl-4 border-l-2 border-border ml-1">
-          “{excerpt.length > 240 ? excerpt.slice(0, 240) + '…' : excerpt}”
+      {excerptShown && (
+        <div className="text-xs text-foreground/70 italic pl-4 border-l-2 border-border ml-1 whitespace-pre-wrap break-words">
+          “{excerptShown}”
         </div>
+      )}
+      {canExpand && (
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          className="text-[11px] text-foreground/60 hover:text-foreground transition-colors"
+        >
+          {expanded ? 'Show less' : 'Show more'}
+        </button>
       )}
     </div>
   )
