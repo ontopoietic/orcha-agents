@@ -119,6 +119,71 @@ export function readObservationStatusSync(sessionDir: string): ObservationStatus
 }
 
 /**
+ * Run the observer script manually for a session. Returns the stdout
+ * (visible to the user as feedback) or throws on spawn failure.
+ *
+ * The script lives in the orcha-agents source/install tree (CRAFT_APP_ROOT),
+ * NOT in the user's workspace. The session it observes lives in the
+ * workspace. We pass workspaceRoot via env so the script writes the
+ * watermark + observations.json into the correct workspace.
+ *
+ * Packaged builds (app.isPackaged): orcha-observe.ts must be shipped as
+ * an extraResource — currently only dev mode is supported.
+ */
+export async function runObserverNow(sessionDir: string): Promise<string> {
+  const { spawn } = await import('node:child_process')
+  const { resolve } = await import('node:path')
+
+  // Source-repo root (dev) or app bundle root (packaged) — set in main/index.ts
+  const appRoot = process.env.CRAFT_APP_ROOT
+  if (!appRoot) {
+    throw new Error('CRAFT_APP_ROOT not set — cannot locate orcha-observe.ts')
+  }
+  const scriptPath = join(appRoot, 'scripts', 'orcha-observe.ts')
+  if (!existsSync(scriptPath)) {
+    throw new Error(`Observer script not found at ${scriptPath}. In packaged builds the script must be bundled as extraResource.`)
+  }
+
+  // The session under observation lives in the workspace, not the source repo.
+  const workspaceRoot = resolve(sessionDir, '..', '..')
+
+  return new Promise((resolveOut, rejectOut) => {
+    const child = spawn('npx', ['tsx', scriptPath, sessionDir], {
+      cwd: appRoot, // run from source repo so node_modules/tsx resolves
+      env: {
+        ...process.env,
+        CRAFT_WORKSPACE_ROOT: workspaceRoot,
+      },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    })
+
+    let stdout = ''
+    let stderr = ''
+    child.stdout.on('data', (d) => { stdout += d.toString() })
+    child.stderr.on('data', (d) => { stderr += d.toString() })
+
+    const killer = setTimeout(() => {
+      child.kill('SIGTERM')
+      rejectOut(new Error('Observer script timed out after 60s'))
+    }, 60_000)
+
+    child.on('close', (code) => {
+      clearTimeout(killer)
+      if (code === 0) {
+        resolveOut(stdout.trim() || 'Observer ran (no output).')
+      } else {
+        rejectOut(new Error(`Observer exited with code ${code}: ${stderr.trim() || stdout.trim()}`))
+      }
+    })
+
+    child.on('error', (err) => {
+      clearTimeout(killer)
+      rejectOut(err)
+    })
+  })
+}
+
+/**
  * Read all observations for a session. Returns [] if the file does not
  * exist or is malformed (best-effort — the UI should still render).
  */

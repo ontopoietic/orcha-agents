@@ -40,8 +40,28 @@ export function SessionAnchorBar({ sessionId, workingDir, sessionDir, addLabelKe
   const [pickerOpen, setPickerOpen] = React.useState(false)
   const [observerOpen, setObserverOpen] = React.useState(false)
   const [viewerOpen, setViewerOpen] = React.useState(false)
+  const [runningObserver, setRunningObserver] = React.useState(false)
+  const [runResult, setRunResult] = React.useState<{ ok: boolean; message: string } | null>(null)
   const { anchors, add, remove } = useSessionAnchors(sessionId)
   const observation = useObservationStatus(sessionDir ?? null)
+
+  const handleRunObserver = React.useCallback(async () => {
+    if (!sessionDir || runningObserver) return
+    setRunningObserver(true)
+    setRunResult(null)
+    try {
+      const result = await window.electronAPI.observationRunNow(sessionDir)
+      if (result.ok) {
+        setRunResult({ ok: true, message: result.output })
+      } else {
+        setRunResult({ ok: false, message: result.error })
+      }
+    } catch (err) {
+      setRunResult({ ok: false, message: err instanceof Error ? err.message : String(err) })
+    } finally {
+      setRunningObserver(false)
+    }
+  }, [sessionDir, runningObserver])
 
   if (!sessionId) return null
 
@@ -136,26 +156,56 @@ export function SessionAnchorBar({ sessionId, workingDir, sessionDir, addLabelKe
                         <span>Context observations</span>
                       </div>
                     </div>
-
-                    <div className="border-t border-border pt-2 mt-2">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setObserverOpen(false)
-                          setViewerOpen(true)
-                        }}
-                        className="w-full text-left text-xs text-foreground hover:text-foreground/80 hover:bg-foreground/5 rounded px-2 py-1.5 transition-colors"
-                      >
-                        View all observations →
-                      </button>
-                    </div>
                   </>
                 ) : (
-                  <p className="text-muted">
-                    The observer will run automatically before context compaction.
-                    It extracts structured signals to preserve important information.
+                  <p className="text-muted leading-relaxed">
+                    No observations yet. The observer fires when the SDK
+                    compacts the conversation (large token threshold), or
+                    when triggered manually. Short sessions usually never
+                    reach that point.
                   </p>
                 )}
+
+                <div className="border-t border-border pt-2 mt-2 space-y-1">
+                  <button
+                    type="button"
+                    onClick={() => void handleRunObserver()}
+                    disabled={runningObserver || !sessionDir}
+                    className={cn(
+                      'w-full text-left text-xs rounded px-2 py-1.5 transition-colors',
+                      'text-foreground hover:bg-foreground/5',
+                      'disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent',
+                    )}
+                  >
+                    {runningObserver ? 'Running observer…' : 'Run observer now'}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setObserverOpen(false)
+                      setViewerOpen(true)
+                    }}
+                    className="w-full text-left text-xs text-foreground hover:text-foreground/80 hover:bg-foreground/5 rounded px-2 py-1.5 transition-colors"
+                  >
+                    View observations →
+                  </button>
+
+                  {runResult && (
+                    <div
+                      className={cn(
+                        'text-[11px] rounded px-2 py-1.5 mt-1 whitespace-pre-wrap break-words',
+                        runResult.ok
+                          ? 'bg-green-500/10 text-green-700 dark:text-green-400'
+                          : 'bg-red-500/10 text-red-700 dark:text-red-400',
+                      )}
+                    >
+                      {runResult.message.length > 300
+                        ? runResult.message.slice(0, 300) + '…'
+                        : runResult.message}
+                    </div>
+                  )}
+                </div>
               </div>
             </PopoverContent>
           </Popover>
