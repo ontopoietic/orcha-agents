@@ -174,6 +174,16 @@ export type {
   RelationTypeDef,
 } from './rahmen-taxonomy.ts';
 export {
+  ORCHA_CLI_TYPES,
+  ORCHA_CLI_VERBS,
+  extractArtifactsFromMessages,
+  parseAnchorsInput,
+  parseOrchaCliInvocations,
+} from './episode-extractors.ts';
+export type {
+  ExtractorJsonlMessage,
+} from './episode-extractors.ts';
+export {
   RAHMEN_TAXONOMY_VERSION,
   ARTIFACT_TYPES,
   RELATION_TYPES,

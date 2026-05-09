@@ -45,7 +45,13 @@ export interface EpisodePhase {
 }
 
 export interface EpisodeArtifact {
-  type: 'file' | 'feature' | 'plan' | 'commit' | 'pr' | 'other';
+  /**
+   * Coarse type for fast filtering. The full Rahmen-typing lives in
+   * `Episode.artifactGraph` — `artifactsTouched` is the deterministic
+   * flat-list view (Track A): code/plan changes plus anchor-able orcha
+   * artifacts and detected `orcha <subcommand>` invocations.
+   */
+  type: 'file' | 'plan' | 'commit' | 'pr' | 'feature' | 'befund' | 'anliegen' | 'other';
   /** path for file/plan, id for feature, sha for commit, url for pr. */
   ref: string;
   /** Optional human-readable label. */

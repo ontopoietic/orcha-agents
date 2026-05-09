@@ -30,6 +30,7 @@ import {
   type EpisodeCloseReason,
   type EpisodeOutcome,
 } from '../packages/shared/src/sessions/episode.ts';
+import { extractArtifactsFromMessages } from '../packages/shared/src/sessions/episode-extractors.ts';
 
 // ============================================================================
 // CLI
@@ -173,34 +174,7 @@ function findPhaseBoundary(
 // ============================================================================
 
 function extractArtifacts(messages: JsonlMessage[]): EpisodeArtifact[] {
-  const seen = new Set<string>();
-  const out: EpisodeArtifact[] = [];
-  for (const m of messages) {
-    if (m.type !== 'tool') continue;
-    const tool = m.toolName;
-    const input = m.toolInput ?? {};
-    if (tool === 'Edit' || tool === 'Write' || tool === 'Read' || tool === 'NotebookEdit') {
-      const path = (input.file_path ?? input.notebook_path) as string | undefined;
-      if (path) {
-        const key = `file:${path}`;
-        if (!seen.has(key)) {
-          seen.add(key);
-          out.push({ type: 'file', ref: path });
-        }
-      }
-    }
-    if (tool === 'mcp__session__SubmitPlan') {
-      const path = input.planPath as string | undefined;
-      if (path) {
-        const key = `plan:${path}`;
-        if (!seen.has(key)) {
-          seen.add(key);
-          out.push({ type: 'plan', ref: path });
-        }
-      }
-    }
-  }
-  return out;
+  return extractArtifactsFromMessages(messages);
 }
 
 // ============================================================================
