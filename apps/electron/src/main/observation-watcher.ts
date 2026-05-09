@@ -315,6 +315,79 @@ export async function rewriteEchoes(sessionDir: string): Promise<string> {
 }
 
 /**
+ * Run the L2 reflector script manually. Condenses the observations.json
+ * file in-place when token estimate exceeds threshold (40k by default,
+ * or any size when ORCHA_REFLECT_FORCE=1 is set). Bridges high-salience
+ * condensed entries to the Orcha-CLI ledger if ORCHA_LEDGER_PROJECT_DIR
+ * resolves to a project directory.
+ *
+ * Returns stdout on success, throws on failure.
+ */
+export async function runReflectorNow(
+  sessionDir: string,
+  options: { force?: boolean } = {},
+): Promise<string> {
+  const { spawn } = await import('node:child_process')
+  const { resolve } = await import('node:path')
+
+  const appRoot = process.env.CRAFT_APP_ROOT
+  if (!appRoot) {
+    throw new Error('CRAFT_APP_ROOT not set — cannot locate orcha-reflect.ts')
+  }
+  const scriptPath = join(appRoot, 'scripts', 'orcha-reflect.ts')
+  if (!existsSync(scriptPath)) {
+    throw new Error(`Reflector script not found at ${scriptPath}.`)
+  }
+  const workspaceRoot = resolve(sessionDir, '..', '..')
+  const authEnv = await resolveObserverAuthEnv()
+
+  return new Promise((resolveOut, rejectOut) => {
+    const child = spawn('npx', ['tsx', scriptPath, sessionDir], {
+      cwd: appRoot,
+      env: {
+        ...process.env,
+        ...authEnv,
+        CRAFT_WORKSPACE_ROOT: workspaceRoot,
+        ...(options.force ? { ORCHA_REFLECT_FORCE: '1' } : {}),
+      },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    })
+
+    let stdout = ''
+    let stderr = ''
+    child.stdout.on('data', (d) => {
+      const s = d.toString()
+      stdout += s
+      process.stdout.write(s)
+    })
+    child.stderr.on('data', (d) => {
+      const s = d.toString()
+      stderr += s
+      process.stderr.write(s)
+    })
+
+    const killer = setTimeout(() => {
+      child.kill('SIGTERM')
+      rejectOut(new Error('Reflector script timed out after 5min'))
+    }, 5 * 60_000)
+
+    child.on('close', (code) => {
+      clearTimeout(killer)
+      if (code === 0) {
+        resolveOut(stdout.trim() || 'Reflector ran (no output).')
+      } else {
+        rejectOut(new Error(`Reflector exited with code ${code}: ${stderr.trim() || stdout.trim()}`))
+      }
+    })
+
+    child.on('error', (err) => {
+      clearTimeout(killer)
+      rejectOut(err)
+    })
+  })
+}
+
+/**
  * Read all observations for a session. Returns [] if the file does not
  * exist or is malformed (best-effort — the UI should still render).
  */

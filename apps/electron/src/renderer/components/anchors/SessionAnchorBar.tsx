@@ -81,6 +81,24 @@ export function SessionAnchorBar({ sessionId, workingDir, sessionDir, addLabelKe
     }
   }, [sessionDir, runningObserver])
 
+  const handleReflect = React.useCallback(async (force = false) => {
+    if (!sessionDir || runningObserver) return
+    setRunningObserver(true)
+    setRunResult(null)
+    try {
+      const result = await window.electronAPI.observationReflectNow(sessionDir, { force })
+      if (result.ok) {
+        setRunResult({ ok: true, message: result.output })
+      } else {
+        setRunResult({ ok: false, message: result.error })
+      }
+    } catch (err) {
+      setRunResult({ ok: false, message: err instanceof Error ? err.message : String(err) })
+    } finally {
+      setRunningObserver(false)
+    }
+  }, [sessionDir, runningObserver])
+
   if (!sessionId) return null
 
   return (
@@ -212,6 +230,20 @@ export function SessionAnchorBar({ sessionId, workingDir, sessionDir, addLabelKe
                     title="Re-extract any observation that mirrors its source message"
                   >
                     Rewrite echoes
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => void handleReflect(true)}
+                    disabled={runningObserver || !sessionDir}
+                    className={cn(
+                      'w-full text-left text-xs rounded px-2 py-1.5 transition-colors',
+                      'text-foreground hover:bg-foreground/5',
+                      'disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent',
+                    )}
+                    title="L2 condensation: combine related observations, drop superseded ones, bridge pivotal/question to Orcha-Ledger"
+                  >
+                    Reflect & condense (L2)
                   </button>
 
                   <button

@@ -449,6 +449,8 @@ client.onConnectionStateChanged((state) => {
   ipcRenderer.invoke('observation:run-now', sessionDir)
 ;(api as ElectronAPI).observationRewriteEchoes = (sessionDir: string) =>
   ipcRenderer.invoke('observation:rewrite-echoes', sessionDir)
+;(api as ElectronAPI).observationReflectNow = (sessionDir: string, options?: { force?: boolean }) =>
+  ipcRenderer.invoke('observation:reflect-now', sessionDir, options ?? {})
 ;(api as ElectronAPI).onObservationStatus = (callback) => {
   const handler = (_event: Electron.IpcRendererEvent, status: unknown) =>
     callback(status as import('../../packages/shared/src/sessions/observation-watermark').ObservationWatermark)
