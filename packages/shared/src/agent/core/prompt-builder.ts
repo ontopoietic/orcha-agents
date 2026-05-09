@@ -20,6 +20,8 @@ import { formatSessionState } from '../mode-manager.ts';
 import { getDateTimeContext, getWorkingDirectoryContext } from '../../prompts/system.ts';
 import { getSessionPlansPath, getSessionDataPath, getSessionPath } from '../../sessions/storage.ts';
 import { maybeTriggerObserver } from '../../sessions/observation-trigger.ts';
+import { maybeTriggerReflector } from '../../sessions/reflection-trigger.ts';
+import { buildConversationTail, isStreamingModeEnabled } from './message-provider.ts';
 import { createLogger } from '../../utils/debug.ts';
 import type {
   PromptBuilderConfig,
@@ -117,9 +119,35 @@ export class PromptBuilder {
         log.debug('[buildContextParts] Observer trigger threw:', err);
       }
 
+      // L2 Reflector — auto-fires when observations.json crosses 40k tokens.
+      // Independent of Observer trigger (different threshold, different file).
+      try {
+        const reflectDecision = maybeTriggerReflector(sessionDir, sessionId);
+        if (reflectDecision.triggered) {
+          log.debug(`[buildContextParts] Reflector triggered: ${reflectDecision.reason}`);
+        }
+      } catch (err) {
+        log.debug('[buildContextParts] Reflector trigger threw:', err);
+      }
+
       const observationsBlock = this.getSessionObservations(sessionId);
       if (observationsBlock) {
         parts.push(observationsBlock);
+      }
+
+      // Streaming-mode: inject conversation tail. With ORCHA_STREAMING_MODE
+      // active, the SDK no longer resume-loads prior history, so we feed
+      // the last N messages here as a compact text block. No-op when off.
+      if (isStreamingModeEnabled()) {
+        try {
+          const tail = buildConversationTail(sessionId, this.workspaceRootPath);
+          if (tail) {
+            log.debug(`[buildContextParts] Conversation tail injected (${tail.messageCount} msgs, ${tail.charCount}c)`);
+            parts.push(tail.block);
+          }
+        } catch (err) {
+          log.debug('[buildContextParts] Conversation tail threw:', err);
+        }
       }
     }
 

@@ -1,0 +1,160 @@
+import { describe, expect, it, beforeEach, afterEach } from 'bun:test';
+import { writeFileSync, mkdirSync, rmSync, existsSync } from 'node:fs';
+import { join } from 'node:path';
+import {
+  buildConversationTail,
+  isStreamingModeEnabled,
+} from '../message-provider.ts';
+
+const TEST_DIR = join(import.meta.dir, '__test_message_provider__');
+const WORKSPACE = join(TEST_DIR, 'workspace');
+const SESSION_ID = 'test-tail-session';
+const SESSION_DIR = join(WORKSPACE, 'sessions', SESSION_ID);
+const JSONL = join(SESSION_DIR, 'session.jsonl');
+
+function writeJsonl(lines: object[]): void {
+  mkdirSync(SESSION_DIR, { recursive: true });
+  writeFileSync(JSONL, lines.map((o) => JSON.stringify(o)).join('\n') + '\n', 'utf-8');
+}
+
+beforeEach(() => {
+  if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true, force: true });
+  mkdirSync(TEST_DIR, { recursive: true });
+});
+
+afterEach(() => {
+  delete process.env.ORCHA_STREAMING_MODE;
+  delete process.env.ORCHA_TAIL_BUFFER_MESSAGES;
+  if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true, force: true });
+});
+
+describe('isStreamingModeEnabled', () => {
+  it('is off by default', () => {
+    delete process.env.ORCHA_STREAMING_MODE;
+    expect(isStreamingModeEnabled()).toBe(false);
+  });
+
+  it('flips on with =1', () => {
+    process.env.ORCHA_STREAMING_MODE = '1';
+    expect(isStreamingModeEnabled()).toBe(true);
+  });
+
+  it('flips on with =true', () => {
+    process.env.ORCHA_STREAMING_MODE = 'true';
+    expect(isStreamingModeEnabled()).toBe(true);
+  });
+});
+
+describe('buildConversationTail', () => {
+  it('returns null when jsonl missing', () => {
+    expect(buildConversationTail(SESSION_ID, WORKSPACE)).toBeNull();
+  });
+
+  it('returns null when only header line exists', () => {
+    writeJsonl([{ id: SESSION_ID, anchors: [] }]);
+    expect(buildConversationTail(SESSION_ID, WORKSPACE)).toBeNull();
+  });
+
+  it('renders user + assistant + tool messages, skips unknown types', () => {
+    writeJsonl([
+      { id: SESSION_ID, anchors: [] }, // header
+      { id: 'm1', type: 'user', content: 'Hello there' },
+      { id: 'm2', type: 'assistant', content: 'Hi back' },
+      { id: 'm3', type: 'tool', toolName: 'Read', toolResult: 'file contents abc' },
+      { id: 'm4', type: 'plan', content: 'should be skipped' },
+      { id: 'm5', type: 'user', content: 'Last user msg' },
+    ]);
+    const tail = buildConversationTail(SESSION_ID, WORKSPACE);
+    expect(tail).not.toBeNull();
+    expect(tail!.messageCount).toBe(4); // m1, m2, m3, m5 — m4 skipped
+    expect(tail!.block).toContain('[user] Hello there');
+    expect(tail!.block).toContain('[assistant] Hi back');
+    expect(tail!.block).toContain('[tool:Read] file contents abc');
+    expect(tail!.block).toContain('[user] Last user msg');
+    expect(tail!.block).not.toContain('should be skipped');
+  });
+
+  it('respects the limit option (newest N messages)', () => {
+    const lines: object[] = [{ id: SESSION_ID, anchors: [] }];
+    for (let i = 0; i < 30; i++) {
+      lines.push({ id: `m${i}`, type: 'user', content: `msg ${i}` });
+    }
+    writeJsonl(lines);
+    const tail = buildConversationTail(SESSION_ID, WORKSPACE, { limit: 5 });
+    expect(tail!.messageCount).toBe(5);
+    // newest in the file is msg 29
+    expect(tail!.block).toContain('msg 29');
+    expect(tail!.block).toContain('msg 25');
+    expect(tail!.block).not.toContain('msg 24');
+  });
+
+  it('honors ORCHA_TAIL_BUFFER_MESSAGES env override when no explicit limit', () => {
+    const lines: object[] = [{ id: SESSION_ID, anchors: [] }];
+    for (let i = 0; i < 20; i++) {
+      lines.push({ id: `m${i}`, type: 'user', content: `msg ${i}` });
+    }
+    writeJsonl(lines);
+    process.env.ORCHA_TAIL_BUFFER_MESSAGES = '3';
+    const tail = buildConversationTail(SESSION_ID, WORKSPACE);
+    expect(tail!.messageCount).toBe(3);
+  });
+
+  it('truncates long per-message text to maxCharsPerMessage', () => {
+    writeJsonl([
+      { id: SESSION_ID, anchors: [] },
+      { id: 'm1', type: 'user', content: 'x'.repeat(5000) },
+    ]);
+    const tail = buildConversationTail(SESSION_ID, WORKSPACE, { maxCharsPerMessage: 100 });
+    expect(tail!.block).toContain('[truncated');
+    expect(tail!.block.length).toBeLessThan(1000);
+  });
+
+  it('drops oldest entries when over maxChars budget', () => {
+    const lines: object[] = [{ id: SESSION_ID, anchors: [] }];
+    for (let i = 0; i < 10; i++) {
+      lines.push({ id: `m${i}`, type: 'user', content: 'a'.repeat(200) });
+    }
+    writeJsonl(lines);
+    const tail = buildConversationTail(SESSION_ID, WORKSPACE, {
+      limit: 10,
+      maxChars: 800, // ~3-4 messages worth
+      maxCharsPerMessage: 1000,
+    });
+    expect(tail!.messageCount).toBeLessThan(10);
+    // newest must be present
+    expect(tail!.block).toContain('m9'.length > 0 ? '[user]' : '');
+  });
+
+  it('handles array-content messages (extracts text blocks)', () => {
+    writeJsonl([
+      { id: SESSION_ID, anchors: [] },
+      {
+        id: 'm1',
+        type: 'assistant',
+        content: [
+          { type: 'text', text: 'first part' },
+          { type: 'tool_use', name: 'Read' },
+          { type: 'text', text: 'second part' },
+        ],
+      },
+    ]);
+    const tail = buildConversationTail(SESSION_ID, WORKSPACE);
+    expect(tail!.block).toContain('first part');
+    expect(tail!.block).toContain('second part');
+  });
+
+  it('survives corrupted lines without throwing', () => {
+    mkdirSync(SESSION_DIR, { recursive: true });
+    const content = [
+      JSON.stringify({ id: SESSION_ID, anchors: [] }),
+      JSON.stringify({ id: 'm1', type: 'user', content: 'before' }),
+      '{not valid json',
+      JSON.stringify({ id: 'm2', type: 'user', content: 'after' }),
+    ].join('\n') + '\n';
+    writeFileSync(JSONL, content, 'utf-8');
+    const tail = buildConversationTail(SESSION_ID, WORKSPACE);
+    expect(tail!.messageCount).toBe(2);
+    expect(tail!.block).toContain('before');
+    expect(tail!.block).toContain('after');
+  });
+});

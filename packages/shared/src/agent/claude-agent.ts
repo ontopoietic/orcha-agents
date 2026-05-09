@@ -1277,17 +1277,25 @@ export class ClaudeAgent extends BaseAgent {
         // Continue from previous session if we have one (enables conversation history & auto compaction)
         // Skip resume on retry (after session expiry) to start fresh
         // For branched sessions: fork the parent session so the agent has full conversation context
-        ...(!_isRetry && this.sessionId
-          ? { resume: this.sessionId }
-          : !_isRetry && this.branchFromSdkSessionId
-            ? {
-                resume: this.branchFromSdkSessionId,
-                forkSession: true,
-                // Trim the forked conversation at the branch point so the model
-                // only sees messages up to where the user branched, not the full parent.
-                ...(this.branchFromSdkTurnId ? { resumeSessionAt: this.branchFromSdkTurnId } : {}),
-              }
-            : {}),
+        //
+        // STREAMING-MODE (Mastra-strict, gated by ORCHA_STREAMING_MODE=1):
+        // Suppress resume entirely AND disable SDK auto-compaction. We feed
+        // observations via system-prompt and a conversation-tail block via
+        // the user message — see message-provider.ts. The SDK starts each
+        // turn fresh, no jsonl re-load → ~5x token savings on 60k sessions.
+        ...((process.env.ORCHA_STREAMING_MODE === '1' || process.env.ORCHA_STREAMING_MODE === 'true')
+          ? { settings: { autoCompactEnabled: false } }
+          : !_isRetry && this.sessionId
+            ? { resume: this.sessionId }
+            : !_isRetry && this.branchFromSdkSessionId
+              ? {
+                  resume: this.branchFromSdkSessionId,
+                  forkSession: true,
+                  // Trim the forked conversation at the branch point so the model
+                  // only sees messages up to where the user branched, not the full parent.
+                  ...(this.branchFromSdkTurnId ? { resumeSessionAt: this.branchFromSdkTurnId } : {}),
+                }
+              : {}),
         mcpServers,
         // NOTE: This callback is NOT called by the SDK because we set `permissionMode: 'bypassPermissions'` above.
         // All permission logic is handled via the PreToolUse hook instead (see hooks.PreToolUse above).
