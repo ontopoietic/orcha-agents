@@ -71,6 +71,7 @@ import {
   pickSessionFields,
   type AnchorRef,
   validateAnchorsLenient,
+  maybeTriggerEpisode,
 } from '@craft-agent/shared/sessions'
 import { loadWorkspaceSources, loadAllSources, getSourcesBySlugs, isSourceUsable, type LoadedSource, type McpServerConfig, getSourcesNeedingAuth, getSourceCredentialManager, getSourceServerBuilder, type SourceWithCredential, isApiOAuthProvider, hasRenewEndpoint, SERVER_BUILD_ERRORS, TokenRefreshManager, createTokenGetter } from '@craft-agent/shared/sources'
 import { ConfigWatcher, type ConfigWatcherCallbacks } from '@craft-agent/shared/config'
@@ -4119,6 +4120,7 @@ export class SessionManager implements ISessionManager {
   async setSessionStatus(sessionId: string, sessionStatus: SessionStatus): Promise<void> {
     const managed = this.sessions.get(sessionId)
     if (managed) {
+      const previousStatus = managed.sessionStatus
       managed.sessionStatus = sessionStatus
       this.setMetadataWriteGuard(managed)
       // Persist in-memory state directly to avoid race with pending queue writes
@@ -4131,6 +4133,11 @@ export class SessionManager implements ISessionManager {
       // https://github.com/oven-sh/bun/issues/15939
       const watcher = this.configWatchers.get(managed.workspace.rootPath)
       watcher?.notifyFileChange(`sessions/${sessionId}/session.jsonl`)
+      // Episode emission: when status flips TO 'done', close the active phase.
+      if (sessionStatus === 'done' && previousStatus !== 'done') {
+        const sessionDir = getSessionStoragePath(managed.workspace.rootPath, managed.id)
+        maybeTriggerEpisode(sessionDir, managed.id, 'session-done')
+      }
     }
   }
 
@@ -6409,6 +6416,7 @@ export class SessionManager implements ISessionManager {
     const managed = this.sessions.get(sessionId)
     if (!managed) return
 
+    const previousAnchors = managed.anchors ?? []
     const validated = validateAnchorsLenient(anchors)
     managed.anchors = validated
     this.setMetadataWriteGuard(managed)
@@ -6423,6 +6431,27 @@ export class SessionManager implements ISessionManager {
     await this.flushSession(managed.id)
     const watcher = this.configWatchers.get(managed.workspace.rootPath)
     watcher?.notifyFileChange(`sessions/${sessionId}/session.jsonl`)
+
+    // Episode emission: a meaningful anchor change closes the current phase.
+    // Skip the initial set (no prior anchors → user is just establishing scope,
+    // not pivoting) and skip no-op updates that change nothing.
+    if (previousAnchors.length > 0 && SessionManager.anchorsDifferStatic(previousAnchors, validated)) {
+      const sessionDir = getSessionStoragePath(managed.workspace.rootPath, managed.id)
+      maybeTriggerEpisode(sessionDir, managed.id, 'anchor-change')
+    }
+  }
+
+  /**
+   * Compare two anchor lists by stable identity (type+id). Order-independent.
+   * Used to decide whether an anchors update warrants an episode close.
+   */
+  private static anchorsDifferStatic(a: AnchorRef[], b: AnchorRef[]): boolean {
+    const key = (x: AnchorRef): string => `${x.type}:${x.id}`
+    const setA = new Set(a.map(key))
+    const setB = new Set(b.map(key))
+    if (setA.size !== setB.size) return true
+    for (const k of setA) if (!setB.has(k)) return true
+    return false
   }
 
   /**

@@ -153,4 +153,33 @@ export {
   watermarkPath,
 } from './observation-watermark.ts';
 
+// Episodic memory (L3) — per-session/per-phase episode records
+export type {
+  Episode,
+  EpisodeAnchor,
+  EpisodePhase,
+  EpisodeArtifact,
+  EpisodeOutcome,
+  EpisodeCloseReason,
+  EpisodeIndex,
+  EpisodeIndexEntry,
+  EpisodeAnnotation,
+} from './episode.ts';
+export {
+  episodesDir,
+  episodePath,
+  episodeIndexPath,
+  episodeAnnotationsPath,
+  readEpisodeIndex,
+  readEpisode,
+  listEpisodes,
+  writeEpisode,
+  appendAnnotation,
+  readAnnotations,
+} from './episode.ts';
+export {
+  maybeTriggerEpisode,
+  resetEpisodeTriggerThrottle,
+} from './episode-trigger.ts';
+
 

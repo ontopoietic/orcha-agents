@@ -451,6 +451,10 @@ client.onConnectionStateChanged((state) => {
   ipcRenderer.invoke('observation:rewrite-echoes', sessionDir)
 ;(api as ElectronAPI).observationReflectNow = (sessionDir: string, options?: { force?: boolean }) =>
   ipcRenderer.invoke('observation:reflect-now', sessionDir, options ?? {})
+;(api as ElectronAPI).episodeReadIndex = (sessionDir: string) =>
+  ipcRenderer.invoke('episode:read-index', sessionDir)
+;(api as ElectronAPI).episodeRead = (sessionDir: string, episodeId: string) =>
+  ipcRenderer.invoke('episode:read', sessionDir, episodeId)
 ;(api as ElectronAPI).onObservationStatus = (callback) => {
   const handler = (_event: Electron.IpcRendererEvent, status: unknown) =>
     callback(status as import('@craft-agent/shared/sessions').ObservationWatermark)

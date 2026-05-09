@@ -49,6 +49,8 @@ type ApiToChannelMapKeys =
   | 'observationRewriteEchoes' // direct IPC — echo rewriter trigger
   | 'observationReflectNow' // direct IPC — manual L2 reflector trigger
   | 'onObservationStatus' // direct IPC listener — observation watermark events
+  | 'episodeReadIndex' // direct IPC — episodic memory index reader
+  | 'episodeRead' // direct IPC — episode JSON reader
 >
 type ChannelMapKeys = keyof typeof CHANNEL_MAP & string
 

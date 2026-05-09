@@ -930,6 +930,16 @@ app.whenReady().then(async () => {
         return readObservationsList(sessionDir)
       })
 
+      ipcMain.handle('episode:read-index', (_event, sessionDir: string) => {
+        const { readEpisodeIndex } = require('@craft-agent/shared/sessions') as typeof import('@craft-agent/shared/sessions')
+        return readEpisodeIndex(sessionDir)
+      })
+
+      ipcMain.handle('episode:read', (_event, sessionDir: string, episodeId: string) => {
+        const { readEpisode } = require('@craft-agent/shared/sessions') as typeof import('@craft-agent/shared/sessions')
+        return readEpisode(sessionDir, episodeId)
+      })
+
       ipcMain.handle('observation:run-now', async (_event, sessionDir: string) => {
         const { runObserverNow } = require('./observation-watcher') as typeof import('./observation-watcher')
         try {

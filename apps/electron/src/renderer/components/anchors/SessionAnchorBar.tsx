@@ -21,6 +21,7 @@ import { cn } from '@/lib/utils'
 import { AnchorChip } from './AnchorChip'
 import { AnchorPicker } from './AnchorPicker'
 import { ObservationsViewer } from './ObservationsViewer'
+import { EpisodesViewer } from './EpisodesViewer'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { useSessionAnchors } from '@/hooks/useSessionAnchors'
 import { useObservationStatus } from '@/hooks/useObservationStatus'
@@ -40,6 +41,7 @@ export function SessionAnchorBar({ sessionId, workingDir, sessionDir, addLabelKe
   const [pickerOpen, setPickerOpen] = React.useState(false)
   const [observerOpen, setObserverOpen] = React.useState(false)
   const [viewerOpen, setViewerOpen] = React.useState(false)
+  const [episodesOpen, setEpisodesOpen] = React.useState(false)
   const [runningObserver, setRunningObserver] = React.useState(false)
   const [runResult, setRunResult] = React.useState<{ ok: boolean; message: string } | null>(null)
   const { anchors, add, remove } = useSessionAnchors(sessionId)
@@ -257,6 +259,18 @@ export function SessionAnchorBar({ sessionId, workingDir, sessionDir, addLabelKe
                     View observations →
                   </button>
 
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setObserverOpen(false)
+                      setEpisodesOpen(true)
+                    }}
+                    className="w-full text-left text-xs text-foreground hover:text-foreground/80 hover:bg-foreground/5 rounded px-2 py-1.5 transition-colors"
+                    title="Closed phases of this session — auto-emitted on session-done or anchor change"
+                  >
+                    View episodes →
+                  </button>
+
                   {runResult && (
                     <div
                       className={cn(
@@ -290,6 +304,12 @@ export function SessionAnchorBar({ sessionId, workingDir, sessionDir, addLabelKe
       <ObservationsViewer
         open={viewerOpen}
         onOpenChange={setViewerOpen}
+        sessionDir={sessionDir}
+      />
+
+      <EpisodesViewer
+        open={episodesOpen}
+        onOpenChange={setEpisodesOpen}
         sessionDir={sessionDir}
       />
     </>

@@ -260,6 +260,10 @@ export interface ElectronAPI {
   observationReflectNow(sessionDir: string, options?: { force?: boolean }): Promise<{ ok: true; output: string } | { ok: false; error: string }>
   onObservationStatus(callback: (status: import('@craft-agent/shared/sessions').ObservationWatermark) => void): () => void
 
+  // Episodic memory (L3) — per-session/per-phase episode records
+  episodeReadIndex(sessionDir: string): Promise<import('@craft-agent/shared/sessions').EpisodeIndex>
+  episodeRead(sessionDir: string, episodeId: string): Promise<import('@craft-agent/shared/sessions').Episode | null>
+
   // Orcha CLI bridge — anchor picker data source (Feature, Befund, Anliegen)
   listAnchorables(
     type: import('@craft-agent/shared/sessions').AnchorType,
