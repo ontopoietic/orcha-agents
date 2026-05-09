@@ -44,7 +44,7 @@ async function resolveObserverAuthEnv(): Promise<Record<string, string>> {
     console.log(`[observation-watcher] auth: ${conns.length} LLM connections in config`)
     if (conns.length === 0) return {}
     const candidate = conns.find((c) =>
-      c.providerType === 'anthropic' && (c as Record<string, unknown>).authType === 'oauth'
+      c.providerType === 'anthropic' && (c as unknown as Record<string, unknown>).authType === 'oauth'
     ) ?? conns.find((c) => c.providerType === 'anthropic')
     if (!candidate) {
       console.warn(`[observation-watcher] auth: no Anthropic connection found among [${conns.map(c => c.slug + ':' + c.providerType).join(', ')}]`)

@@ -453,7 +453,7 @@ client.onConnectionStateChanged((state) => {
   ipcRenderer.invoke('observation:reflect-now', sessionDir, options ?? {})
 ;(api as ElectronAPI).onObservationStatus = (callback) => {
   const handler = (_event: Electron.IpcRendererEvent, status: unknown) =>
-    callback(status as import('../../packages/shared/src/sessions/observation-watermark').ObservationWatermark)
+    callback(status as import('@craft-agent/shared/sessions').ObservationWatermark)
   ipcRenderer.on('observation:status', handler)
   return () => ipcRenderer.removeListener('observation:status', handler)
 }

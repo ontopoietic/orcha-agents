@@ -12,7 +12,13 @@ type BrowserPaneKeys = `browserPane.${FunctionKeys<ElectronAPI['browserPane']>}`
 
 // Methods excluded from CHANNEL_MAP because they are implemented directly in the preload
 // (no IPC round-trip to the main process). Each reads local state or orchestrates client-side.
-type ApiToChannelMapKeys = Exclude<
+//
+// Note: browserPane is a nested namespace on ElectronAPI but its methods appear flattened
+// as `browserPane.X` in CHANNEL_MAP. We add BrowserPaneKeys to the expected-in-map set
+// rather than excluding them, so the parity check covers the dotted entries.
+type ApiToChannelMapKeys =
+  | BrowserPaneKeys
+  | Exclude<
   FunctionKeys<ElectronAPI>,
   | 'performOAuth'
   | 'getTransportConnectionState'
@@ -35,7 +41,15 @@ type ApiToChannelMapKeys = Exclude<
   | 'onLedgerActivity' // direct IPC listener — ledger activity events
   | 'listAnchorables' // direct IPC — orcha CLI bridge for anchor picker
   | 'clearAnchorablesCache' // direct IPC — orcha CLI bridge cache invalidation
-  | BrowserPaneKeys
+  | 'observationWatch' // direct IPC — observation file watcher
+  | 'observationUnwatch' // direct IPC — observation file watcher
+  | 'observationRead' // direct IPC — observation watermark reader
+  | 'observationReadList' // direct IPC — observation list reader
+  | 'observationRunNow' // direct IPC — manual observer trigger
+  | 'observationRewriteEchoes' // direct IPC — echo rewriter trigger
+  | 'observationReflectNow' // direct IPC — manual L2 reflector trigger
+  | 'onObservationStatus' // direct IPC listener — observation watermark events
+>
 type ChannelMapKeys = keyof typeof CHANNEL_MAP & string
 
 type AssertNever<T extends never> = true

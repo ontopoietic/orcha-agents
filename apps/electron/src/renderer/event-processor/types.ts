@@ -493,6 +493,7 @@ export type AgentEvent =
   | CredentialRequestEvent
   | SourcesChangedEvent
   | LabelsChangedEvent
+  | AnchorsChangedEvent
   | SessionStatusChangedEvent
   | SessionFlaggedEvent
   | SessionUnflaggedEvent

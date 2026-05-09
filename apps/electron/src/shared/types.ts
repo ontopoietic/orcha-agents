@@ -253,12 +253,12 @@ export interface ElectronAPI {
   // Observation watcher — watch meta/observation-watermark.json in session dir
   observationWatch(sessionDir: string): Promise<void>
   observationUnwatch(): Promise<void>
-  observationRead(sessionDir: string): Promise<import('../../../packages/shared/src/sessions/observation-watermark').ObservationWatermark | null>
-  observationReadList(sessionDir: string): Promise<import('../../../packages/shared/src/sessions/observation-watermark').ObservationSignal[]>
+  observationRead(sessionDir: string): Promise<import('@craft-agent/shared/sessions').ObservationWatermark | null>
+  observationReadList(sessionDir: string): Promise<import('@craft-agent/shared/sessions').ObservationSignal[]>
   observationRunNow(sessionDir: string): Promise<{ ok: true; output: string } | { ok: false; error: string }>
   observationRewriteEchoes(sessionDir: string): Promise<{ ok: true; output: string } | { ok: false; error: string }>
   observationReflectNow(sessionDir: string, options?: { force?: boolean }): Promise<{ ok: true; output: string } | { ok: false; error: string }>
-  onObservationStatus(callback: (status: import('../../../packages/shared/src/sessions/observation-watermark').ObservationWatermark) => void): () => void
+  onObservationStatus(callback: (status: import('@craft-agent/shared/sessions').ObservationWatermark) => void): () => void
 
   // Orcha CLI bridge — anchor picker data source (Feature, Befund, Anliegen)
   listAnchorables(

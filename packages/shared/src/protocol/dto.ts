@@ -59,6 +59,8 @@ export interface Session {
   sessionStatus?: SessionStatus
   /** Labels (additive tags, many-per-session — bare IDs or "id::value" entries) */
   labels?: string[]
+  /** Active focus anchors — Feature/Befund/Anliegen refs scoping observations and signals */
+  anchors?: import('../sessions/anchors').AnchorRef[]
   lastReadMessageId?: string
   /**
    * Explicit unread flag - single source of truth for NEW badge.
