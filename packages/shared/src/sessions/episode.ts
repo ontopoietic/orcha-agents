@@ -56,6 +56,39 @@ export type EpisodeOutcome = 'resolved' | 'blocked' | 'abandoned' | 'handoff' | 
 
 export type EpisodeCloseReason = 'session-done' | 'anchor-change' | 'idle-cutoff' | 'manual';
 
+// ============================================================================
+// Artifact graph — typed Rahmen-subgraph extracted by the L? agent
+// ============================================================================
+
+export type ArtifactConfidence = 'low' | 'medium' | 'high';
+
+export interface ArtifactNode {
+  /** One of `rahmen-taxonomy.ARTIFACT_TYPES.type`. Validated lazily. */
+  type: string;
+  /** Human-readable name, used for matching across episodes. */
+  label: string;
+  /** Message IDs (jsonl) that evidence this artifact's existence. */
+  evidence: string[];
+  /** Extractor's confidence — low entries deserve human review. */
+  confidence: ArtifactConfidence;
+  /** Optional orcha-CLI ID if the artifact is already persisted there. */
+  ref?: string;
+}
+
+export interface ArtifactEdge {
+  /** Reference to a node in this graph. Either "type:label" or "ref:<id>". */
+  from: string;
+  /** Reference to a node in this graph. */
+  to: string;
+  /** One of `rahmen-taxonomy.RELATION_TYPES.type`. */
+  via: string;
+}
+
+export interface ArtifactGraph {
+  nodes: ArtifactNode[];
+  edges: ArtifactEdge[];
+}
+
 export interface Episode {
   /** Stable identifier, usable as cross-session reference. */
   id: string;
@@ -78,6 +111,12 @@ export interface Episode {
   openQuestions: string[];
   /** Files / features / plans / commits referenced during the phase. */
   artifactsTouched: EpisodeArtifact[];
+  /**
+   * Typed Rahmen-subgraph extracted by the artifact-extractor agent.
+   * Optional: episodes written before the extractor existed, or when it
+   * was disabled, simply omit this field.
+   */
+  artifactGraph?: ArtifactGraph;
   /** Coarse outcome classification. */
   outcome: EpisodeOutcome;
   /** ISO write timestamp. */
@@ -104,6 +143,10 @@ export interface EpisodeIndexEntry {
   decisionsCount: number;
   openQuestionsCount: number;
   artifactsCount: number;
+  /** Total nodes in the typed Rahmen-subgraph. 0 if no graph extracted. */
+  artifactGraphNodeCount: number;
+  /** Total edges in the typed Rahmen-subgraph. */
+  artifactGraphEdgeCount: number;
 }
 
 export interface EpisodeIndex {
@@ -188,6 +231,7 @@ export interface WriteEpisodeArgs {
   decisions: string[];
   openQuestions: string[];
   artifactsTouched: EpisodeArtifact[];
+  artifactGraph?: ArtifactGraph;
   outcome: EpisodeOutcome;
 }
 
@@ -209,6 +253,7 @@ export function writeEpisode(sessionDir: string, args: WriteEpisodeArgs): Episod
     decisions: args.decisions,
     openQuestions: args.openQuestions,
     artifactsTouched: args.artifactsTouched,
+    ...(args.artifactGraph ? { artifactGraph: args.artifactGraph } : {}),
     outcome: args.outcome,
     createdAt: new Date().toISOString(),
     schemaVersion: 1,
@@ -242,6 +287,8 @@ function upsertIndex(sessionDir: string, ep: Episode): void {
     decisionsCount: ep.decisions.length,
     openQuestionsCount: ep.openQuestions.length,
     artifactsCount: ep.artifactsTouched.length,
+    artifactGraphNodeCount: ep.artifactGraph?.nodes.length ?? 0,
+    artifactGraphEdgeCount: ep.artifactGraph?.edges.length ?? 0,
   };
   // De-dup by id (defensive — id is uuid, collisions shouldn't happen).
   const filtered = idx.entries.filter((e) => e.id !== ep.id);

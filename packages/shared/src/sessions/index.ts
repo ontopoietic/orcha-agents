@@ -164,7 +164,23 @@ export type {
   EpisodeIndex,
   EpisodeIndexEntry,
   EpisodeAnnotation,
+  ArtifactNode,
+  ArtifactEdge,
+  ArtifactGraph,
+  ArtifactConfidence,
 } from './episode.ts';
+export type {
+  ArtifactTypeDef,
+  RelationTypeDef,
+} from './rahmen-taxonomy.ts';
+export {
+  RAHMEN_TAXONOMY_VERSION,
+  ARTIFACT_TYPES,
+  RELATION_TYPES,
+  renderTaxonomyForPrompt,
+  isKnownArtifactType,
+  isKnownRelationType,
+} from './rahmen-taxonomy.ts';
 export {
   episodesDir,
   episodePath,
