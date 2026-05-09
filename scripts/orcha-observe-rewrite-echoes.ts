@@ -21,7 +21,7 @@
  *   1 — fatal error
  */
 
-import { readFileSync, writeFileSync, existsSync, copyFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, copyFileSync, utimesSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -375,6 +375,19 @@ Rewrite as a proper extracted fact, or skip.`;
   const cleaned = signals.filter((s) => s.summary !== '__REMOVE__');
 
   writeFileSync(obsPath, JSON.stringify({ signals: cleaned }, null, 2) + '\n', 'utf-8');
+
+  // Touch the watermark file so the renderer's file-watcher fires and
+  // the observations viewer re-fetches the rewritten data. The watermark
+  // content stays unchanged — only mtime is bumped.
+  const watermarkPath = join(sessionDir, 'meta', 'observation-watermark.json');
+  if (existsSync(watermarkPath)) {
+    try {
+      const now = new Date();
+      utimesSync(watermarkPath, now, now);
+    } catch {
+      // Non-fatal — user can click Refresh manually.
+    }
+  }
 
   console.log(`\nDone:
   Rewritten: ${rewritten}
