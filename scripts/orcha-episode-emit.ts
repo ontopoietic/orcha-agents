@@ -19,10 +19,12 @@
  */
 
 import { existsSync, readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import {
   readEpisodeIndex,
   writeEpisode,
+  type ArtifactGraph,
   type EpisodeAnchor,
   type EpisodeArtifact,
   type EpisodeCloseReason,
@@ -287,6 +289,10 @@ function main(): void {
   const summary = buildDeterministicSummary(decisions, questions, artifacts, closeReason);
   const outcome = inferOutcome(closeReason, questions.length > 0);
 
+  // Track-B: invoke artifact extractor agent to produce the typed
+  // Rahmen-subgraph. Best-effort — never blocks the episode write.
+  const artifactGraph = runArtifactExtractor(phase.startMessageId!, phase.endMessageId!);
+
   const ep = writeEpisode(sessionDir!, {
     sessionId: header.id,
     workspaceId: header.workspaceId ?? null,
@@ -296,10 +302,50 @@ function main(): void {
     decisions: decisions.map((d) => d.id),
     openQuestions: questions.map((q) => q.id),
     artifactsTouched: artifacts,
+    ...(artifactGraph ? { artifactGraph } : {}),
     outcome,
   });
 
-  console.log(`[episode] wrote ${ep.id} (${decisions.length} decisions, ${questions.length} questions, ${artifacts.length} artifacts, outcome=${outcome})`);
+  const graphSummary = artifactGraph
+    ? `, graph=${artifactGraph.nodes.length}n/${artifactGraph.edges.length}e`
+    : '';
+  console.log(`[episode] wrote ${ep.id} (${decisions.length} decisions, ${questions.length} questions, ${artifacts.length} artifacts${graphSummary}, outcome=${outcome})`);
+}
+
+/**
+ * Spawn orcha-extract-artifacts.ts synchronously (we are already in a
+ * subprocess; no UI thread to block). Returns null on any failure so
+ * the episode write still proceeds.
+ *
+ * Disable via ORCHA_EPISODE_DISABLE_GRAPH=1.
+ */
+function runArtifactExtractor(startMsgId: string, endMsgId: string): ArtifactGraph | null {
+  if (process.env.ORCHA_EPISODE_DISABLE_GRAPH === '1') return null;
+  const appRoot = process.env.CRAFT_APP_ROOT ?? process.cwd();
+  const scriptPath = join(appRoot, 'scripts', 'orcha-extract-artifacts.ts');
+  if (!existsSync(scriptPath)) return null;
+  try {
+    const res = spawnSync('npx', ['tsx', scriptPath, sessionDir!,
+      '--start-msg', startMsgId, '--end-msg', endMsgId], {
+      cwd: appRoot,
+      env: process.env,
+      encoding: 'utf-8',
+      timeout: 120_000,
+      maxBuffer: 4 * 1024 * 1024,
+    });
+    if (res.status !== 0) {
+      console.warn(`[episode] extractor exit ${res.status}: ${(res.stderr ?? '').slice(0, 200)}`);
+      return null;
+    }
+    const out = (res.stdout ?? '').trim();
+    if (!out) return null;
+    const parsed = JSON.parse(out) as ArtifactGraph;
+    if (!parsed || !Array.isArray(parsed.nodes) || !Array.isArray(parsed.edges)) return null;
+    return parsed;
+  } catch (err) {
+    console.warn('[episode] extractor failed:', err instanceof Error ? err.message : String(err));
+    return null;
+  }
 }
 
 main();
