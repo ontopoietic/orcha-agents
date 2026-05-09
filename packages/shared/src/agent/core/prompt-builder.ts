@@ -21,6 +21,7 @@ import { getDateTimeContext, getWorkingDirectoryContext } from '../../prompts/sy
 import { getSessionPlansPath, getSessionDataPath, getSessionPath } from '../../sessions/storage.ts';
 import { maybeTriggerObserver } from '../../sessions/observation-trigger.ts';
 import { maybeTriggerReflector } from '../../sessions/reflection-trigger.ts';
+import { getRelevantEpisodes, renderRelevantEpisodesBlock } from '../../sessions/episode-retrieval.ts';
 import { buildConversationTail, isStreamingModeEnabled } from './message-provider.ts';
 import { createLogger } from '../../utils/debug.ts';
 import type {
@@ -133,6 +134,27 @@ export class PromptBuilder {
       const observationsBlock = this.getSessionObservations(sessionId);
       if (observationsBlock) {
         parts.push(observationsBlock);
+      }
+
+      // Episodic recall (L3) — surface past phases that share an anchor
+      // with this session. Replaces manual handoff plans for anchor-scoped
+      // continuation work. No-op when session has no anchors yet.
+      try {
+        const sessionAnchors = this.readSessionAnchors(sessionId);
+        if (sessionAnchors.length > 0) {
+          const hits = getRelevantEpisodes({
+            workspaceRoot: this.workspaceRootPath,
+            anchors: sessionAnchors,
+            limit: 5,
+          });
+          const block = renderRelevantEpisodesBlock(hits);
+          if (block) {
+            log.debug(`[buildContextParts] ${hits.length} relevant episodes injected`);
+            parts.push(block);
+          }
+        }
+      } catch (err) {
+        log.debug('[buildContextParts] Episode retrieval threw:', err);
       }
 
       // Streaming-mode: inject conversation tail. With ORCHA_STREAMING_MODE
