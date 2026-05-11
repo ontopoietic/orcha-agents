@@ -31,34 +31,45 @@ import { getValidClaudeOAuthToken } from '@craft-agent/shared/auth/state'
  *   4. Empty object → script falls back to pattern matching with a warning
  */
 async function resolveObserverAuthEnv(): Promise<Record<string, string>> {
+  // Prefer a freshly-validated token over whatever sits in process.env.
+  // Reason: ClaudeAgent sets CLAUDE_CODE_OAUTH_TOKEN once per session start
+  // (with refresh), but it never re-validates between invocations. When the
+  // token's TTL elapses, the stale value lingers in process.env and observer
+  // subprocesses hit 401. getValidClaudeOAuthToken() self-refreshes, so we
+  // ask it first and only fall back to process.env / ANTHROPIC_API_KEY when
+  // no Anthropic OAuth connection is configured.
+  try {
+    const conns = getLlmConnections()
+    if (conns.length > 0) {
+      const candidate = conns.find((c) =>
+        c.providerType === 'anthropic' && (c as unknown as Record<string, unknown>).authType === 'oauth'
+      ) ?? conns.find((c) => c.providerType === 'anthropic')
+      if (candidate) {
+        console.log(`[observation-watcher] auth: refreshing OAuth via connection ${candidate.slug} (provider=${candidate.providerType})`)
+        const result = await getValidClaudeOAuthToken(candidate.slug)
+        if (result.accessToken) {
+          console.log(`[observation-watcher] auth: got OAuth token (length=${result.accessToken.length})`)
+          return { CLAUDE_CODE_OAUTH_TOKEN: result.accessToken }
+        }
+        console.warn(`[observation-watcher] auth: getValidClaudeOAuthToken returned no token for ${candidate.slug}`)
+      } else {
+        console.warn(`[observation-watcher] auth: no Anthropic connection found among [${conns.map(c => c.slug + ':' + c.providerType).join(', ')}]`)
+      }
+    } else {
+      console.log('[observation-watcher] auth: 0 LLM connections in config')
+    }
+  } catch (err) {
+    console.warn('[observation-watcher] auth: lookup threw:', err instanceof Error ? err.message : err)
+  }
+  // Fallback paths — only used when the OAuth-refresh path above didn't yield
+  // a token (e.g. user is on API-key-only setup).
   if (process.env.CLAUDE_CODE_OAUTH_TOKEN) {
-    console.log('[observation-watcher] auth: reusing CLAUDE_CODE_OAUTH_TOKEN from process.env')
+    console.log('[observation-watcher] auth: falling back to CLAUDE_CODE_OAUTH_TOKEN from process.env')
     return { CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN }
   }
   if (process.env.ANTHROPIC_API_KEY) {
-    console.log('[observation-watcher] auth: reusing ANTHROPIC_API_KEY from process.env')
+    console.log('[observation-watcher] auth: falling back to ANTHROPIC_API_KEY from process.env')
     return { ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY }
-  }
-  try {
-    const conns = getLlmConnections()
-    console.log(`[observation-watcher] auth: ${conns.length} LLM connections in config`)
-    if (conns.length === 0) return {}
-    const candidate = conns.find((c) =>
-      c.providerType === 'anthropic' && (c as unknown as Record<string, unknown>).authType === 'oauth'
-    ) ?? conns.find((c) => c.providerType === 'anthropic')
-    if (!candidate) {
-      console.warn(`[observation-watcher] auth: no Anthropic connection found among [${conns.map(c => c.slug + ':' + c.providerType).join(', ')}]`)
-      return {}
-    }
-    console.log(`[observation-watcher] auth: trying connection ${candidate.slug} (provider=${candidate.providerType})`)
-    const result = await getValidClaudeOAuthToken(candidate.slug)
-    if (result.accessToken) {
-      console.log(`[observation-watcher] auth: got OAuth token (length=${result.accessToken.length})`)
-      return { CLAUDE_CODE_OAUTH_TOKEN: result.accessToken }
-    }
-    console.warn(`[observation-watcher] auth: getValidClaudeOAuthToken returned no token for ${candidate.slug}`)
-  } catch (err) {
-    console.warn('[observation-watcher] auth: lookup threw:', err instanceof Error ? err.message : err)
   }
   return {}
 }
