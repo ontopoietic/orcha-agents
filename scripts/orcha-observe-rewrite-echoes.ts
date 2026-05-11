@@ -21,7 +21,7 @@
  *   1 — fatal error
  */
 
-import { readFileSync, writeFileSync, existsSync, copyFileSync, utimesSync } from 'node:fs';
+import { appendFileSync, readFileSync, writeFileSync, existsSync, copyFileSync, utimesSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -350,6 +350,15 @@ Rewrite as a proper extracted fact, or skip.`;
       failed++;
       continue;
     }
+    // Append every raw response to a debug file so the user can inspect why
+    // parsing failed when echoes don't get rewritten. Truncated to 4000 chars
+    // per entry to keep the file manageable across many runs.
+    try {
+      const debugLine = `--- ${new Date().toISOString()} ${obs.id} ---\n${raw.slice(0, 4000)}\n\n`;
+      appendFileSync('/tmp/orcha-rewrite-echoes-debug.log', debugLine, 'utf-8');
+    } catch {
+      // non-fatal
+    }
     const parsed = parseRewriteResponse(raw);
     if (!parsed) {
       console.warn(`  Could not parse LLM response for ${obs.id}: ${raw.slice(0, 100)}`);
@@ -394,6 +403,15 @@ Rewrite as a proper extracted fact, or skip.`;
   Skipped (dropped): ${skipped}
   Failed (kept original): ${failed}
   Final count: ${cleaned.length}`);
+
+  // Surface a clear failure when echoes were detected but nothing could be
+  // rewritten — the UI's success-box was misleading users into thinking the
+  // echoes had been cleaned up. Non-zero exit causes the renderer to render
+  // the output in the red error box instead.
+  if (echoes.length > 0 && rewritten === 0 && skipped === 0) {
+    console.error(`\nNo echoes were rewritten despite ${echoes.length} flagged. Check LLM auth / response format. The latest raw response was saved to /tmp/orcha-rewrite-echoes-debug.log if any LLM call succeeded.`);
+    process.exit(2);
+  }
 }
 
 main().catch((err) => {
