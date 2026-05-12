@@ -14,6 +14,7 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { parseObservationsMarkdown, type ParsedBullet, type Salience } from '../../sessions/observation-markdown-parser.ts';
 import { isLocalMcpEnabled } from '../../workspaces/storage.ts';
 import { formatPreferencesForPrompt } from '../../config/preferences.ts';
 import { formatSessionState } from '../mode-manager.ts';
@@ -385,20 +386,99 @@ Do NOT guess. Wrong anchors are worse than no anchors. If the user is just explo
     // Canonical post Plan A/C path: Markdown ledger. Anchors are stripped
     // before injection — the main model doesn't need them, the sidecar
     // carries the data the UI uses.
+    //
+    // Anchor-scope filter: when the session has anchors, bullets are kept
+    // only if their evidence-sidecar `anchorRefs` intersect the session's
+    // anchors, or if they have no anchorRefs at all (= session-local).
     try {
       const md = readFileSync(markdownPath, 'utf-8');
-      const stripped = this.formatMarkdownForInjection(md);
+      const sessionAnchors = this.readSessionAnchors(sessionId);
+      const sidecar = this.loadEvidenceSidecar(sessionDir);
+      const { md: scopedMd, totalBullets, keptBullets } =
+        this.applyAnchorScope(md, sidecar, sessionAnchors);
+      if (keptBullets === 0) return null;
+
+      const stripped = this.formatMarkdownForInjection(scopedMd);
       if (!stripped.body || stripped.bulletCount === 0) return null;
+
       const header = '<session_memory>';
       const footer = '</session_memory>';
       const intro = 'Structured observations from past conversation turns. These persist across compaction — the agent does NOT need to re-derive them.';
-      const stats = `${stripped.bulletCount} observations`;
-      log.debug(`[getSessionObservations] Injecting Markdown ledger (${stripped.bulletCount} bullets) for session ${sessionId}`);
+      const stats =
+        sessionAnchors.length > 0
+          ? `${totalBullets} observations total, ${keptBullets} in scope, showing ${stripped.bulletCount}` +
+            ` · scoped to ${sessionAnchors.length} anchor${sessionAnchors.length === 1 ? '' : 's'}`
+          : `${stripped.bulletCount} observations`;
+      log.debug(`[getSessionObservations] Injecting Markdown ledger (${stripped.bulletCount} bullets, ${sessionAnchors.length} session anchors) for session ${sessionId}`);
       return `${header}\n${intro}\n\n${stripped.body}\n\n${stats}\n${footer}`;
     } catch (err) {
       log.debug('[getSessionObservations] Failed to read observations.md:', err);
       return null;
     }
+  }
+
+  /**
+   * Load `observations-evidence.json` so the anchor-scope filter can resolve
+   * each bullet's `{shortId}` back to its `anchorRefs`. Returns an empty map
+   * when the sidecar is missing or malformed.
+   */
+  private loadEvidenceSidecar(sessionDir: string): Record<string, { anchorRefs?: unknown[] }> {
+    const evidencePath = join(sessionDir, 'data', 'observations-evidence.json');
+    if (!existsSync(evidencePath)) return {};
+    try {
+      const parsed = JSON.parse(readFileSync(evidencePath, 'utf-8'));
+      return parsed && typeof parsed === 'object' ? (parsed as Record<string, { anchorRefs?: unknown[] }>) : {};
+    } catch {
+      return {};
+    }
+  }
+
+  /**
+   * Filter Markdown bullets to those in scope for the session.
+   *
+   * Rules (match the original JSON-path semantics):
+   * - No session anchors → return MD unchanged (no filtering).
+   * - Session has anchors → keep bullets whose evidence-sidecar
+   *   `anchorRefs` intersect, OR bullets that have no anchorRefs entry at
+   *   all (treated as session-local).
+   *
+   * Re-renders the surviving bullets grouped by date, newest date first.
+   * Byte-for-byte parity with the source file isn't preserved — that's fine
+   * here, the downstream `formatMarkdownForInjection` strips anchors anyway.
+   */
+  private applyAnchorScope(
+    md: string,
+    sidecar: Record<string, { anchorRefs?: unknown[] }>,
+    sessionAnchors: Array<{ type: string; id: string }>,
+  ): { md: string; totalBullets: number; keptBullets: number } {
+    const bullets = parseObservationsMarkdown(md);
+    if (!bullets || bullets.length === 0) {
+      return { md: '', totalBullets: 0, keptBullets: 0 };
+    }
+    if (sessionAnchors.length === 0) {
+      return { md, totalBullets: bullets.length, keptBullets: bullets.length };
+    }
+    const sessionKeys = new Set(sessionAnchors.map((a) => `${a.type}:${a.id}`));
+    const inScope = (b: ParsedBullet): boolean => {
+      if (!b.anchorShortId) return true;
+      const ev = sidecar[b.anchorShortId];
+      const anchors = ev?.anchorRefs;
+      if (!Array.isArray(anchors) || anchors.length === 0) return true;
+      for (const a of anchors) {
+        if (!a || typeof a !== 'object') continue;
+        const r = a as Record<string, unknown>;
+        if (typeof r.type === 'string' && typeof r.id === 'string' && sessionKeys.has(`${r.type}:${r.id}`)) {
+          return true;
+        }
+      }
+      return false;
+    };
+    const kept = bullets.filter(inScope);
+    return {
+      md: renderBulletsByDate(kept),
+      totalBullets: bullets.length,
+      keptBullets: kept.length,
+    };
   }
 
   // ============================================================
@@ -506,4 +586,44 @@ Please continue the conversation naturally from where we left off.
   getSystemPromptPreset(): string {
     return this.config.systemPromptPreset ?? 'default';
   }
+}
+
+const SALIENCE_TO_EMOJI: Record<Salience, string> = {
+  pivotal: '🔴',
+  question: '🟡',
+  context: '🟢',
+};
+
+/**
+ * Render a set of parsed bullets back to Markdown, grouped by date (newest
+ * first). Bullets without a date land under an `# unknown` header so they
+ * remain visible but clearly demarcated.
+ */
+function renderBulletsByDate(bullets: ParsedBullet[]): string {
+  if (bullets.length === 0) return '';
+  const byDate = new Map<string, ParsedBullet[]>();
+  for (const b of bullets) {
+    const date = b.date ?? 'unknown';
+    const list = byDate.get(date) ?? [];
+    list.push(b);
+    byDate.set(date, list);
+  }
+  // Newest first, with "unknown" sinking to the bottom.
+  const sortedDates = [...byDate.keys()].sort((a, b) => {
+    if (a === 'unknown') return 1;
+    if (b === 'unknown') return -1;
+    return b.localeCompare(a);
+  });
+  const lines: string[] = [];
+  for (const date of sortedDates) {
+    lines.push(`# ${date}`);
+    for (const b of byDate.get(date) ?? []) {
+      const emoji = SALIENCE_TO_EMOJI[b.salience];
+      const timePart = b.time ? `${b.time} ` : '';
+      const anchor = b.anchorShortId ? ` {${b.anchorShortId}}` : '';
+      lines.push(`- ${emoji} ${timePart}${b.summary}${anchor}`);
+    }
+    lines.push('');
+  }
+  return lines.join('\n').trimEnd() + '\n';
 }
