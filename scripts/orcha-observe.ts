@@ -34,8 +34,38 @@ import {
   parseObservationsMarkdown as parseMdBullets,
   resolveAnchorShortId,
 } from '../packages/shared/src/sessions/observation-markdown-parser.ts';
-import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync, unlinkSync } from 'node:fs';
 import { join, dirname } from 'node:path';
+
+// ============================================================================
+// Running Marker — surfaces "observer is running" to the UI
+// ============================================================================
+
+/**
+ * Marker file dropped into meta/ while the observer runs. The Electron
+ * main-process watcher picks it up via fs.watch and emits a `running` flag
+ * to the renderer (pill animation). Single source of truth — both the
+ * token-trigger and the manual `runObserverNow` path spawn THIS script,
+ * so we don't need a separate hook in each spawner.
+ */
+const RUNNING_MARKER = '.observer-running';
+
+function writeRunningMarker(sessionDir: string): string | null {
+  try {
+    const metaDir = join(sessionDir, 'meta');
+    if (!existsSync(metaDir)) mkdirSync(metaDir, { recursive: true });
+    const markerPath = join(metaDir, RUNNING_MARKER);
+    writeFileSync(markerPath, String(process.pid), 'utf-8');
+    return markerPath;
+  } catch {
+    return null;
+  }
+}
+
+function clearRunningMarker(markerPath: string | null): void {
+  if (!markerPath) return;
+  try { unlinkSync(markerPath); } catch { /* ignore */ }
+}
 
 // ============================================================================
 // Session Auto-Detection
@@ -113,6 +143,22 @@ async function main(): Promise<void> {
     return;
   }
 
+  // Drop a running-marker so the renderer can light up its "observing" pill.
+  // Cleared in a finally below — covers normal returns, throws, AND the
+  // SIGTERM-on-timeout case (process.on('exit') below handles SIGTERM).
+  const markerPath = writeRunningMarker(expandedDir);
+  process.on('exit', () => clearRunningMarker(markerPath));
+  process.on('SIGTERM', () => { clearRunningMarker(markerPath); process.exit(143); });
+  process.on('SIGINT', () => { clearRunningMarker(markerPath); process.exit(130); });
+
+  try {
+    await runObservation(expandedDir, jsonlPath);
+  } finally {
+    clearRunningMarker(markerPath);
+  }
+}
+
+async function runObservation(expandedDir: string, jsonlPath: string): Promise<void> {
   // 1. Read watermark
   const watermark = readWatermark(expandedDir);
 
@@ -129,21 +175,24 @@ async function main(): Promise<void> {
   // 3. Extract observations — LLM-first, pattern fallback
   const observations = await extractObservationsViaLlm(messages);
 
-  if (observations.length === 0) {
-    console.log('Observer: No extractable observations found.');
-    return;
-  }
-
-  // 4. Read session header for anchor info
+  // 4. Read session header for anchor info (needed for watermark even on empty result)
   const header = readSessionId(jsonlPath);
   const sessionId = header?.id || 'unknown';
   const anchors = header?.anchors || [];
 
-  // 5. Write signals to ledger
-  const ledgerPath = findLedgerPath(expandedDir);
-  const signalCount = writeSignalsToLedger(ledgerPath, observations, sessionId, anchors, messages);
+  // 5. Write signals to ledger (skipped automatically if empty by writeMarkdownLedger)
+  let signalCount = 0;
+  let ledgerPath: string | null = null;
+  if (observations.length > 0) {
+    ledgerPath = findLedgerPath(expandedDir);
+    signalCount = writeSignalsToLedger(ledgerPath, observations, sessionId, anchors, messages);
+  } else {
+    console.log('Observer: No extractable observations found — advancing watermark anyway to avoid reprocessing.');
+  }
 
-  // 6. Update watermark
+  // 6. Update watermark — ALWAYS, even when 0 observations were extracted.
+  // Otherwise the same slice gets re-analyzed on every subsequent trigger,
+  // burning tokens and leaving the UI stuck on a stale "Last run" timestamp.
   const lastMessage = messages[messages.length - 1];
   const newWatermark: ObservationWatermark = {
     sessionId,
@@ -154,6 +203,14 @@ async function main(): Promise<void> {
   };
   writeWatermark(expandedDir, newWatermark);
 
+  if (observations.length === 0) {
+    console.log(
+      `Observer: Watermark advanced (0 signals). ${messages.length} messages marked as processed.\n` +
+      `  Watermark: ${lastMessage.id.substring(0, 30)}...`
+    );
+    return;
+  }
+
   // 7. Report summary (visible to agent as hook reason)
   const pivotal = observations.filter(o => o.salience === 'pivotal').length;
   const question = observations.filter(o => o.salience === 'question').length;
@@ -163,7 +220,7 @@ async function main(): Promise<void> {
     `Observer: Extracted ${signalCount} signals from ${messages.length} messages.\n` +
     `  🔴 ${pivotal} pivotal | 🟡 ${question} questions | 🟢 ${context} context\n` +
     `  Watermark: ${lastMessage.id.substring(0, 30)}...\n` +
-    `  Ledger: ${ledgerPath}`
+    `  Ledger: ${ledgerPath ?? '(none)'}`
   );
 }
 
@@ -325,14 +382,34 @@ emit one bullet per observation. Optional sub-bullet (2-space indent, no
 emoji, no time, no anchor) only if a detail semantically belongs to the
 parent bullet.
 
-Example output:
+FORBIDDEN OUTPUTS — these will be REJECTED by the parser:
 
-# 2026-05-09
-- 🔴 14:49 User chose Rahmen-Graph as next work item over three alternatives {u5luxw}
-- 🔴 14:49 Architecture change: tradeoffs no longer resolved decontextualized {u5luxw}
-  - Resolution now only indirect via contextualized options
-- 🟡 15:10 Open question: glow animation uniform or per-tradeoff-tension? {aaa001}
-- 🔴 15:12 User answered: per-tradeoff, derived from tension magnitude {bbb002}
+  BAD (JSON — never do this):
+    \`\`\`json
+    [{ "date": "2026-05-09", "observations": [
+      { "emoji": "🔴", "text": "...", "anchor": "u5luxw" }
+    ]}]
+    \`\`\`
+
+  BAD (JSON without fences — also rejected):
+    {"observations": [{"summary": "...", "salience": "pivotal"}]}
+
+  BAD (code fence around Markdown — rejected):
+    \`\`\`markdown
+    # 2026-05-09
+    - 🔴 14:49 ... {u5luxw}
+    \`\`\`
+
+  GOOD (plain Markdown, no fences, no JSON):
+    # 2026-05-09
+    - 🔴 14:49 User chose Rahmen-Graph as next work item over three alternatives {u5luxw}
+    - 🔴 14:49 Architecture change: tradeoffs no longer resolved decontextualized {u5luxw}
+      - Resolution now only indirect via contextualized options
+    - 🟡 15:10 Open question: glow animation uniform or per-tradeoff-tension? {aaa001}
+    - 🔴 15:12 User answered: per-tradeoff, derived from tension magnitude {bbb002}
+
+The FIRST character of your response MUST be \`#\` (the date header) or \`-\` (a bullet).
+Do NOT start with \`\`\`, do NOT start with \`{\`, do NOT start with \`[\`, do NOT start with prose.
 
 Return ONLY the Markdown bullet list. No code fences, no prose around it, no JSON.`;
 }
@@ -344,7 +421,7 @@ function buildObserverUserPrompt(messages: ObservableMessage[]): string {
     const text = m.content.replace(/\s+/g, ' ').trim().slice(0, 1500);
     return `[${actor} ${id}] ${text}`;
   });
-  return `Conversation slice (${messages.length} messages):\n\n${lines.join('\n')}\n\nReturn JSON.`;
+  return `Conversation slice (${messages.length} messages):\n\n${lines.join('\n')}\n\nReturn ONLY the Markdown bullet list (one bullet per observation, anchored with {shortId}). NO JSON. NO code fences. NO prose.`;
 }
 
 interface AnthropicMessagesResponse {
@@ -451,7 +528,20 @@ async function callExtractor(mode: ExtractorMode, system: string, user: string):
  */
 function isEcho(summary: string, excerpt: string): boolean {
   if (!summary || !excerpt) return false;
-  const norm = (s: string) => s.toLowerCase().replace(/\s+/g, ' ').trim();
+  // Strip markdown noise *before* lowercasing/whitespace-collapse. Without
+  // this, "Follow-ups …" (summary, after cleanSummary stripped **bold**)
+  // never matches "**Follow-ups** …" (raw excerpt) and the echo slips through.
+  const stripMd = (s: string) =>
+    s
+      .replace(/```[\s\S]*?```/g, ' ')        // fenced code blocks
+      .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1') // markdown links → label
+      .replace(/`([^`]+)`/g, '$1')             // inline code
+      .replace(/\*\*([^*]+)\*\*/g, '$1')       // bold
+      .replace(/\*([^*]+)\*/g, '$1')           // italic
+      .replace(/^[ \t]*#+\s*/gm, '')           // heading markers
+      .replace(/^[ \t]*>\s?/gm, '')            // blockquote markers
+      .replace(/…/g, '');                   // ellipsis added by cleanSummary on truncate
+  const norm = (s: string) => stripMd(s).toLowerCase().replace(/\s+/g, ' ').trim();
   // Strip the salience prefix the LLM sometimes still adds.
   const s = norm(summary).replace(/^[^a-z0-9]*(user stated|user asked|observed):\s*/, '');
   const e = norm(excerpt);
@@ -575,6 +665,21 @@ async function extractObservationsViaLlm(messages: ObservableMessage[]): Promise
       const sample = raw.replace(/\s+/g, ' ').trim().slice(0, 400);
       console.warn(`Observer: Could not parse LLM output (neither Markdown nor JSON), falling back to pattern matching. Sample: ${sample}`);
       return extractObservations(messages);
+    }
+    if (parsed.length === 0) {
+      // Parser ran successfully but produced zero records. Two common causes:
+      //   1) LLM returned valid Markdown bullets but anchors {shortId} didn't
+      //      match any source-message id → all bullets skipped silently.
+      //   2) LLM returned only a date header / prose / empty body.
+      // Without dumping a sample we can't tell which — and the user just sees
+      // "0 observations" with no recourse.
+      const sample = raw.replace(/\s+/g, ' ').trim().slice(0, 600);
+      const availableAnchors = dialogue.slice(-20).map(m => m.id.slice(-6)).join(',');
+      console.warn(
+        `Observer: Parser produced 0 records despite raw output (parser=${parserUsed}). ` +
+        `Raw sample (600 chars): ${sample}\n` +
+        `  Last 20 available anchors (tail of msg-IDs): ${availableAnchors}`,
+      );
     }
     console.log(`Observer: LLM extracted ${parsed.length} observations from ${dialogue.length} messages (parser=${parserUsed}, mode=${extractor.kind}, model=${extractor.model}).`);
     return parsed;

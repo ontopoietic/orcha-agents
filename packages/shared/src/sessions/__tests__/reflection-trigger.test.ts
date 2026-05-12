@@ -10,12 +10,19 @@ const TEST_DIR = join(import.meta.dir, '__test_reflection_trigger__');
 const SESSION_ID = 'test-reflect-session';
 const SESSION_DIR = join(TEST_DIR, 'sessions', SESSION_ID);
 const OBS = join(SESSION_DIR, 'data', 'observations.json');
+const OBS_MD = join(SESSION_DIR, 'data', 'observations.md');
 
 function writeObservationsBytes(bytes: number): void {
   mkdirSync(join(SESSION_DIR, 'data'), { recursive: true });
   // Pad with whitespace to hit the requested file size.
   const payload = '{"signals":[]}' + ' '.repeat(Math.max(0, bytes - 14));
   writeFileSync(OBS, payload, 'utf-8');
+}
+
+function writeMarkdownBytes(bytes: number): void {
+  mkdirSync(join(SESSION_DIR, 'data'), { recursive: true });
+  const payload = '# 2026-05-12\n' + '- 🟢 12:00 stub\n'.repeat(1).padEnd(Math.max(0, bytes - 14), ' ');
+  writeFileSync(OBS_MD, payload, 'utf-8');
 }
 
 beforeEach(() => {
@@ -52,6 +59,24 @@ describe('maybeTriggerReflector', () => {
     const r = maybeTriggerReflector(SESSION_DIR, SESSION_ID);
     expect(r.triggered).toBe(false);
     expect(r.observationTokens).toBe(0);
+  });
+
+  it('fires on observations.md size even without observations.json', () => {
+    process.env.CRAFT_APP_ROOT = TEST_DIR;
+    process.env.ORCHA_REFLECTOR_THRESHOLD_TOKENS = '5000';
+    // ~30 kB markdown ≈ 7.5k tokens, no JSON sibling
+    writeMarkdownBytes(30_000);
+    const r = maybeTriggerReflector(SESSION_DIR, SESSION_ID);
+    expect(r.triggered).toBe(true);
+    expect(r.observationTokens).toBeGreaterThan(7_000);
+  });
+
+  it('uses the LARGER of md and json file size', () => {
+    process.env.ORCHA_REFLECTOR_THRESHOLD_TOKENS = '100000'; // high so we don't trigger
+    writeObservationsBytes(4_000);      // ~1k tokens
+    writeMarkdownBytes(40_000);          // ~10k tokens — bigger
+    const r = maybeTriggerReflector(SESSION_DIR, SESSION_ID);
+    expect(r.observationTokens).toBeGreaterThan(9_000);
   });
 
   it('returns false below threshold', () => {

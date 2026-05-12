@@ -8,7 +8,7 @@
  * Pattern follows ledger-watcher.ts: directory watch + debounce.
  */
 
-import { watch, readFileSync, existsSync, statSync } from 'fs'
+import { watch, readFileSync, existsSync } from 'fs'
 import type { FSWatcher } from 'fs'
 import { join } from 'path'
 import type { ObservationSignal } from '@craft-agent/shared/sessions'
@@ -82,6 +82,7 @@ async function resolveObserverAuthEnv(): Promise<Record<string, string>> {
 }
 
 const WATERMARK_FILE = 'observation-watermark.json'
+const RUNNING_MARKER = '.observer-running'
 const DEBOUNCE_MS = 300
 
 export interface ObservationStatus {
@@ -93,6 +94,8 @@ export interface ObservationStatus {
   lastObservedAt: string
   /** How long ago the last observation happened (ms) */
   elapsedMs: number
+  /** True while the orcha-observe subprocess is currently running for this session */
+  running: boolean
 }
 
 let watcher: FSWatcher | null = null
@@ -101,14 +104,29 @@ let currentSessionDir: string | null = null
 
 /**
  * Read the observation watermark and compute status for the UI.
+ * Returns a status object even when the watermark file does not yet exist
+ * (e.g. first run never produced signals) — so the renderer can still
+ * surface `running: true` while the very first observer invocation is in
+ * flight. Returns null only when both the watermark and the running marker
+ * are absent.
  */
 function readObservationStatus(sessionDir: string): ObservationStatus | null {
   const filePath = join(sessionDir, 'meta', WATERMARK_FILE)
-  if (!existsSync(filePath)) return null
+  const running = existsSync(join(sessionDir, 'meta', RUNNING_MARKER))
+
+  if (!existsSync(filePath)) {
+    return running
+      ? { observedCount: 0, lastSignalCount: 0, lastObservedAt: '', elapsedMs: 0, running: true }
+      : null
+  }
 
   try {
     const raw = JSON.parse(readFileSync(filePath, 'utf-8'))
-    if (!raw.lastObservedAt) return null
+    if (!raw.lastObservedAt) {
+      return running
+        ? { observedCount: 0, lastSignalCount: 0, lastObservedAt: '', elapsedMs: 0, running: true }
+        : null
+    }
 
     const lastAt = new Date(raw.lastObservedAt).getTime()
     return {
@@ -116,6 +134,7 @@ function readObservationStatus(sessionDir: string): ObservationStatus | null {
       lastSignalCount: raw.lastSignalCount ?? 0,
       lastObservedAt: raw.lastObservedAt,
       elapsedMs: Date.now() - lastAt,
+      running,
     }
   } catch {
     return null
@@ -152,7 +171,7 @@ export function startObservationWatch(
       })
     } else {
       watcher = watch(metaDir, (_eventType, filename) => {
-        if (filename === WATERMARK_FILE) scheduleCheck()
+        if (filename === WATERMARK_FILE || filename === RUNNING_MARKER) scheduleCheck()
       })
     }
   } catch {
@@ -271,74 +290,6 @@ export async function runObserverNow(sessionDir: string): Promise<string> {
     child.on('error', (err) => {
       clearTimeout(killer)
       obsLog.warn(`subprocess spawn error: ${err.message}`)
-      rejectOut(err)
-    })
-  })
-}
-
-/**
- * Run the echo-rewrite script manually for a session. Re-extracts any
- * observation whose summary mirrors its excerpt, using whichever LLM
- * auth is currently available (CLAUDE_CODE_OAUTH_TOKEN takes precedence).
- *
- * Returns stdout on success, throws on failure or auth-missing.
- */
-export async function rewriteEchoes(sessionDir: string): Promise<string> {
-  const { spawn } = await import('node:child_process')
-  const { resolve } = await import('node:path')
-
-  const appRoot = process.env.CRAFT_APP_ROOT
-  if (!appRoot) {
-    throw new Error('CRAFT_APP_ROOT not set — cannot locate rewrite script')
-  }
-  const scriptPath = join(appRoot, 'scripts', 'orcha-observe-rewrite-echoes.ts')
-  if (!existsSync(scriptPath)) {
-    throw new Error(`Rewrite script not found at ${scriptPath}.`)
-  }
-  const workspaceRoot = resolve(sessionDir, '..', '..')
-  const authEnv = await resolveObserverAuthEnv()
-
-  return new Promise((resolveOut, rejectOut) => {
-    const child = spawn('npx', ['tsx', scriptPath, sessionDir], {
-      cwd: appRoot,
-      env: {
-        ...process.env,
-        ...authEnv,
-        CRAFT_WORKSPACE_ROOT: workspaceRoot,
-      },
-      stdio: ['pipe', 'pipe', 'pipe'],
-    })
-
-    let stdout = ''
-    let stderr = ''
-    child.stdout.on('data', (d) => {
-      const s = d.toString()
-      stdout += s
-      // Mirror to main-process stdout for live visibility in dev terminal
-      process.stdout.write(s)
-    })
-    child.stderr.on('data', (d) => {
-      const s = d.toString()
-      stderr += s
-      process.stderr.write(s)
-    })
-
-    const killer = setTimeout(() => {
-      child.kill('SIGTERM')
-      rejectOut(new Error('Rewrite script timed out after 5min'))
-    }, 5 * 60_000)
-
-    child.on('close', (code) => {
-      clearTimeout(killer)
-      if (code === 0) {
-        resolveOut(stdout.trim() || 'Rewrite ran (no output).')
-      } else {
-        rejectOut(new Error(`Rewrite exited with code ${code}: ${stderr.trim() || stdout.trim()}`))
-      }
-    })
-
-    child.on('error', (err) => {
-      clearTimeout(killer)
       rejectOut(err)
     })
   })
@@ -502,35 +453,19 @@ function deriveCreatedAt(bullet: ParsedBullet): string {
  * Read all observations for a session. Returns [] if the file does not
  * exist or is malformed (best-effort — the UI should still render).
  *
- * Source resolution:
- *  1. If observations.md is the newest of the two, use it (canonical post Plan A path).
- *  2. If observations.json is newer (e.g. the Reflector just ran but hasn't
- *     been migrated to write Markdown yet), use it. Keeps the UI in sync
- *     with Reflector output until Plan C lands.
- *  3. Otherwise: whichever one exists.
+ * Markdown (`observations.md` + `observations-evidence.json`) is the canonical
+ * source post Plan A/C. JSON is read only as a last-resort fallback for old
+ * sessions that haven't been migrated by `scripts/orcha-migrate-observations.ts`.
  */
 export function readObservationsList(sessionDir: string): ObservationSignal[] {
-  const mdPath = join(sessionDir, 'data', 'observations.md')
+  const fromMarkdown = readObservationsFromMarkdown(sessionDir)
+  if (fromMarkdown && fromMarkdown.length > 0) return fromMarkdown
+
   const jsonPath = join(sessionDir, 'data', 'observations.json')
-  const mdMtime = existsSync(mdPath) ? statSync(mdPath).mtimeMs : 0
-  const jsonMtime = existsSync(jsonPath) ? statSync(jsonPath).mtimeMs : 0
-
-  // If JSON is newer than MD by more than 1s, prefer JSON. The 1s tolerance
-  // accounts for the dual-write in writeSignalsToLedger writing both files
-  // in quick succession.
-  const preferJson = jsonMtime > mdMtime + 1000
-
-  if (!preferJson) {
-    const fromMarkdown = readObservationsFromMarkdown(sessionDir)
-    if (fromMarkdown && fromMarkdown.length > 0) return fromMarkdown
-  }
-
-  if (!existsSync(jsonPath)) return readObservationsFromMarkdown(sessionDir) ?? []
-
-  const filePath = jsonPath
+  if (!existsSync(jsonPath)) return []
 
   try {
-    const raw = JSON.parse(readFileSync(filePath, 'utf-8'))
+    const raw = JSON.parse(readFileSync(jsonPath, 'utf-8'))
     const arr = Array.isArray(raw) ? raw : raw.signals
     if (!Array.isArray(arr)) return []
     return arr as ObservationSignal[]

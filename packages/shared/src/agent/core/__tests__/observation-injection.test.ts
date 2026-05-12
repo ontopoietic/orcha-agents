@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import type { PromptBuilderConfig, ContextBlockOptions } from '../types.ts';
 
 // ============================================================================
-// Test fixtures
+// Test fixtures — post Plan A: observations.md is the canonical source.
 // ============================================================================
 
 const TEST_DIR = join(import.meta.dir, '__test_observations_prompt__');
@@ -13,7 +13,7 @@ const TEST_WORKSPACE = join(TEST_DIR, 'workspace');
 const TEST_SESSIONS = join(TEST_WORKSPACE, 'sessions');
 const SESSION_ID = 'test-session-obs';
 const SESSION_DIR = join(TEST_SESSIONS, SESSION_ID);
-const OBSERVATIONS_FILE = join(SESSION_DIR, 'data', 'observations.json');
+const OBSERVATIONS_MD = join(SESSION_DIR, 'data', 'observations.md');
 
 function makeConfig(): PromptBuilderConfig {
   return {
@@ -30,9 +30,9 @@ function makeContextOptions(): ContextBlockOptions {
   };
 }
 
-function writeObservations(signals: Array<{ summary: string; salience: string; createdAt: string }>): void {
+function writeObservationsMd(content: string): void {
   mkdirSync(join(SESSION_DIR, 'data'), { recursive: true });
-  writeFileSync(OBSERVATIONS_FILE, JSON.stringify({ signals }) + '\n', 'utf-8');
+  writeFileSync(OBSERVATIONS_MD, content, 'utf-8');
 }
 
 /**
@@ -49,27 +49,25 @@ function writeSessionJsonl(messageCount = 40, anchors: Array<{ type: string; id:
   writeFileSync(join(SESSION_DIR, 'session.jsonl'), lines.join('\n') + '\n', 'utf-8');
 }
 
-const sampleSignals = [
-  { id: 'sig-1', summary: '🔴 USER STATED: Project uses pnpm', salience: 'pivotal', createdAt: '2026-05-07T10:00:00Z', source: 'conversation' },
-  { id: 'sig-2', summary: '🔴 USER STATED: Always work on feature branches', salience: 'pivotal', createdAt: '2026-05-07T10:05:00Z', source: 'conversation' },
-  { id: 'sig-3', summary: '🟡 USER ASKED: Should we use D1 or Turso?', salience: 'question', createdAt: '2026-05-07T10:10:00Z', source: 'conversation' },
-  { id: 'sig-4', summary: '🟢 OBSERVED: Anchor set to feature/modul-system', salience: 'context', createdAt: '2026-05-07T10:15:00Z', source: 'conversation' },
-  { id: 'sig-5', summary: '🟢 OBSERVED: Agent modified schema types', salience: 'context', createdAt: '2026-05-07T10:20:00Z', source: 'conversation' },
-];
+const sampleMarkdown = `# 2026-05-07
+- 🔴 10:00 Project uses pnpm {abc111}
+- 🔴 10:05 Always work on feature branches {abc222}
+- 🟡 10:10 Open question: D1 vs. Turso? {abc333}
+- 🟢 10:15 Anchor set to feature/modul-system {abc444}
+- 🟢 10:20 Agent modified schema types {abc555}
+`;
 
 // ============================================================================
-// Tests
+// getSessionObservations
 // ============================================================================
 
-describe('getSessionObservations', () => {
+describe('getSessionObservations (Markdown path)', () => {
   let builder: PromptBuilder;
 
   beforeEach(() => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(SESSION_DIR, { recursive: true });
     builder = new PromptBuilder(makeConfig());
-    // Default: long-enough session so the length-gate doesn't block tests.
-    // Tests that want to exercise the gate write their own jsonl.
     writeSessionJsonl();
   });
 
@@ -77,112 +75,64 @@ describe('getSessionObservations', () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
   });
 
-  it('returns null when no observations file exists', () => {
+  it('returns null when observations.md does not exist', () => {
     expect(builder.getSessionObservations(SESSION_ID)).toBeNull();
   });
 
-  it('returns null for empty signals array', () => {
-    writeObservations([]);
+  it('returns null for an empty markdown file', () => {
+    writeObservationsMd('');
     expect(builder.getSessionObservations(SESSION_ID)).toBeNull();
   });
 
   it('skips injection when conversation is below the length threshold', () => {
-    // Overwrite the jsonl with a short one
     writeSessionJsonl(5);
-    writeObservations(sampleSignals);
+    writeObservationsMd(sampleMarkdown);
     expect(builder.getSessionObservations(SESSION_ID)).toBeNull();
   });
 
-  it('filters observations by anchor scope when session has anchors', () => {
-    writeSessionJsonl(40, [{ type: 'feature', id: 'feat-A' }]);
-    writeObservations([
-      // Matching anchor → included
-      { id: 's1', summary: 'IN', salience: 'pivotal', createdAt: '2026-05-07T10:00:00Z', source: 'conversation', anchorRefs: [{ type: 'feature', id: 'feat-A' }] } as any,
-      // Different anchor → excluded
-      { id: 's2', summary: 'OUT', salience: 'pivotal', createdAt: '2026-05-07T10:01:00Z', source: 'conversation', anchorRefs: [{ type: 'feature', id: 'feat-B' }] } as any,
-      // Anchor-less → included (treated as session-local)
-      { id: 's3', summary: 'BARE', salience: 'pivotal', createdAt: '2026-05-07T10:02:00Z', source: 'conversation' } as any,
-    ]);
-    const result = builder.getSessionObservations(SESSION_ID);
-    expect(result).not.toBeNull();
-    expect(result!).toContain('IN');
-    expect(result!).toContain('BARE');
-    expect(result!).not.toContain('OUT');
-    expect(result!).toContain('scoped to 1 anchor');
-  });
-
-  it('shows all observations when session has no anchors', () => {
-    // jsonl already has anchors:[] from beforeEach
-    writeObservations([
-      { id: 's1', summary: 'A', salience: 'pivotal', createdAt: '2026-05-07T10:00:00Z', source: 'conversation', anchorRefs: [{ type: 'feature', id: 'feat-A' }] } as any,
-      { id: 's2', summary: 'B', salience: 'pivotal', createdAt: '2026-05-07T10:01:00Z', source: 'conversation', anchorRefs: [{ type: 'feature', id: 'feat-B' }] } as any,
-    ]);
-    const result = builder.getSessionObservations(SESSION_ID);
-    expect(result).not.toBeNull();
-    expect(result!).toContain('A');
-    expect(result!).toContain('B');
-  });
-
-  it('returns formatted block for valid observations', () => {
-    writeObservations(sampleSignals);
+  it('returns a formatted <session_memory> block with stripped anchors', () => {
+    writeObservationsMd(sampleMarkdown);
     const result = builder.getSessionObservations(SESSION_ID);
 
     expect(result).not.toBeNull();
     expect(result!).toContain('<session_memory>');
     expect(result!).toContain('</session_memory>');
-    expect(result!).toContain('🔴 USER STATED: Project uses pnpm');
-    expect(result!).toContain('🟡 USER ASKED: Should we use D1 or Turso?');
-    expect(result!).toContain('🟢 OBSERVED: Anchor set to feature/modul-system');
-    expect(result!).toContain('5 observations total, 5 in scope, showing 5');
+    // Summaries land in the block
+    expect(result!).toContain('Project uses pnpm');
+    expect(result!).toContain('Open question: D1 vs. Turso?');
+    // Anchor short-IDs are stripped before injection (UI sidecar holds them)
+    expect(result!).not.toContain('{abc111}');
+    expect(result!).not.toContain('{abc333}');
+    // Stats line surfaces the bullet count
+    expect(result!).toContain('5 observations');
   });
 
-  it('sorts pivotal before question before context', () => {
-    // Write in reverse order
-    const reversed = [...sampleSignals].reverse();
-    writeObservations(reversed);
-    const result = builder.getSessionObservations(SESSION_ID);
-
-    expect(result).not.toBeNull();
-    const lines = result!.split('\n').filter(l => l.startsWith('🔴') || l.startsWith('🟡') || l.startsWith('🟢'));
-
-    // Pivotal should come first
-    expect(lines[0]).toContain('🔴');
-    expect(lines[1]).toContain('🔴');
-    expect(lines[2]).toContain('🟡');
-    expect(lines[3]).toContain('🟢');
+  it('preserves file order (date headers + bullet order)', () => {
+    writeObservationsMd(sampleMarkdown);
+    const result = builder.getSessionObservations(SESSION_ID)!;
+    // Pnpm bullet appears before the D1/Turso question in the file
+    const idxA = result.indexOf('Project uses pnpm');
+    const idxB = result.indexOf('D1 vs. Turso');
+    expect(idxA).toBeGreaterThan(-1);
+    expect(idxB).toBeGreaterThan(idxA);
   });
 
-  it('truncates when observations exceed max chars', () => {
-    // Create observations with long summaries to hit the char limit
-    const longSignals = Array.from({ length: 100 }, (_, i) => ({
-      summary: `🟢 OBSERVED: ${'x'.repeat(100)} observation ${i}`,
-      salience: 'context',
-      createdAt: new Date(Date.now() + i * 1000).toISOString(),
-    }));
-    writeObservations(longSignals);
+  it('caps total chars and emits a truncation marker', () => {
+    // Build a markdown payload well over MAX_OBSERVATIONS_CHARS (3000)
+    const longBullets = Array.from({ length: 200 }, (_, i) =>
+      `- 🟢 10:${String(i % 60).padStart(2, '0')} ${'x'.repeat(80)} observation ${i}`,
+    ).join('\n');
+    writeObservationsMd(`# 2026-05-07\n${longBullets}\n`);
 
     const result = builder.getSessionObservations(SESSION_ID);
     expect(result).not.toBeNull();
-    // Should be truncated but still contain the block
-    expect(result!.length).toBeLessThan(4000);
+    expect(result!).toContain('(truncated)');
+    // Body part itself should not blow past the char cap by much
+    expect(result!.length).toBeLessThan(5000);
   });
 
-  it('limits to max 50 observations', () => {
-    const manySignals = Array.from({ length: 60 }, (_, i) => ({
-      summary: `🔴 USER STATED: Decision ${i}`,
-      salience: 'pivotal' as const,
-      createdAt: new Date(Date.now() + i * 1000).toISOString(),
-    }));
-    writeObservations(manySignals);
-
-    const result = builder.getSessionObservations(SESSION_ID);
-    expect(result).not.toBeNull();
-    expect(result!).toContain('60 observations total, 60 in scope, showing 50');
-  });
-
-  it('handles corrupted JSON gracefully', () => {
-    mkdirSync(join(SESSION_DIR, 'data'), { recursive: true });
-    writeFileSync(OBSERVATIONS_FILE, 'NOT JSON{{{', 'utf-8');
+  it('returns null gracefully when markdown has no bullets', () => {
+    writeObservationsMd('# 2026-05-07\n\nsome prose but no bullets\n');
     expect(builder.getSessionObservations(SESSION_ID)).toBeNull();
   });
 });
@@ -202,16 +152,15 @@ describe('buildContextParts with observations', () => {
   });
 
   it('includes observations in context parts when they exist', () => {
-    writeObservations(sampleSignals);
+    writeObservationsMd(sampleMarkdown);
     const parts = builder.buildContextParts(makeContextOptions());
 
     const joined = parts.join('\n');
     expect(joined).toContain('<session_memory>');
-    expect(joined).toContain('🔴 USER STATED');
+    expect(joined).toContain('Project uses pnpm');
   });
 
   it('does not include session_memory block when no observations', () => {
-    // No observations file → no block
     const parts = builder.buildContextParts(makeContextOptions());
 
     const joined = parts.join('\n');
@@ -219,7 +168,7 @@ describe('buildContextParts with observations', () => {
   });
 
   it('still includes all other context parts alongside observations', () => {
-    writeObservations(sampleSignals);
+    writeObservationsMd(sampleMarkdown);
     const parts = builder.buildContextParts(makeContextOptions());
 
     // Should have date/time, session state, workspace capabilities, working dir, observations

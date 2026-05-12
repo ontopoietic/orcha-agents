@@ -46,7 +46,6 @@ type ApiToChannelMapKeys =
   | 'observationRead' // direct IPC — observation watermark reader
   | 'observationReadList' // direct IPC — observation list reader
   | 'observationRunNow' // direct IPC — manual observer trigger
-  | 'observationRewriteEchoes' // direct IPC — echo rewriter trigger
   | 'observationReflectNow' // direct IPC — manual L2 reflector trigger
   | 'onObservationStatus' // direct IPC listener — observation watermark events
   | 'episodeReadIndex' // direct IPC — episodic memory index reader

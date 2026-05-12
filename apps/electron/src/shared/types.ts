@@ -256,7 +256,6 @@ export interface ElectronAPI {
   observationRead(sessionDir: string): Promise<import('@craft-agent/shared/sessions').ObservationWatermark | null>
   observationReadList(sessionDir: string): Promise<import('@craft-agent/shared/sessions').ObservationSignal[]>
   observationRunNow(sessionDir: string): Promise<{ ok: true; output: string } | { ok: false; error: string }>
-  observationRewriteEchoes(sessionDir: string): Promise<{ ok: true; output: string } | { ok: false; error: string }>
   observationReflectNow(sessionDir: string, options?: { force?: boolean }): Promise<{ ok: true; output: string } | { ok: false; error: string }>
   onObservationStatus(callback: (status: import('@craft-agent/shared/sessions').ObservationWatermark) => void): () => void
 

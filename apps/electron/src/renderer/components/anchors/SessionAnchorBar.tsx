@@ -68,24 +68,6 @@ export function SessionAnchorBar({ sessionId, workingDir, sessionDir, addLabelKe
     }
   }, [sessionDir, runningObserver])
 
-  const handleRewriteEchoes = React.useCallback(async () => {
-    if (!sessionDir || runningObserver) return
-    setRunningObserver(true)
-    setRunResult(null)
-    try {
-      const result = await window.electronAPI.observationRewriteEchoes(sessionDir)
-      if (result.ok) {
-        setRunResult({ ok: true, message: result.output })
-      } else {
-        setRunResult({ ok: false, message: result.error })
-      }
-    } catch (err) {
-      setRunResult({ ok: false, message: err instanceof Error ? err.message : String(err) })
-    } finally {
-      setRunningObserver(false)
-    }
-  }, [sessionDir, runningObserver])
-
   const handleReflect = React.useCallback(async (force = false) => {
     if (!sessionDir || runningObserver) return
     setRunningObserver(true)
@@ -145,20 +127,25 @@ export function SessionAnchorBar({ sessionId, workingDir, sessionDir, addLabelKe
                 className={cn(
                   'inline-flex items-center gap-1 h-6 px-2 rounded-md text-xs',
                   'border select-none transition-colors',
-                  observation.hasObserved
-                    // Active: full foreground text on subtle bg, clear border
-                    ? 'border-foreground/20 bg-foreground/[0.06] text-foreground hover:bg-foreground/[0.10]'
-                    // Idle: dimmer but still legible
-                    : 'border-border bg-transparent text-foreground/70 hover:text-foreground hover:bg-foreground/5',
+                  observation.running
+                    // Running: pulse the bg + ring to surface activity
+                    ? 'border-foreground/30 bg-foreground/[0.10] text-foreground animate-pulse'
+                    : observation.hasObserved
+                      // Active: full foreground text on subtle bg, clear border
+                      ? 'border-foreground/20 bg-foreground/[0.06] text-foreground hover:bg-foreground/[0.10]'
+                      // Idle: dimmer but still legible
+                      : 'border-border bg-transparent text-foreground/70 hover:text-foreground hover:bg-foreground/5',
                 )}
               >
-                <Eye className="h-3 w-3" />
+                <Eye className={cn('h-3 w-3', observation.running && 'animate-pulse')} />
                 <span>
-                  {observation.hasObserved
-                    ? observation.relativeTime
-                      ? `${observation.lastSignalCount} · ${observation.relativeTime}`
-                      : `${observation.lastSignalCount} observed`
-                    : 'not yet'}
+                  {observation.running
+                    ? 'observing…'
+                    : observation.hasObserved
+                      ? observation.relativeTime
+                        ? `${observation.lastSignalCount} · ${observation.relativeTime}`
+                        : `${observation.lastSignalCount} observed`
+                      : 'not yet'}
                 </span>
               </button>
             </PopoverTrigger>
@@ -182,7 +169,15 @@ export function SessionAnchorBar({ sessionId, workingDir, sessionDir, addLabelKe
                       <span className="text-foreground/55">Messages</span>
                       <span className="text-foreground">{observation.observedCount} observed</span>
                       <span className="text-foreground/55">Signals</span>
-                      <span className="text-foreground">{observation.lastSignalCount} extracted</span>
+                      <span className={cn(
+                        observation.lastSignalCount === 0
+                          ? 'text-foreground/55 italic'
+                          : 'text-foreground',
+                      )}>
+                        {observation.lastSignalCount === 0
+                          ? 'none extracted in last run'
+                          : `${observation.lastSignalCount} extracted`}
+                      </span>
                     </div>
 
                     <div className="border-t border-border pt-2 mt-2 space-y-1">
@@ -221,20 +216,6 @@ export function SessionAnchorBar({ sessionId, workingDir, sessionDir, addLabelKe
                     )}
                   >
                     {runningObserver ? 'Working…' : 'Run observer now'}
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => void handleRewriteEchoes()}
-                    disabled={runningObserver || !sessionDir}
-                    className={cn(
-                      'w-full text-left text-xs rounded px-2 py-1.5 transition-colors',
-                      'text-foreground hover:bg-foreground/5',
-                      'disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent',
-                    )}
-                    title="Re-extract any observation that mirrors its source message"
-                  >
-                    Rewrite echoes
                   </button>
 
                   <button

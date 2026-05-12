@@ -8,12 +8,14 @@
  * that is no longer relevant.
  *
  * This script implements that for orcha-agents:
- *   1. Read <session>/data/observations.json
+ *   1. Read <session>/data/observations.md (canonical) or observations.json (legacy fallback)
  *   2. Estimate token count (chars/4 heuristic, like Mastra)
  *   3. If above threshold (default 40_000), call LLM with reflector prompt
  *   4. Replace condensed observations in-place; keep recent raw ones
  *      untouched as a tail buffer
- *   5. Optionally bridge high-salience condensed items as RawSignals into
+ *   5. Dual-write: rebuild observations.md (preserving survivor lines verbatim,
+ *      rendering condensed L2 entries fresh) AND legacy observations.json
+ *   6. Optionally bridge high-salience condensed items as RawSignals into
  *      the Orcha-CLI ledger via `orcha signal add-many --from-json`
  *
  * CLI:
@@ -39,6 +41,11 @@ import {
 } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import {
+  parseObservationsMarkdown,
+  type ParsedBullet,
+  type Salience,
+} from '../packages/shared/src/sessions/observation-markdown-parser.ts';
 
 // ============================================================================
 // Constants
@@ -69,6 +76,23 @@ interface ObservationSignal {
   compressed?: boolean;
   /** IDs of L1 observations that were collapsed into this L2 entry. */
   replacedIds?: string[];
+  /**
+   * Optional preserved Markdown line — set when the signal was loaded from
+   * `observations.md` so we can round-trip it byte-for-byte when it survives
+   * a reflector pass. Not persisted in JSON output (stripped before write).
+   */
+  _originalMdLine?: string;
+  /** Date header the original line belonged to (YYYY-MM-DD). */
+  _originalMdDate?: string;
+}
+
+interface EvidenceEntry {
+  fullMessageId: string;
+  messageRangeTo?: string;
+  excerpt?: string;
+  actor?: 'user' | 'agent';
+  createdAt?: string;
+  anchorRefs?: unknown[];
 }
 
 interface ReflectionWatermark {
@@ -78,6 +102,187 @@ interface ReflectionWatermark {
   lastInputCount: number;
   lastOutputCount: number;
   lastTokenEstimate: number;
+}
+
+// ============================================================================
+// Markdown source-of-truth I/O (post Plan A/C)
+// ============================================================================
+
+const SALIENCE_TO_EMOJI: Record<Salience, string> = {
+  pivotal: '🔴',
+  question: '🟡',
+  context: '🟢',
+};
+
+function shortIdFromMsgId(id: string | undefined): string {
+  if (!id) return '';
+  const parts = id.split('-');
+  const last = parts[parts.length - 1];
+  return last && last.length > 0 ? last : id.slice(-6);
+}
+
+function localDateAndTime(iso: string): { date: string; time: string } {
+  const d = new Date(iso);
+  const date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const time = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  return { date, time };
+}
+
+/**
+ * Materialize bullets from `observations.md` + `observations-evidence.json`
+ * into the existing ObservationSignal shape so the rest of the reflector
+ * pipeline (LLM prompt, condense, drop) keeps working unchanged.
+ *
+ * Synthetic IDs use the form `bullet-<index>` so the LLM has a stable handle.
+ * The original line + date are stashed on the signal so survivors can be
+ * round-tripped verbatim when writing the new ledger.
+ *
+ * Returns null when no `observations.md` exists (caller falls back to JSON).
+ */
+function loadObservationsFromMarkdown(sessionDir: string): ObservationSignal[] | null {
+  const mdPath = join(sessionDir, 'data', 'observations.md');
+  if (!existsSync(mdPath)) return null;
+  let raw: string;
+  try {
+    raw = readFileSync(mdPath, 'utf-8');
+  } catch {
+    return null;
+  }
+  const bullets = parseObservationsMarkdown(raw);
+  if (!bullets || bullets.length === 0) return null;
+
+  // Evidence sidecar — anchor shortId → fullMessageId, excerpt, actor, createdAt
+  const evidencePath = join(sessionDir, 'data', 'observations-evidence.json');
+  let evidence: Record<string, EvidenceEntry> = {};
+  if (existsSync(evidencePath)) {
+    try {
+      const parsed = JSON.parse(readFileSync(evidencePath, 'utf-8'));
+      if (parsed && typeof parsed === 'object') evidence = parsed as Record<string, EvidenceEntry>;
+    } catch {
+      /* ignore */
+    }
+  }
+
+  const signals: ObservationSignal[] = bullets.map((b, idx) => {
+    const ev = b.anchorShortId ? evidence[b.anchorShortId] : undefined;
+    const createdAt = ev?.createdAt
+      ?? (b.date && b.time ? new Date(`${b.date}T${b.time}:00`).toISOString() : new Date().toISOString());
+    const actor = (ev?.actor === 'user' || ev?.actor === 'agent') ? ev.actor : 'agent';
+    return {
+      id: `bullet-${idx}`,
+      createdAt,
+      source: 'conversation',
+      summary: b.summary,
+      status: 'raw',
+      salience: b.salience,
+      anchorRefs: Array.isArray(ev?.anchorRefs) ? ev.anchorRefs : undefined,
+      conversation: {
+        messageRange: ev ? { from: ev.fullMessageId, to: ev.messageRangeTo ?? ev.fullMessageId } : undefined,
+        excerpt: ev?.excerpt ?? '',
+        actor,
+      },
+      _originalMdLine: renderBulletLine(b),
+      _originalMdDate: b.date ?? localDateAndTime(createdAt).date,
+    };
+  });
+  return signals;
+}
+
+function renderBulletLine(b: ParsedBullet): string {
+  const emoji = SALIENCE_TO_EMOJI[b.salience];
+  const anchor = b.anchorShortId ? ` {${b.anchorShortId}}` : '';
+  const timePart = b.time ? `${b.time} ` : '';
+  return `- ${emoji} ${timePart}${b.summary}${anchor}`;
+}
+
+function renderSignalAsBullet(s: ObservationSignal): string {
+  const salience = (s.salience === 'pivotal' || s.salience === 'question' || s.salience === 'context')
+    ? s.salience
+    : 'context';
+  const emoji = SALIENCE_TO_EMOJI[salience];
+  const { time } = localDateAndTime(s.createdAt);
+  const anchorId = shortIdFromMsgId(s.conversation?.messageRange?.from);
+  const anchor = anchorId ? ` {${anchorId}}` : '';
+  return `- ${emoji} ${time} ${s.summary}${anchor}`;
+}
+
+/**
+ * Rebuild `observations.md` from the final post-reflection signal list.
+ * Surviving signals keep their original line verbatim; condensed L2 entries
+ * are rendered fresh. Output is grouped by date, newest date first.
+ *
+ * Also rewrites `observations-evidence.json` so anchors that survived keep
+ * their evidence, and condensed L2 entries get a synthesised evidence row
+ * (excerpt = condensed summary, actor = condensed actor) so the UI can still
+ * expand them.
+ */
+function writeMarkdownLedger(
+  sessionDir: string,
+  finalSignals: ObservationSignal[],
+): { mdPath: string; entries: number } {
+  const mdPath = join(sessionDir, 'data', 'observations.md');
+  const evidencePath = join(sessionDir, 'data', 'observations-evidence.json');
+  const dataDir = join(sessionDir, 'data');
+  if (!existsSync(dataDir)) mkdirSync(dataDir, { recursive: true });
+
+  // Group by date
+  const byDate = new Map<string, string[]>();
+  for (const s of finalSignals) {
+    const date = s._originalMdDate ?? localDateAndTime(s.createdAt).date;
+    const line = s._originalMdLine ?? renderSignalAsBullet(s);
+    const list = byDate.get(date) ?? [];
+    list.push(line);
+    byDate.set(date, list);
+  }
+
+  const sortedDates = [...byDate.keys()].sort((a, b) => b.localeCompare(a));
+  const out: string[] = [];
+  for (const date of sortedDates) {
+    out.push(`# ${date}`);
+    for (const line of byDate.get(date) ?? []) out.push(line);
+    out.push('');
+  }
+  const body = out.join('\n').trimEnd() + '\n';
+  writeFileSync(mdPath, body, 'utf-8');
+
+  // Rebuild evidence sidecar from final signals
+  let prevEvidence: Record<string, EvidenceEntry> = {};
+  if (existsSync(evidencePath)) {
+    try {
+      const parsed = JSON.parse(readFileSync(evidencePath, 'utf-8'));
+      if (parsed && typeof parsed === 'object') prevEvidence = parsed as Record<string, EvidenceEntry>;
+    } catch {
+      /* ignore */
+    }
+  }
+  const nextEvidence: Record<string, EvidenceEntry> = {};
+  for (const s of finalSignals) {
+    const fromId = s.conversation?.messageRange?.from;
+    if (!fromId) continue;
+    const shortId = shortIdFromMsgId(fromId);
+    if (!shortId) continue;
+    const previous = prevEvidence[shortId];
+    nextEvidence[shortId] = {
+      fullMessageId: fromId,
+      messageRangeTo: s.conversation?.messageRange?.to ?? fromId,
+      excerpt: s.conversation?.excerpt ?? previous?.excerpt ?? '',
+      actor: (s.conversation?.actor === 'user' ? 'user' : 'agent') as 'user' | 'agent',
+      createdAt: s.createdAt,
+      ...(Array.isArray(s.anchorRefs) && s.anchorRefs.length > 0
+        ? { anchorRefs: s.anchorRefs }
+        : previous?.anchorRefs ? { anchorRefs: previous.anchorRefs } : {}),
+    };
+  }
+  writeFileSync(evidencePath, JSON.stringify(nextEvidence, null, 2) + '\n', 'utf-8');
+
+  return { mdPath, entries: finalSignals.length };
+}
+
+function stripRuntimeFields(signals: ObservationSignal[]): ObservationSignal[] {
+  return signals.map((s) => {
+    const { _originalMdLine: _l, _originalMdDate: _d, ...rest } = s;
+    return rest;
+  });
 }
 
 // ============================================================================
@@ -508,22 +713,47 @@ async function main(): Promise<void> {
   }
   const expandedDir = sessionDir.replace(/^~/, process.env.HOME || '~');
   const obsPath = join(expandedDir, 'data', 'observations.json');
-  if (!existsSync(obsPath)) {
-    console.log(`Reflector: no observations.json at ${obsPath}, skipping.`);
+  const mdPath = join(expandedDir, 'data', 'observations.md');
+  const mdExists = existsSync(mdPath);
+  const jsonExists = existsSync(obsPath);
+
+  if (!mdExists && !jsonExists) {
+    console.log(`Reflector: no observations.md or .json at ${expandedDir}/data, skipping.`);
     return;
   }
 
-  // Load existing observations
-  let raw: { signals?: ObservationSignal[] } | ObservationSignal[];
-  try {
-    raw = JSON.parse(readFileSync(obsPath, 'utf-8'));
-  } catch (err) {
-    console.error(`Reflector: failed to parse ${obsPath}: ${(err as Error).message}`);
-    process.exit(1);
+  // Source-of-truth resolution: prefer Markdown (post Plan A/C). Fall back to
+  // JSON for legacy sessions that haven't been migrated. The migrator
+  // (`scripts/orcha-migrate-observations.ts`) can be run to lift those.
+  let all: ObservationSignal[];
+  let loadedFrom: 'md' | 'json';
+  if (mdExists) {
+    const md = loadObservationsFromMarkdown(expandedDir);
+    if (md && md.length > 0) {
+      all = md;
+      loadedFrom = 'md';
+    } else if (jsonExists) {
+      // MD existed but parsed empty — fall through to JSON
+      const raw = JSON.parse(readFileSync(obsPath, 'utf-8'));
+      all = Array.isArray(raw) ? raw : (raw.signals ?? []);
+      loadedFrom = 'json';
+    } else {
+      console.log('Reflector: observations.md parsed empty and no JSON fallback, skipping.');
+      return;
+    }
+  } else {
+    try {
+      const raw = JSON.parse(readFileSync(obsPath, 'utf-8'));
+      all = Array.isArray(raw) ? raw : (raw.signals ?? []);
+    } catch (err) {
+      console.error(`Reflector: failed to parse ${obsPath}: ${(err as Error).message}`);
+      process.exit(1);
+    }
+    loadedFrom = 'json';
   }
-  const all: ObservationSignal[] = Array.isArray(raw) ? raw : raw.signals ?? [];
+
   if (all.length === 0) {
-    console.log('Reflector: observations.json is empty, skipping.');
+    console.log('Reflector: source is empty, skipping.');
     return;
   }
 
@@ -569,9 +799,13 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  // Backup before mutation
-  const backupPath = obsPath.replace(/\.json$/, `.before-reflect-${Date.now()}.json`);
-  copyFileSync(obsPath, backupPath);
+  // Backup before mutation — back up whichever source we actually loaded
+  const backupTs = Date.now();
+  const backupPath = mdExists
+    ? mdPath.replace(/\.md$/, `.before-reflect-${backupTs}.md`)
+    : obsPath.replace(/\.json$/, `.before-reflect-${backupTs}.json`);
+  if (mdExists) copyFileSync(mdPath, backupPath);
+  else if (jsonExists) copyFileSync(obsPath, backupPath);
 
   // Build new observation list:
   //   - Drop IDs in parsed.drop
@@ -620,8 +854,18 @@ async function main(): Promise<void> {
     ...tail,
   ];
 
-  // Write new observations.json (atomic-ish via write+rename would be nicer, defer)
-  writeFileSync(obsPath, JSON.stringify({ signals: newAll }, null, 2) + '\n', 'utf-8');
+  // Dual-write: canonical Markdown ledger + legacy JSON.
+  // - Markdown (`observations.md` + `observations-evidence.json`): primary
+  //   source of truth post Plan A/C. Survivors keep their original bullet line
+  //   verbatim; condensed L2 entries get freshly rendered lines.
+  // - JSON: retained for legacy readers + rollback during transition. Will be
+  //   dropped in a follow-up cleanup once nothing reads it.
+  writeMarkdownLedger(expandedDir, stripRuntimeFields(newAll));
+  writeFileSync(
+    obsPath,
+    JSON.stringify({ signals: stripRuntimeFields(newAll) }, null, 2) + '\n',
+    'utf-8',
+  );
 
   // Touch watermark so UI re-fetches
   const watermarkPath = join(expandedDir, 'meta', 'observation-watermark.json');
@@ -663,11 +907,12 @@ async function main(): Promise<void> {
 
   console.log(
     `Reflector: condensed ${candidates.length} → ${condensedSignals.length} (${parsed.drop.length} dropped, ${survivingFromCandidates.length} kept).\n` +
+      `  Source: ${loadedFrom}\n` +
       `  Token estimate: ${tokenEstimate}\n` +
       `  Tail buffer (untouched): ${tail.length}\n` +
       `  Bridge: ${bridge.bridged} → ${bridge.reason}\n` +
       `  Backup: ${backupPath}\n` +
-      `  Output: ${obsPath}`,
+      `  Output: ${mdPath} + ${obsPath}`,
   );
 }
 

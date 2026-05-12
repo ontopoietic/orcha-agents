@@ -11,7 +11,7 @@
  */
 
 import * as React from 'react'
-import { Eye } from 'lucide-react'
+import { Eye, RefreshCw } from 'lucide-react'
 import {
   Dialog,
   DialogContent,
@@ -21,6 +21,8 @@ import {
 import { useObservations } from '@/hooks/useObservations'
 import type { ObservationSignal } from '@craft-agent/shared/sessions'
 import { cn } from '@/lib/utils'
+import { PanelHeaderCenterButton } from '@/components/ui/PanelHeaderCenterButton'
+import { useOptionalAppShellContext } from '@/context/AppShellContext'
 
 export interface ObservationsViewerProps {
   open: boolean
@@ -91,9 +93,29 @@ function ObservationCard({ obs }: { obs: ObservationSignal }) {
   // Detect "echo" — summary equals or is a prefix of excerpt. Indicates the
   // LLM extractor copy-pasted the user message instead of summarizing. Marked
   // visually so the user can spot quality issues without reading every entry.
-  const looksLikeEcho = excerpt && fullSummary.length > 30 && (
-    excerpt.startsWith(fullSummary.slice(0, 60)) ||
-    fullSummary.startsWith(excerpt.slice(0, 60))
+  //
+  // Markdown is stripped before comparison: cleanSummary (pattern fallback)
+  // removes **bold**/`code`/headings/links, but the excerpt is stored raw.
+  // Without normalisation, an obvious echo like "Follow-ups …" vs raw
+  // "**Follow-ups** …" never matches.
+  const stripMd = (s: string) =>
+    s
+      .replace(/```[\s\S]*?```/g, ' ')
+      .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+      .replace(/`([^`]+)`/g, '$1')
+      .replace(/\*\*([^*]+)\*\*/g, '$1')
+      .replace(/\*([^*]+)\*/g, '$1')
+      .replace(/^[ \t]*#+\s*/gm, '')
+      .replace(/^[ \t]*>\s?/gm, '')
+      .replace(/…/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .toLowerCase()
+  const normSummary = stripMd(fullSummary)
+  const normExcerpt = excerpt ? stripMd(excerpt) : ''
+  const looksLikeEcho = normExcerpt && normSummary.length > 30 && (
+    normExcerpt.startsWith(normSummary.slice(0, 60)) ||
+    normSummary.startsWith(normExcerpt.slice(0, 60))
   )
 
   const canExpand = summaryLong || excerptLong
@@ -159,6 +181,16 @@ function ObservationCard({ obs }: { obs: ObservationSignal }) {
  */
 export function ObservationsContent({ sessionDir }: { sessionDir: string | null | undefined }) {
   const { observations, loading, refresh } = useObservations(sessionDir)
+  const shellContext = useOptionalAppShellContext()
+  const closeButton = shellContext?.rightSidebarButton
+
+  const [spinning, setSpinning] = React.useState(false)
+  const handleRefresh = React.useCallback(() => {
+    setSpinning(true)
+    const minDelay = new Promise((r) => setTimeout(r, 600))
+    void Promise.all([refresh(), minDelay]).finally(() => setSpinning(false))
+  }, [refresh])
+  const isSpinning = spinning || loading
 
   const grouped = React.useMemo(() => {
     const buckets: Record<Salience, ObservationSignal[]> = {
@@ -193,13 +225,15 @@ export function ObservationsContent({ sessionDir }: { sessionDir: string | null 
             {totals.all} total · 🔴 {totals.pivotal} · 🟡 {totals.question} · 🟢 {totals.context}
           </span>
         </div>
-        <button
-          type="button"
-          onClick={() => void refresh()}
-          className="text-xs text-foreground/65 hover:text-foreground transition-colors"
-        >
-          Refresh
-        </button>
+        <div className="flex items-center gap-1.5">
+          <PanelHeaderCenterButton
+            icon={<RefreshCw className={cn('h-4 w-4', isSpinning && 'animate-spin')} />}
+            onClick={handleRefresh}
+            tooltip="Refresh"
+            disabled={isSpinning}
+          />
+          {closeButton}
+        </div>
       </header>
 
       <div className="flex-1 overflow-y-auto px-6 py-4 space-y-6">

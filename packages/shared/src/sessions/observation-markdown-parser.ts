@@ -27,7 +27,11 @@ export interface ParsedBullet {
   date: string | null;
 }
 
-const BULLET_RE = /^- (🔴|🟡|🟢)\s+(\d{2}:\d{2})\s+(.+?)(?:\s\{([a-z0-9]+)\})?\s*$/;
+// Time (`HH:mm`) is optional — Claude often omits it when there's no obvious
+// timestamp in the source slice. We fall back to the source-message timestamp
+// downstream, so the time field is purely informational. Capture it when
+// present, accept the bullet either way.
+const BULLET_RE = /^- (🔴|🟡|🟢)\s+(?:(\d{2}:\d{2})\s+)?(.+?)(?:\s\{([a-z0-9]+)\})?\s*$/;
 const SUB_BULLET_RE = /^ {2}- (.+?)\s*$/;
 const DATE_HEADER_RE = /^# (\d{4}-\d{2}-\d{2})\s*$/;
 
@@ -75,13 +79,13 @@ export function parseObservationsMarkdown(raw: string): ParsedBullet[] | null {
       const anchor = bulletMatch[4];
       const salience = emoji ? EMOJI_TO_SALIENCE[emoji] : undefined;
       const trimmed = summary?.trim();
-      if (!salience || !trimmed || !time) {
+      if (!salience || !trimmed) {
         lastBullet = null;
         continue;
       }
       const bullet: ParsedBullet = {
         salience,
-        time,
+        time: time ?? '',
         summary: trimmed,
         anchorShortId: anchor ?? null,
         date: currentDate,

@@ -5,7 +5,7 @@
  * Pairs with observation-trigger.ts (which fires the L1 Observer at 30k
  * raw-conversation tokens). Observer condenses raw turns → observations;
  * Reflector condenses old observations → denser L2 items + bridge to the
- * Orcha-CLI ledger. Without this auto-trigger, observations.json grows
+ * Orcha-CLI ledger. Without this auto-trigger, observations.md/.json grow
  * unboundedly until manual "Reflect & condense" is clicked in the UI.
  *
  * Env vars:
@@ -14,7 +14,7 @@
  *   ORCHA_REFLECTOR_DISABLE_TRIGGER      "1" to opt out entirely
  *
  * Design notes:
- * - Token estimate is chars/4 over the observations.json file (the same
+ * - Token estimate is chars/4 over the max(observations.md, observations.json) file size (the same
  *   coarse estimator the Reflector itself uses).
  * - Throttle is in-memory per session — process restarts reset it.
  * - Spawn is fire-and-forget; the agent's turn is not blocked.
@@ -49,16 +49,24 @@ function resolveConfig(): TriggerConfig {
 }
 
 /**
- * Estimate Reflector "input tokens" by file size of observations.json
- * divided by 4. Reflection cost is dominated by the prompt-side payload.
+ * Estimate Reflector "input tokens" by file size divided by 4. Reflection cost
+ * is dominated by the prompt-side payload. Measures the LARGER of
+ * `observations.md` (canonical post Plan A/C) and `observations.json` (legacy /
+ * transitional) so the trigger works whichever side is currently load-bearing.
  */
-function estimateObservationTokens(observationsPath: string): number {
-  if (!existsSync(observationsPath)) return 0;
-  try {
-    return Math.floor(statSync(observationsPath).size / 4);
-  } catch {
-    return 0;
+function estimateObservationTokens(sessionDataDir: string): number {
+  let max = 0;
+  for (const name of ['observations.md', 'observations.json']) {
+    const p = join(sessionDataDir, name);
+    if (!existsSync(p)) continue;
+    try {
+      const size = statSync(p).size;
+      if (size > max) max = size;
+    } catch {
+      /* ignore */
+    }
   }
+  return Math.floor(max / 4);
 }
 
 function spawnReflector(sessionDir: string, sessionId: string): void {
@@ -131,8 +139,7 @@ export function maybeTriggerReflector(
   }
 
   const config = resolveConfig();
-  const observationsPath = join(sessionDir, 'data', 'observations.json');
-  const tokens = estimateObservationTokens(observationsPath);
+  const tokens = estimateObservationTokens(join(sessionDir, 'data'));
 
   if (tokens < config.thresholdTokens) {
     return { triggered: false, reason: `below threshold (${tokens}/${config.thresholdTokens})`, observationTokens: tokens };

@@ -355,30 +355,6 @@ Do NOT guess. Wrong anchors are worse than no anchors. If the user is just explo
   }
 
   /**
-   * Decide whether an observation belongs in this session's view.
-   * Rules:
-   * - If session has no anchors → show all observations (no filter)
-   * - If session has anchors → show observations whose anchorRefs intersect,
-   *   PLUS anchor-less observations (treated as session-local)
-   */
-  private observationMatchesSessionScope(
-    obsAnchors: unknown,
-    sessionAnchors: Array<{ type: string; id: string }>,
-  ): boolean {
-    if (sessionAnchors.length === 0) return true;
-    if (!Array.isArray(obsAnchors) || obsAnchors.length === 0) return true;
-    const sessionKeys = new Set(sessionAnchors.map((a) => `${a.type}:${a.id}`));
-    for (const a of obsAnchors) {
-      if (!a || typeof a !== 'object') continue;
-      const r = a as Record<string, unknown>;
-      if (typeof r.type === 'string' && typeof r.id === 'string') {
-        if (sessionKeys.has(`${r.type}:${r.id}`)) return true;
-      }
-    }
-    return false;
-  }
-
-  /**
    * Read observations from session data and format as a context block.
    * Returns null if no observations exist.
    *
@@ -395,12 +371,9 @@ Do NOT guess. Wrong anchors are worse than no anchors. If the user is just explo
   getSessionObservations(sessionId: string): string | null {
     const sessionDir = getSessionPath(this.workspaceRootPath, sessionId);
     const markdownPath = join(sessionDir, 'data', 'observations.md');
-    const observationsPath = join(sessionDir, 'data', 'observations.json');
     const jsonlPath = join(sessionDir, 'session.jsonl');
 
-    const hasMarkdown = existsSync(markdownPath);
-    const hasJson = existsSync(observationsPath);
-    if (!hasMarkdown && !hasJson) return null;
+    if (!existsSync(markdownPath)) return null;
 
     // Length gate — short conversations don't need observation injection
     const lineCount = this.countJsonlLines(jsonlPath);
@@ -409,88 +382,21 @@ Do NOT guess. Wrong anchors are worse than no anchors. If the user is just explo
       return null;
     }
 
-    // Primary path (post Plan A): canonical Markdown ledger. Anchors are
-    // stripped before injection — the main model doesn't need them, the
-    // sidecar carries the data the UI uses.
-    if (hasMarkdown) {
-      try {
-        const md = readFileSync(markdownPath, 'utf-8');
-        const stripped = this.formatMarkdownForInjection(md);
-        if (!stripped.body) return null;
-        const header = '<session_memory>';
-        const footer = '</session_memory>';
-        const intro = 'Structured observations from past conversation turns. These persist across compaction — the agent does NOT need to re-derive them.';
-        const stats = `${stripped.bulletCount} observations`;
-        log.debug(`[getSessionObservations] Injecting Markdown ledger (${stripped.bulletCount} bullets) for session ${sessionId}`);
-        return `${header}\n${intro}\n\n${stripped.body}\n\n${stats}\n${footer}`;
-      } catch (err) {
-        log.debug('[getSessionObservations] Failed to read observations.md, falling back to JSON:', err);
-        // fall through to JSON path
-      }
-    }
-
-    if (!hasJson) return null;
-
+    // Canonical post Plan A/C path: Markdown ledger. Anchors are stripped
+    // before injection — the main model doesn't need them, the sidecar
+    // carries the data the UI uses.
     try {
-      const raw = readFileSync(observationsPath, 'utf-8');
-      const parsed = JSON.parse(raw);
-      const signals: Array<Record<string, unknown>> = parsed.signals ?? parsed;
-
-      if (!Array.isArray(signals) || signals.length === 0) return null;
-
-      // Anchor-scope filter
-      const sessionAnchors = this.readSessionAnchors(sessionId);
-      const scoped = signals.filter((s) =>
-        this.observationMatchesSessionScope((s as Record<string, unknown>).anchorRefs, sessionAnchors)
-      );
-      if (scoped.length === 0) return null;
-
-      // Sort: pivotal → question → context, then by recency within each group
-      const salienceOrder: Record<string, number> = { pivotal: 0, question: 1, context: 2 };
-      const sorted = [...scoped].sort((a, b) => {
-        const sa = salienceOrder[(a as Record<string, unknown>).salience as string] ?? 3;
-        const sb = salienceOrder[(b as Record<string, unknown>).salience as string] ?? 3;
-        if (sa !== sb) return sa - sb;
-        // Within same salience, newer first
-        return ((b as Record<string, unknown>).createdAt as string ?? '').localeCompare(
-          (a as Record<string, unknown>).createdAt as string ?? ''
-        );
-      });
-
-      // Build lines, respecting max count and max chars
-      const lines: string[] = [];
-      let totalChars = 0;
-      const maxChars = PromptBuilder.MAX_OBSERVATIONS_CHARS;
-      const maxCount = PromptBuilder.MAX_OBSERVATIONS_COUNT;
-
-      for (let i = 0; i < sorted.length && i < maxCount; i++) {
-        const signal = sorted[i];
-        const summary = (signal as Record<string, unknown>).summary as string;
-        if (!summary) continue;
-
-        const line = summary;
-        if (totalChars + line.length + 1 > maxChars) break;
-
-        lines.push(line);
-        totalChars += line.length + 1;
-      }
-
-      if (lines.length === 0) return null;
-
-      // Build the block
+      const md = readFileSync(markdownPath, 'utf-8');
+      const stripped = this.formatMarkdownForInjection(md);
+      if (!stripped.body || stripped.bulletCount === 0) return null;
       const header = '<session_memory>';
       const footer = '</session_memory>';
       const intro = 'Structured observations from past conversation turns. These persist across compaction — the agent does NOT need to re-derive them.';
-      const scopeNote = sessionAnchors.length > 0
-        ? ` · scoped to ${sessionAnchors.length} anchor${sessionAnchors.length === 1 ? '' : 's'}`
-        : '';
-      const stats = `${signals.length} observations total, ${scoped.length} in scope, showing ${lines.length}${scopeNote}`;
-
-      log.debug(`[getSessionObservations] Injecting ${lines.length} observations for session ${sessionId}`);
-
-      return `${header}\n${intro}\n\n${lines.join('\n')}\n\n${stats}\n${footer}`;
+      const stats = `${stripped.bulletCount} observations`;
+      log.debug(`[getSessionObservations] Injecting Markdown ledger (${stripped.bulletCount} bullets) for session ${sessionId}`);
+      return `${header}\n${intro}\n\n${stripped.body}\n\n${stats}\n${footer}`;
     } catch (err) {
-      log.debug('[getSessionObservations] Failed to read observations:', err);
+      log.debug('[getSessionObservations] Failed to read observations.md:', err);
       return null;
     }
   }
