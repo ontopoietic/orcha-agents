@@ -32,6 +32,7 @@ import {
   isSkillsNavigation,
   isAutomationsNavigation,
   isLedgerNavigation,
+  isObservationsNavigation,
 } from '@/contexts/NavigationContext'
 import { useSessionSelection, useIsMultiSelectActive, useSelectedIds, useSelectionCount } from '@/hooks/useSession'
 import { sourceSelection, skillSelection, automationSelection } from '@/hooks/useEntitySelection'
@@ -42,6 +43,7 @@ import SkillInfoPage from '@/pages/SkillInfoPage'
 import { getSettingsPageComponent } from '@/pages/settings/settings-pages'
 import { AutomationInfoPage } from '../automations/AutomationInfoPage'
 import LedgerDetailPage from '@/pages/LedgerDetailPage'
+import ObservationsDetailPage from '@/pages/ObservationsDetailPage'
 import type { ExecutionEntry } from '../automations/types'
 import { automationsAtom } from '@/atoms/automations'
 import { SendResourceToWorkspaceDialog, type SendResourceType } from './SendResourceToWorkspaceDialog'
@@ -358,6 +360,15 @@ export function MainContentPanel({
     return wrapWithStoplight(
       <Panel variant="grow" className={className}>
         <LedgerDetailPage />
+      </Panel>
+    )
+  }
+
+  // Observations navigator - split-view variant of the ObservationsViewer dialog
+  if (isObservationsNavigation(navState)) {
+    return wrapWithStoplight(
+      <Panel variant="grow" className={className}>
+        <ObservationsDetailPage />
       </Panel>
     )
   }

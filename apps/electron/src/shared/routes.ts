@@ -185,6 +185,9 @@ export const routes = {
 
     /** Ledger detail view */
     ledger: () => 'ledger' as const,
+
+    /** Observations detail view (per session) */
+    observations: () => 'observations' as const,
   },
 } as const
 

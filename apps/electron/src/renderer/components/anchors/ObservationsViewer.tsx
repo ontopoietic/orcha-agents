@@ -152,10 +152,14 @@ function ObservationCard({ obs }: { obs: ObservationSignal }) {
   )
 }
 
-export function ObservationsViewer({ open, onOpenChange, sessionDir }: ObservationsViewerProps) {
+/**
+ * The card-grid body, reusable between the dialog overlay and the full-page
+ * split-view variant. Pulled out so ObservationsDetailPage can mount the
+ * same UI without the Dialog chrome.
+ */
+export function ObservationsContent({ sessionDir }: { sessionDir: string | null | undefined }) {
   const { observations, loading, refresh } = useObservations(sessionDir)
 
-  // Group + sort: salience order, newest first within group
   const grouped = React.useMemo(() => {
     const buckets: Record<Salience, ObservationSignal[]> = {
       pivotal: [],
@@ -180,60 +184,71 @@ export function ObservationsViewer({ open, onOpenChange, sessionDir }: Observati
   }
 
   return (
+    <div className="h-full flex flex-col">
+      <header className="px-6 py-3 border-b border-border flex items-center justify-between shrink-0">
+        <div className="flex items-center gap-2">
+          <Eye className="h-4 w-4" />
+          <span className="font-semibold">Observations</span>
+          <span className="text-xs font-normal text-foreground/70 ml-2">
+            {totals.all} total · 🔴 {totals.pivotal} · 🟡 {totals.question} · 🟢 {totals.context}
+          </span>
+        </div>
+        <button
+          type="button"
+          onClick={() => void refresh()}
+          className="text-xs text-foreground/65 hover:text-foreground transition-colors"
+        >
+          Refresh
+        </button>
+      </header>
+
+      <div className="flex-1 overflow-y-auto px-6 py-4 space-y-6">
+        {loading && observations.length === 0 && (
+          <div className="text-sm text-foreground/70 py-8 text-center">Loading observations…</div>
+        )}
+
+        {!loading && observations.length === 0 && (
+          <div className="text-sm text-foreground/70 py-8 text-center">
+            No observations yet. The observer runs before context compaction
+            (or when triggered manually) and writes structured signals here.
+          </div>
+        )}
+
+        {SALIENCE_ORDER.map((salience) => {
+          const items = grouped[salience]
+          if (items.length === 0) return null
+          const meta = SALIENCE_META[salience]
+          return (
+            <section key={salience} className="space-y-2">
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-foreground/75 flex items-center gap-2">
+                <span className={cn('inline-block w-2 h-2 rounded-full', meta.dot)} />
+                {meta.label} ({items.length})
+              </h3>
+              <div className="space-y-2">
+                {items.map((obs) => (
+                  <ObservationCard key={obs.id} obs={obs} />
+                ))}
+              </div>
+            </section>
+          )
+        })}
+      </div>
+
+      <footer className="px-6 py-2 border-t border-border text-xs text-foreground/65 shrink-0">
+        Source: <code className="text-foreground/70">data/observations.md</code> (with sidecar)
+      </footer>
+    </div>
+  )
+}
+
+export function ObservationsViewer({ open, onOpenChange, sessionDir }: ObservationsViewerProps) {
+  return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl max-h-[80vh] flex flex-col">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <Eye className="h-4 w-4" />
-            Observations
-            <span className="text-xs font-normal text-foreground/70 ml-2">
-              {totals.all} total · 🔴 {totals.pivotal} · 🟡 {totals.question} · 🟢 {totals.context}
-            </span>
-          </DialogTitle>
+      <DialogContent className="max-w-2xl max-h-[80vh] flex flex-col p-0 overflow-hidden">
+        <DialogHeader className="sr-only">
+          <DialogTitle>Observations</DialogTitle>
         </DialogHeader>
-
-        <div className="flex-1 overflow-y-auto -mx-6 px-6 space-y-6">
-          {loading && observations.length === 0 && (
-            <div className="text-sm text-foreground/70 py-8 text-center">Loading observations…</div>
-          )}
-
-          {!loading && observations.length === 0 && (
-            <div className="text-sm text-foreground/70 py-8 text-center">
-              No observations yet. The observer runs before context compaction
-              (or when triggered manually) and writes structured signals here.
-            </div>
-          )}
-
-          {SALIENCE_ORDER.map((salience) => {
-            const items = grouped[salience]
-            if (items.length === 0) return null
-            const meta = SALIENCE_META[salience]
-            return (
-              <section key={salience} className="space-y-2">
-                <h3 className="text-xs font-semibold uppercase tracking-wide text-foreground/75 flex items-center gap-2">
-                  <span className={cn('inline-block w-2 h-2 rounded-full', meta.dot)} />
-                  {meta.label} ({items.length})
-                </h3>
-                <div className="space-y-2">
-                  {items.map((obs) => (
-                    <ObservationCard key={obs.id} obs={obs} />
-                  ))}
-                </div>
-              </section>
-            )
-          })}
-        </div>
-
-        <div className="flex items-center justify-between pt-2 border-t border-border text-xs text-foreground/65">
-          <span>Source: <code className="text-foreground/70">data/observations.md</code> (with sidecar)</span>
-          <button
-            type="button"
-            onClick={() => void refresh()}
-            className="hover:text-foreground transition-colors"
-          >
-            Refresh
-          </button>
-        </div>
+        <ObservationsContent sessionDir={sessionDir} />
       </DialogContent>
     </Dialog>
   )

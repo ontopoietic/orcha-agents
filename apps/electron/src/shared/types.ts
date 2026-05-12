@@ -880,6 +880,11 @@ export interface LedgerNavigationState {
   rightSidebar?: RightSidebarPanel
 }
 
+export interface ObservationsNavigationState {
+  navigator: 'observations'
+  rightSidebar?: RightSidebarPanel
+}
+
 /**
  * Unified navigation state
  */
@@ -890,6 +895,7 @@ export type NavigationState =
   | SkillsNavigationState
   | AutomationsNavigationState
   | LedgerNavigationState
+  | ObservationsNavigationState
 
 export const isSessionsNavigation = (
   state: NavigationState
@@ -914,6 +920,10 @@ export const isAutomationsNavigation = (
 export const isLedgerNavigation = (
   state: NavigationState
 ): state is LedgerNavigationState => state.navigator === 'ledger'
+
+export const isObservationsNavigation = (
+  state: NavigationState
+): state is ObservationsNavigationState => state.navigator === 'observations'
 
 export const DEFAULT_NAVIGATION_STATE: NavigationState = {
   navigator: 'sessions',
@@ -945,6 +955,9 @@ export const getNavigationStateKey = (state: NavigationState): string => {
   }
   if (state.navigator === 'ledger') {
     return 'ledger'
+  }
+  if (state.navigator === 'observations') {
+    return 'observations'
   }
   // Chats
   const f = state.filter
@@ -989,6 +1002,10 @@ export const parseNavigationStateKey = (key: string): NavigationState | null => 
     }
     return { navigator: 'automations', details: null }
   }
+
+  // Handle ledger / observations (workspace- / session-wide views with no key params)
+  if (key === 'ledger') return { navigator: 'ledger' }
+  if (key === 'observations') return { navigator: 'observations' }
 
   // Handle settings
   if (key === 'settings') return { navigator: 'settings', subpage: 'app' }

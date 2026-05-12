@@ -20,11 +20,13 @@ import { Eye, Plus, Pin } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { AnchorChip } from './AnchorChip'
 import { AnchorPicker } from './AnchorPicker'
-import { ObservationsViewer } from './ObservationsViewer'
 import { EpisodesViewer } from './EpisodesViewer'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { useSessionAnchors } from '@/hooks/useSessionAnchors'
 import { useObservationStatus } from '@/hooks/useObservationStatus'
+import { useSetAtom } from 'jotai'
+import { pushPanelAtom, observationsSessionDirAtom } from '@/atoms/panel-stack'
+import { routes } from '@/contexts/NavigationContext'
 
 export interface SessionAnchorBarProps {
   sessionId: string | null | undefined
@@ -40,8 +42,9 @@ export function SessionAnchorBar({ sessionId, workingDir, sessionDir, addLabelKe
   const { t } = useTranslation()
   const [pickerOpen, setPickerOpen] = React.useState(false)
   const [observerOpen, setObserverOpen] = React.useState(false)
-  const [viewerOpen, setViewerOpen] = React.useState(false)
   const [episodesOpen, setEpisodesOpen] = React.useState(false)
+  const pushPanel = useSetAtom(pushPanelAtom)
+  const setObservationsSessionDir = useSetAtom(observationsSessionDirAtom)
   const [runningObserver, setRunningObserver] = React.useState(false)
   const [runResult, setRunResult] = React.useState<{ ok: boolean; message: string } | null>(null)
   const { anchors, add, remove } = useSessionAnchors(sessionId)
@@ -252,9 +255,11 @@ export function SessionAnchorBar({ sessionId, workingDir, sessionDir, addLabelKe
                     type="button"
                     onClick={() => {
                       setObserverOpen(false)
-                      setViewerOpen(true)
+                      setObservationsSessionDir(sessionDir ?? null)
+                      pushPanel({ route: routes.view.observations() })
                     }}
                     className="w-full text-left text-xs text-foreground hover:text-foreground/80 hover:bg-foreground/5 rounded px-2 py-1.5 transition-colors"
+                    title="Open in split view — readable space for long bullets and excerpts"
                   >
                     View observations →
                   </button>
@@ -299,12 +304,6 @@ export function SessionAnchorBar({ sessionId, workingDir, sessionDir, addLabelKe
         workingDir={workingDir}
         existing={anchors}
         onSelect={(anchor) => void add(anchor)}
-      />
-
-      <ObservationsViewer
-        open={viewerOpen}
-        onOpenChange={setViewerOpen}
-        sessionDir={sessionDir}
       />
 
       <EpisodesViewer
