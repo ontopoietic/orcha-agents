@@ -8,7 +8,7 @@
  * Pattern follows ledger-watcher.ts: directory watch + debounce.
  */
 
-import { watch, readFileSync, existsSync } from 'fs'
+import { watch, readFileSync, existsSync, statSync } from 'fs'
 import type { FSWatcher } from 'fs'
 import { join } from 'path'
 import type { ObservationSignal } from '@craft-agent/shared/sessions'
@@ -455,14 +455,19 @@ function readObservationsFromMarkdown(sessionDir: string): ObservationSignal[] |
   }
 
   const result: ObservationSignal[] = []
-  let counter = 0
-  for (const bullet of bullets) {
+  // Stable IDs: use anchor + bullet index so React keys don't churn across
+  // re-fetches. Without this, the ObservationCard remounts on every refresh
+  // and 'expanded' state resets — making "Show more" appear broken.
+  const seenAnchorCounts = new Map<string, number>()
+  for (let i = 0; i < bullets.length; i++) {
+    const bullet = bullets[i]!
+    const anchor = bullet.anchorShortId ?? 'md'
+    const dupIdx = seenAnchorCounts.get(anchor) ?? 0
+    seenAnchorCounts.set(anchor, dupIdx + 1)
     const evidence = bullet.anchorShortId ? sidecar[bullet.anchorShortId] : undefined
     const createdAt = evidence?.createdAt ?? deriveCreatedAt(bullet)
     result.push({
-      id: bullet.anchorShortId
-        ? `obs-${bullet.anchorShortId}-${counter++}`
-        : `obs-md-${counter++}`,
+      id: `obs-${anchor}${dupIdx > 0 ? `-${dupIdx}` : ''}`,
       createdAt,
       source: 'conversation',
       summary: bullet.summary,
@@ -497,15 +502,32 @@ function deriveCreatedAt(bullet: ParsedBullet): string {
  * Read all observations for a session. Returns [] if the file does not
  * exist or is malformed (best-effort — the UI should still render).
  *
- * Prefers the canonical Markdown ledger (post Plan A); falls back to the
- * legacy observations.json when the Markdown file is absent.
+ * Source resolution:
+ *  1. If observations.md is the newest of the two, use it (canonical post Plan A path).
+ *  2. If observations.json is newer (e.g. the Reflector just ran but hasn't
+ *     been migrated to write Markdown yet), use it. Keeps the UI in sync
+ *     with Reflector output until Plan C lands.
+ *  3. Otherwise: whichever one exists.
  */
 export function readObservationsList(sessionDir: string): ObservationSignal[] {
-  const fromMarkdown = readObservationsFromMarkdown(sessionDir)
-  if (fromMarkdown && fromMarkdown.length > 0) return fromMarkdown
+  const mdPath = join(sessionDir, 'data', 'observations.md')
+  const jsonPath = join(sessionDir, 'data', 'observations.json')
+  const mdMtime = existsSync(mdPath) ? statSync(mdPath).mtimeMs : 0
+  const jsonMtime = existsSync(jsonPath) ? statSync(jsonPath).mtimeMs : 0
 
-  const filePath = join(sessionDir, 'data', 'observations.json')
-  if (!existsSync(filePath)) return fromMarkdown ?? []
+  // If JSON is newer than MD by more than 1s, prefer JSON. The 1s tolerance
+  // accounts for the dual-write in writeSignalsToLedger writing both files
+  // in quick succession.
+  const preferJson = jsonMtime > mdMtime + 1000
+
+  if (!preferJson) {
+    const fromMarkdown = readObservationsFromMarkdown(sessionDir)
+    if (fromMarkdown && fromMarkdown.length > 0) return fromMarkdown
+  }
+
+  if (!existsSync(jsonPath)) return readObservationsFromMarkdown(sessionDir) ?? []
+
+  const filePath = jsonPath
 
   try {
     const raw = JSON.parse(readFileSync(filePath, 'utf-8'))

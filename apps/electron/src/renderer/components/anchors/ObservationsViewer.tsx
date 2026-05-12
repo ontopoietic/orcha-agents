@@ -63,8 +63,8 @@ function stripPrefix(summary: string): string {
 }
 
 /** Visible-line cap before a "Show more" toggle is rendered. */
-const SUMMARY_CLAMP_CHARS = 200
-const EXCERPT_CLAMP_CHARS = 240
+const SUMMARY_CLAMP_CHARS = 120
+const EXCERPT_CLAMP_CHARS = 160
 
 function ObservationCard({ obs }: { obs: ObservationSignal }) {
   const salience = normalizeSalience(obs.salience)
