@@ -225,7 +225,7 @@ export function ObservationsViewer({ open, onOpenChange, sessionDir }: Observati
         </div>
 
         <div className="flex items-center justify-between pt-2 border-t border-border text-xs text-foreground/65">
-          <span>Source: <code className="text-foreground/70">data/observations.json</code></span>
+          <span>Source: <code className="text-foreground/70">data/observations.md</code> (with sidecar)</span>
           <button
             type="button"
             onClick={() => void refresh()}

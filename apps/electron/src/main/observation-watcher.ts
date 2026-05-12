@@ -12,6 +12,10 @@ import { watch, readFileSync, existsSync } from 'fs'
 import type { FSWatcher } from 'fs'
 import { join } from 'path'
 import type { ObservationSignal } from '@craft-agent/shared/sessions'
+import {
+  parseObservationsMarkdown,
+  type ParsedBullet,
+} from '@craft-agent/shared/sessions/observation-markdown-parser'
 import { getLlmConnections } from '@craft-agent/shared/config/storage'
 import { getValidClaudeOAuthToken } from '@craft-agent/shared/auth/state'
 
@@ -398,13 +402,95 @@ export async function runReflectorNow(
   })
 }
 
+interface EvidenceEntry {
+  fullMessageId?: string
+  messageRangeTo?: string
+  excerpt?: string
+  actor?: 'user' | 'agent'
+  createdAt?: string
+  anchorRefs?: unknown[]
+}
+
+/**
+ * Synthesize ObservationSignal records from a Markdown bullet ledger and
+ * its evidence sidecar. Bullets without a sidecar entry still render — the
+ * Markdown is the source of truth; the sidecar just enriches them.
+ */
+function readObservationsFromMarkdown(sessionDir: string): ObservationSignal[] | null {
+  const mdPath = join(sessionDir, 'data', 'observations.md')
+  if (!existsSync(mdPath)) return null
+  const sidecarPath = join(sessionDir, 'data', 'observations-evidence.json')
+
+  let bullets: ParsedBullet[] | null
+  try {
+    bullets = parseObservationsMarkdown(readFileSync(mdPath, 'utf-8'))
+  } catch {
+    return null
+  }
+  if (!bullets) return null
+
+  let sidecar: Record<string, EvidenceEntry> = {}
+  if (existsSync(sidecarPath)) {
+    try {
+      const raw = JSON.parse(readFileSync(sidecarPath, 'utf-8'))
+      if (raw && typeof raw === 'object') sidecar = raw as Record<string, EvidenceEntry>
+    } catch {
+      sidecar = {}
+    }
+  }
+
+  const result: ObservationSignal[] = []
+  let counter = 0
+  for (const bullet of bullets) {
+    const evidence = bullet.anchorShortId ? sidecar[bullet.anchorShortId] : undefined
+    const createdAt = evidence?.createdAt ?? deriveCreatedAt(bullet)
+    result.push({
+      id: bullet.anchorShortId
+        ? `obs-${bullet.anchorShortId}-${counter++}`
+        : `obs-md-${counter++}`,
+      createdAt,
+      source: 'conversation',
+      summary: bullet.summary,
+      status: 'raw',
+      salience: bullet.salience,
+      anchorRefs: evidence?.anchorRefs as ObservationSignal['anchorRefs'],
+      conversation: {
+        sessionId: '',
+        messageRange: {
+          from: evidence?.fullMessageId ?? '',
+          to: evidence?.messageRangeTo ?? evidence?.fullMessageId ?? '',
+        },
+        excerpt: evidence?.excerpt ?? '',
+        actor: evidence?.actor ?? 'agent',
+      },
+    })
+  }
+  return result
+}
+
+/** Compose an ISO timestamp from a parsed bullet's date + time if possible. */
+function deriveCreatedAt(bullet: ParsedBullet): string {
+  if (bullet.date && bullet.time) {
+    const iso = `${bullet.date}T${bullet.time}:00`
+    const d = new Date(iso)
+    if (!Number.isNaN(d.getTime())) return d.toISOString()
+  }
+  return new Date().toISOString()
+}
+
 /**
  * Read all observations for a session. Returns [] if the file does not
  * exist or is malformed (best-effort — the UI should still render).
+ *
+ * Prefers the canonical Markdown ledger (post Plan A); falls back to the
+ * legacy observations.json when the Markdown file is absent.
  */
 export function readObservationsList(sessionDir: string): ObservationSignal[] {
+  const fromMarkdown = readObservationsFromMarkdown(sessionDir)
+  if (fromMarkdown && fromMarkdown.length > 0) return fromMarkdown
+
   const filePath = join(sessionDir, 'data', 'observations.json')
-  if (!existsSync(filePath)) return []
+  if (!existsSync(filePath)) return fromMarkdown ?? []
 
   try {
     const raw = JSON.parse(readFileSync(filePath, 'utf-8'))

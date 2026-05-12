@@ -297,6 +297,38 @@ Do NOT guess. Wrong anchors are worse than no anchors. If the user is just explo
   }
 
   /**
+   * Strip anchor short-IDs (` {abcdef}` suffix) from the canonical Markdown
+   * ledger before injecting into the system prompt. The main model doesn't
+   * need them — the Sidecar (observations-evidence.json) is the source of
+   * truth for UI back-links and echo-detection.
+   *
+   * Also caps total chars at MAX_OBSERVATIONS_CHARS — older date groups
+   * drop off the bottom first (we keep newest-first ordering from the
+   * Markdown file itself).
+   */
+  private formatMarkdownForInjection(md: string): { body: string; bulletCount: number } {
+    const maxChars = PromptBuilder.MAX_OBSERVATIONS_CHARS;
+    const stripped: string[] = [];
+    let totalChars = 0;
+    let bulletCount = 0;
+    let truncated = false;
+    for (const rawLine of md.split(/\r?\n/)) {
+      if (truncated) break;
+      // Strip trailing ` {anchor}` from bullet lines only; leave date headers alone.
+      const line = rawLine.replace(/\s\{[a-z0-9]+\}\s*$/, '');
+      if (line.startsWith('- ')) bulletCount++;
+      if (totalChars + line.length + 1 > maxChars) {
+        truncated = true;
+        stripped.push('  ... (truncated)');
+        break;
+      }
+      stripped.push(line);
+      totalChars += line.length + 1;
+    }
+    return { body: stripped.join('\n').trimEnd(), bulletCount };
+  }
+
+  /**
    * Read the session's anchors from the JSONL header. Returns empty array
    * if the file does not exist or is malformed. Used by the anchor-filter
    * in `getSessionObservations`.
@@ -362,10 +394,13 @@ Do NOT guess. Wrong anchors are worse than no anchors. If the user is just explo
    */
   getSessionObservations(sessionId: string): string | null {
     const sessionDir = getSessionPath(this.workspaceRootPath, sessionId);
+    const markdownPath = join(sessionDir, 'data', 'observations.md');
     const observationsPath = join(sessionDir, 'data', 'observations.json');
     const jsonlPath = join(sessionDir, 'session.jsonl');
 
-    if (!existsSync(observationsPath)) return null;
+    const hasMarkdown = existsSync(markdownPath);
+    const hasJson = existsSync(observationsPath);
+    if (!hasMarkdown && !hasJson) return null;
 
     // Length gate — short conversations don't need observation injection
     const lineCount = this.countJsonlLines(jsonlPath);
@@ -373,6 +408,28 @@ Do NOT guess. Wrong anchors are worse than no anchors. If the user is just explo
       log.debug(`[getSessionObservations] Below length threshold (${lineCount} < ${PromptBuilder.MIN_LINES_BEFORE_INJECTION}), skipping injection`);
       return null;
     }
+
+    // Primary path (post Plan A): canonical Markdown ledger. Anchors are
+    // stripped before injection — the main model doesn't need them, the
+    // sidecar carries the data the UI uses.
+    if (hasMarkdown) {
+      try {
+        const md = readFileSync(markdownPath, 'utf-8');
+        const stripped = this.formatMarkdownForInjection(md);
+        if (!stripped.body) return null;
+        const header = '<session_memory>';
+        const footer = '</session_memory>';
+        const intro = 'Structured observations from past conversation turns. These persist across compaction — the agent does NOT need to re-derive them.';
+        const stats = `${stripped.bulletCount} observations`;
+        log.debug(`[getSessionObservations] Injecting Markdown ledger (${stripped.bulletCount} bullets) for session ${sessionId}`);
+        return `${header}\n${intro}\n\n${stripped.body}\n\n${stats}\n${footer}`;
+      } catch (err) {
+        log.debug('[getSessionObservations] Failed to read observations.md, falling back to JSON:', err);
+        // fall through to JSON path
+      }
+    }
+
+    if (!hasJson) return null;
 
     try {
       const raw = readFileSync(observationsPath, 'utf-8');

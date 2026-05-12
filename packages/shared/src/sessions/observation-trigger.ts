@@ -156,10 +156,15 @@ function spawnObserver(sessionDir: string, sessionId: string): void {
 
   child.on('close', (code) => {
     state.inFlight = false;
+    // Slice generously — when the LLM path falls back to pattern matching
+    // the diagnostic 'Sample: ...' or exception stack lives past 200 chars.
     if (code === 0) {
-      log.debug(`Observer (token-trigger) ran for ${sessionId}: ${stdout.trim().slice(0, 200)}`);
+      log.debug(`Observer (token-trigger) ran for ${sessionId}: ${stdout.trim().slice(0, 800)}`);
+      if (stderr.trim().length > 0) {
+        log.debug(`Observer (token-trigger) stderr for ${sessionId}: ${stderr.trim().slice(0, 800)}`);
+      }
     } else {
-      log.debug(`Observer (token-trigger) failed for ${sessionId} (code ${code}): ${stderr.trim().slice(0, 200) || stdout.trim().slice(0, 200)}`);
+      log.debug(`Observer (token-trigger) failed for ${sessionId} (code ${code}): stderr=${stderr.trim().slice(0, 800)} stdout=${stdout.trim().slice(0, 400)}`);
     }
   });
 

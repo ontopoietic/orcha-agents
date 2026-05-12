@@ -30,6 +30,10 @@ import {
   type ObservableMessage,
   type ObservationWatermark,
 } from '../packages/shared/src/sessions/observation-watermark.ts';
+import {
+  parseObservationsMarkdown as parseMdBullets,
+  resolveAnchorShortId,
+} from '../packages/shared/src/sessions/observation-markdown-parser.ts';
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 
@@ -262,22 +266,27 @@ function findClaudeBinary(): string | null {
 /**
  * Build the Mastra-style observer prompt. Discipline lines distilled from
  * Mastra's reference implementation — they materially affect quality.
+ *
+ * Output format: Markdown bullets (NOT JSON). See
+ * packages/shared/src/sessions/observation-format.md for the canonical spec.
+ * Spike measurements (sessions/260511-swift-otter/data/spike-report.md)
+ * showed ~70 % token reduction vs. JSON output at parity quality.
  */
 function buildObserverSystemPrompt(): string {
-  return `You are an Observational Memory writer. Your job: read a slice of an ongoing conversation and emit a JSON list of structured observations that future turns of the assistant will read INSTEAD OF the raw messages.
+  return `You are an Observational Memory writer. Read a slice of an ongoing conversation and emit a Markdown bullet list of observations. Future turns of the assistant will read THIS list INSTEAD OF the raw messages.
 
 Discipline (MUST follow):
-1. CRITICAL: USER ASSERTIONS TAKE PRECEDENCE over user questions. If a user states a fact, decision, or constraint, that is a "pivotal" observation. If the user merely asks something, that is a "question".
-2. Distinguish assertions from questions. "Use feature branches" is pivotal. "Should we use feature branches?" is a question.
+1. CRITICAL: USER ASSERTIONS TAKE PRECEDENCE over user questions. If a user states a fact, decision, or constraint, that is a 🔴 pivotal observation. If the user merely asks something, that is a 🟡 question.
+2. Distinguish assertions from questions. "Use feature branches" is 🔴. "Should we use feature branches?" is 🟡.
 3. Represent state changes as overrides, not appends. If a user switches from option A to option B, write the new state, not the history.
 4. Use precise verbs. "Subscribed to channel X" beats "got channel X".
 5. Split multiple events into separate observations.
-6. Time-anchor every observation: include a short bracketed reference like [user, msg-abc] so later turns can locate the source.
+6. Anchor every observation: append \` {shortId}\` where shortId is the last 6 chars of the source msg-ID (e.g. msg-1778338128969-u5luxw → {u5luxw}).
 7. Do not invent facts. If a turn is ambiguous, skip it rather than guess.
 8. Salience taxonomy:
-   - "pivotal" 🔴: user assertions, decisions, constraints, corrections, schema/architecture choices
-   - "question" 🟡: open questions awaiting answers
-   - "context" 🟢: ambient state, completed steps, references — useful but not load-bearing
+   - 🔴 pivotal: user assertions, decisions, constraints, corrections, schema/architecture choices
+   - 🟡 question: open questions awaiting answers
+   - 🟢 context: ambient state, completed steps, references — useful but not load-bearing
 
 ABSOLUTE RULE — DO NOT ECHO:
 The summary is NOT the message. It is a *fact extracted from* the message,
@@ -285,42 +294,47 @@ written from the outside, in the third person. NEVER paraphrase by reordering;
 NEVER copy a sentence from the conversation as the summary; NEVER include
 "the user said X" boilerplate — write the resulting state.
 
-Hard target: summary ≤ 140 characters. Excerpt is the verbatim slice — that
-is where the original wording lives. The summary must be DIFFERENT prose.
-
-Examples:
-
-  BAD (echo):
-    summary: "The fix worked. Now the next thing: some edges reference back
-              to previous nodes. These edges are still curved and run behind
-              other nodes. They should go around the outside…"
-
-  GOOD (extracted fact):
-    summary: "Backward edges still route through other nodes; user wants
-              outside routing"
-
-  BAD (echo):
-    summary: "Should we use Cloudflare D1 or Turso?"
-  GOOD:
-    summary: "Open question: D1 vs. Turso for the database"
-
-  BAD (echo):
-    summary: "Lass uns am Modul-System weitermachen"
-  GOOD:
-    summary: "Focus shifted to Modul-System feature"
+Hard target: summary text ≤ 140 characters (the part between the time and
+the anchor). The original wording lives in the source — your job is to
+extract the FACT, in different prose.
 
 If you cannot produce a summary that is genuinely shorter and reformulated
 from the source, SKIP that turn — emitting an echo is worse than no entry.
 
-Output: a JSON object { "observations": Observation[] } where Observation = {
-  summary: string,                           // ≤ 140 chars, third-person fact
-  salience: "pivotal" | "question" | "context",
-  actor: "user" | "agent",
-  messageRange: { from: string, to: string }, // message IDs from the input
-  excerpt: string                            // ~120 chars verbatim from the source message
-}.
+Examples:
 
-Return ONLY valid JSON. No prose around it.`;
+  BAD (echo):
+    - 🟡 14:30 The fix worked. Now the next thing: some edges reference back to previous nodes. These edges are still curved... {abc123}
+  GOOD (extracted fact):
+    - 🔴 14:30 Backward edges still route through other nodes; user wants outside routing {abc123}
+
+  BAD (echo):
+    - 🟡 14:30 Should we use Cloudflare D1 or Turso? {def456}
+  GOOD:
+    - 🟡 14:30 Open question: D1 vs. Turso for the database {def456}
+
+  BAD (echo):
+    - 🔴 14:30 Lass uns am Modul-System weitermachen {ghi789}
+  GOOD:
+    - 🔴 14:30 Focus shifted to Modul-System feature {ghi789}
+
+OUTPUT FORMAT (strict):
+
+Group observations by date with a \`# YYYY-MM-DD\` header. Within each date,
+emit one bullet per observation. Optional sub-bullet (2-space indent, no
+emoji, no time, no anchor) only if a detail semantically belongs to the
+parent bullet.
+
+Example output:
+
+# 2026-05-09
+- 🔴 14:49 User chose Rahmen-Graph as next work item over three alternatives {u5luxw}
+- 🔴 14:49 Architecture change: tradeoffs no longer resolved decontextualized {u5luxw}
+  - Resolution now only indirect via contextualized options
+- 🟡 15:10 Open question: glow animation uniform or per-tradeoff-tension? {aaa001}
+- 🔴 15:12 User answered: per-tradeoff, derived from tension magnitude {bbb002}
+
+Return ONLY the Markdown bullet list. No code fences, no prose around it, no JSON.`;
 }
 
 function buildObserverUserPrompt(messages: ObservableMessage[]): string {
@@ -447,6 +461,47 @@ function isEcho(summary: string, excerpt: string): boolean {
   return e.startsWith(head) || s.startsWith(e.slice(0, 50));
 }
 
+/**
+ * Parse the LLM's Markdown bullet output into Observation records.
+ *
+ * Resolves each bullet's anchor against the slice's source messages to fill
+ * in messageRange + excerpt + actor. Bullets without a resolvable anchor are
+ * skipped (logged) — we'd otherwise emit observations the UI can't link
+ * back to anything. Echo-detected bullets are dropped.
+ */
+function parseObservationsMarkdown(
+  raw: string,
+  sliceMessages: ObservableMessage[],
+): Observation[] | null {
+  const bullets = parseMdBullets(raw);
+  if (!bullets) return null;
+
+  const result: Observation[] = [];
+  for (const bullet of bullets) {
+    const msg = bullet.anchorShortId
+      ? resolveAnchorShortId(bullet.anchorShortId, sliceMessages)
+      : null;
+    if (!msg) {
+      console.warn(
+        `Observer: bullet anchor '${bullet.anchorShortId ?? '<missing>'}' did not match any source message — skipping: ${bullet.summary.slice(0, 80)}`,
+      );
+      continue;
+    }
+    const excerpt = msg.content.replace(/\s+/g, ' ').trim().slice(0, 200);
+    if (isEcho(bullet.summary, excerpt)) continue;
+
+    const actor: 'user' | 'agent' = msg.type === 'user' ? 'user' : 'agent';
+    result.push({
+      summary: bullet.summary,
+      salience: bullet.salience,
+      actor,
+      messageRange: { from: msg.id, to: msg.id },
+      excerpt,
+    });
+  }
+  return result;
+}
+
 function parseObservationsJson(raw: string): Observation[] | null {
   // The model sometimes wraps JSON in code fences; strip them defensively.
   let text = raw.trim();
@@ -504,16 +559,29 @@ async function extractObservationsViaLlm(messages: ObservableMessage[]): Promise
       console.warn('Observer: Empty LLM response, falling back to pattern matching.');
       return extractObservations(messages);
     }
-    const parsed = parseObservationsJson(raw);
+    // Primary path: Markdown bullet format (post-Plan-A). Defensive fallback
+    // to legacy JSON parser in case a custom ORCHA_OBSERVER_MODEL still
+    // returns JSON, or to ease rollback. Both null = pattern matching.
+    let parsed = parseObservationsMarkdown(raw, dialogue);
+    let parserUsed: 'markdown' | 'json' = 'markdown';
     if (!parsed) {
-      console.warn('Observer: Could not parse LLM JSON output, falling back to pattern matching.');
+      parsed = parseObservationsJson(raw);
+      parserUsed = 'json';
+    }
+    if (!parsed) {
+      // Dump the first 400 chars of the LLM output to stdout so the trigger
+      // log captures *what* the model returned. Without this, a pattern
+      // fallback in production tells us nothing about why the LLM path failed.
+      const sample = raw.replace(/\s+/g, ' ').trim().slice(0, 400);
+      console.warn(`Observer: Could not parse LLM output (neither Markdown nor JSON), falling back to pattern matching. Sample: ${sample}`);
       return extractObservations(messages);
     }
-    console.log(`Observer: LLM extracted ${parsed.length} observations from ${dialogue.length} messages (mode=${extractor.kind}, model=${extractor.model}).`);
+    console.log(`Observer: LLM extracted ${parsed.length} observations from ${dialogue.length} messages (parser=${parserUsed}, mode=${extractor.kind}, model=${extractor.model}).`);
     return parsed;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.warn(`Observer: LLM call threw, falling back to pattern matching: ${msg}`);
+    const stack = err instanceof Error && err.stack ? err.stack.split('\n').slice(0, 3).join(' | ') : '';
+    console.warn(`Observer: LLM call threw (mode=${extractor.kind}, model=${extractor.model}), falling back to pattern matching: ${msg} ${stack}`);
     return extractObservations(messages);
   }
 }
@@ -617,11 +685,15 @@ function extractObservations(messages: ObservableMessage[]): Observation[] {
     }
   }
 
-  // Deduplicate: keep max 1 observation per message
+  // Deduplicate: keep max 1 observation per message, drop echoes.
+  // Pattern fallback compresses raw text rather than extracting facts, so
+  // echo-detection catches the obvious "summary is a slice of the excerpt"
+  // case the LLM path also guards against.
   const seen = new Set<string>();
   return observations.filter(obs => {
     const key = obs.messageRange.from;
     if (seen.has(key)) return false;
+    if (isEcho(obs.summary, obs.excerpt)) return false;
     seen.add(key);
     return true;
   });
@@ -631,26 +703,38 @@ function extractObservations(messages: ObservableMessage[]): Observation[] {
 // Summarizers
 // ============================================================================
 
-function summarizePivotal(text: string): string {
-  const cleaned = text.replace(/\n+/g, ' ').trim();
-  const prefix = '🔴 USER STATED: ';
-  if (cleaned.length <= 180) return prefix + cleaned;
-  return prefix + cleaned.substring(0, 177) + '...';
+/**
+ * Sanitize a raw message into a cleaner one-line summary for the pattern
+ * fallback. The pattern path can't actually *extract a fact* — it can only
+ * compress. So we strip Markdown noise (links, code fences, headings) and
+ * hard-cap at 140 chars to match the new format spec. The salience-emoji
+ * prefix is NO LONGER prepended here — the renderer adds it at write time.
+ */
+function cleanSummary(text: string): string {
+  let s = text;
+  // Drop fenced code blocks entirely — they're never the load-bearing fact.
+  s = s.replace(/```[\s\S]*?```/g, ' ');
+  // Markdown links → just the label.
+  s = s.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1');
+  // Drop inline code backticks (keep content).
+  s = s.replace(/`([^`]+)`/g, '$1');
+  // Drop Markdown headings + emphasis markers.
+  s = s.replace(/^#+\s*/gm, '').replace(/\*\*([^*]+)\*\*/g, '$1').replace(/\*([^*]+)\*/g, '$1');
+  // Strip the legacy '🔴 USER STATED: ' / '🟡 USER ASKED:' / '🟢 OBSERVED:' presets
+  // in case they survived from older summaries fed back through.
+  s = s.replace(/^[🔴🟡🟢]\s*(USER (STATED|ASKED)|OBSERVED|AGENT NOTED):\s*/u, '');
+  // Collapse whitespace.
+  s = s.replace(/\s+/g, ' ').trim();
+  // Hard cap matching the new format spec.
+  if (s.length <= 140) return s;
+  return s.slice(0, 137).trimEnd() + '…';
 }
 
-function summarizeQuestion(text: string): string {
-  const cleaned = text.replace(/\n+/g, ' ').trim();
-  const prefix = '🟡 USER ASKED: ';
-  if (cleaned.length <= 180) return prefix + cleaned;
-  return prefix + cleaned.substring(0, 177) + '...';
-}
-
-function summarizeContext(text: string): string {
-  const cleaned = text.replace(/\n+/g, ' ').trim();
-  const prefix = '🟢 OBSERVED: ';
-  if (cleaned.length <= 180) return prefix + cleaned;
-  return prefix + cleaned.substring(0, 177) + '...';
-}
+// Kept as thin wrappers so existing call sites compile; all three now emit
+// the same shape — the bullet renderer adds the salience emoji.
+function summarizePivotal(text: string): string { return cleanSummary(text); }
+function summarizeQuestion(text: string): string { return cleanSummary(text); }
+function summarizeContext(text: string): string { return cleanSummary(text); }
 
 // ============================================================================
 // Ledger Integration
@@ -680,6 +764,159 @@ function findLedgerPath(sessionDir: string): string {
   return join(sessionDir, 'data', 'observations.json');
 }
 
+function findMarkdownLedgerPath(sessionDir: string): string {
+  return join(sessionDir, 'data', 'observations.md');
+}
+
+function findEvidenceSidecarPath(sessionDir: string): string {
+  return join(sessionDir, 'data', 'observations-evidence.json');
+}
+
+const SALIENCE_TO_EMOJI: Record<'pivotal' | 'question' | 'context', string> = {
+  pivotal: '🔴',
+  question: '🟡',
+  context: '🟢',
+};
+
+function shortIdFromMsgId(id: string): string {
+  if (!id) return '';
+  const parts = id.split('-');
+  const last = parts[parts.length - 1];
+  return last && last.length > 0 ? last : id.slice(-6);
+}
+
+function localDateAndTime(iso: string): { date: string; time: string } {
+  const d = new Date(iso);
+  const date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const time = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  return { date, time };
+}
+
+function renderBullet(obs: Observation, createdAt: string): string {
+  const { time } = localDateAndTime(createdAt);
+  const emoji = SALIENCE_TO_EMOJI[obs.salience];
+  const anchor = obs.messageRange?.from
+    ? ` {${shortIdFromMsgId(obs.messageRange.from)}}`
+    : '';
+  return `- ${emoji} ${time} ${obs.summary}${anchor}`;
+}
+
+interface MarkdownBulletEntry {
+  date: string;
+  line: string;
+}
+
+/**
+ * Parse an existing observations.md back into bullet+date entries so we
+ * can merge new observations into the right date groups. Preserves bullets
+ * verbatim (we don't re-format ones we didn't write).
+ */
+function parseExistingMarkdown(text: string): MarkdownBulletEntry[] {
+  const entries: MarkdownBulletEntry[] = [];
+  if (!text) return entries;
+  let currentDate: string | null = null;
+  for (const rawLine of text.split(/\r?\n/)) {
+    const dateMatch = /^# (\d{4}-\d{2}-\d{2})\s*$/.exec(rawLine);
+    if (dateMatch) {
+      currentDate = dateMatch[1] ?? null;
+      continue;
+    }
+    if (rawLine.startsWith('- ') || rawLine.startsWith('  - ')) {
+      if (currentDate) entries.push({ date: currentDate, line: rawLine });
+    }
+  }
+  return entries;
+}
+
+function renderMarkdownLedger(entries: MarkdownBulletEntry[]): string {
+  if (entries.length === 0) return '';
+  // Group by date, sort dates descending (newest first), preserve insertion
+  // order within each date.
+  const groups = new Map<string, string[]>();
+  for (const e of entries) {
+    const list = groups.get(e.date) ?? [];
+    list.push(e.line);
+    groups.set(e.date, list);
+  }
+  const sortedDates = [...groups.keys()].sort((a, b) => b.localeCompare(a));
+  const out: string[] = [];
+  for (const date of sortedDates) {
+    out.push(`# ${date}`);
+    for (const line of groups.get(date) ?? []) out.push(line);
+    out.push('');
+  }
+  return out.join('\n').trimEnd() + '\n';
+}
+
+interface EvidenceEntry {
+  fullMessageId: string;
+  messageRangeTo: string;
+  excerpt: string;
+  actor: 'user' | 'agent';
+  createdAt: string;
+  anchorRefs?: unknown[];
+}
+
+function writeMarkdownLedger(
+  sessionDir: string,
+  observations: Observation[],
+  createdAt: string,
+  anchors: unknown[],
+): void {
+  if (observations.length === 0) return;
+  const mdPath = findMarkdownLedgerPath(sessionDir);
+  const evidencePath = findEvidenceSidecarPath(sessionDir);
+  const dir = dirname(mdPath);
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+
+  // Build new bullet entries grouped by the observer-run timestamp (one
+  // observer call → one date group; finer-grained per-observation dates
+  // would require per-message timestamps we don't currently track here).
+  const { date: runDate } = localDateAndTime(createdAt);
+  const newEntries: MarkdownBulletEntry[] = observations.map((obs) => ({
+    date: runDate,
+    line: renderBullet(obs, createdAt),
+  }));
+
+  // Merge with existing
+  let existing: MarkdownBulletEntry[] = [];
+  if (existsSync(mdPath)) {
+    try {
+      existing = parseExistingMarkdown(readFileSync(mdPath, 'utf-8'));
+    } catch {
+      existing = [];
+    }
+  }
+  const merged = [...existing, ...newEntries];
+  writeFileSync(mdPath, renderMarkdownLedger(merged), 'utf-8');
+
+  // Sidecar: anchor → evidence
+  let sidecar: Record<string, EvidenceEntry> = {};
+  if (existsSync(evidencePath)) {
+    try {
+      const raw = readFileSync(evidencePath, 'utf-8');
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') sidecar = parsed as Record<string, EvidenceEntry>;
+    } catch {
+      sidecar = {};
+    }
+  }
+  for (const obs of observations) {
+    const fromId = obs.messageRange?.from;
+    if (!fromId) continue;
+    const shortId = shortIdFromMsgId(fromId);
+    sidecar[shortId] = {
+      fullMessageId: fromId,
+      messageRangeTo: obs.messageRange.to ?? fromId,
+      excerpt: obs.excerpt,
+      actor: obs.actor,
+      createdAt,
+      ...(anchors.length > 0 ? { anchorRefs: anchors } : {}),
+    };
+  }
+  writeFileSync(evidencePath, JSON.stringify(sidecar, null, 2) + '\n', 'utf-8');
+}
+
 function writeSignalsToLedger(
   ledgerPath: string,
   observations: Observation[],
@@ -704,10 +941,12 @@ function writeSignalsToLedger(
     }
   }
 
+  const runCreatedAt = new Date().toISOString();
+
   // Build new signals
   const newSignals: RawLedgerSignal[] = observations.map((obs, i) => ({
     id: `obs-${Date.now()}-${i}`,
-    createdAt: new Date().toISOString(),
+    createdAt: runCreatedAt,
     source: 'conversation',
     summary: obs.summary,
     status: 'raw',
@@ -721,9 +960,14 @@ function writeSignalsToLedger(
     },
   }));
 
-  // Write back
+  // Write back JSON ledger (defensive — kept as rollback path during Plan A
+  // rollout; the canonical store is observations.md + sidecar).
   const allSignals = [...existing, ...newSignals];
   writeFileSync(ledgerPath, JSON.stringify({ signals: allSignals }, null, 2) + '\n', 'utf-8');
+
+  // Canonical Markdown ledger + evidence sidecar (post Plan A).
+  const sessionDir = dirname(dir);
+  writeMarkdownLedger(sessionDir, observations, runCreatedAt, anchors);
 
   return newSignals.length;
 }
