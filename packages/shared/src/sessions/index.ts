@@ -145,6 +145,14 @@ export type {
   ObservableMessage,
   ObservationSignal,
 } from './observation-watermark.ts';
+
+// Observation loader (MD canonical + JSON fallback)
+export type { ObservationIdStrategy } from './observation-loader.ts';
+export {
+  loadObservationSignals,
+  loadObservationSignalsFromMarkdown,
+  loadObservationSignalsFromJson,
+} from './observation-loader.ts';
 export {
   readWatermark,
   writeWatermark,

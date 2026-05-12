@@ -31,6 +31,8 @@ import {
   type EpisodeOutcome,
 } from '../packages/shared/src/sessions/episode.ts';
 import { extractArtifactsFromMessages } from '../packages/shared/src/sessions/episode-extractors.ts';
+import { loadObservationSignals } from '../packages/shared/src/sessions/observation-loader.ts';
+import type { ObservationSignal } from '../packages/shared/src/sessions/observation-watermark.ts';
 
 // ============================================================================
 // CLI
@@ -111,26 +113,10 @@ function readSession(): { header: SessionHeader; messages: JsonlMessage[] } {
   return { header, messages };
 }
 
-interface ObservationSignal {
-  id: string;
-  createdAt: string;
-  summary: string;
-  salience?: string;
-  conversation?: {
-    messageRange?: { from?: string; to?: string };
-  };
-}
-
 function readObservations(): ObservationSignal[] {
-  const path = join(sessionDir!, 'data', 'observations.json');
-  if (!existsSync(path)) return [];
-  try {
-    const raw = JSON.parse(readFileSync(path, 'utf-8'));
-    const arr = Array.isArray(raw) ? raw : raw.signals;
-    return Array.isArray(arr) ? arr as ObservationSignal[] : [];
-  } catch {
-    return [];
-  }
+  // Canonical post Plan A/C: read from observations.md + evidence sidecar.
+  // Falls back to legacy observations.json for un-migrated sessions.
+  return loadObservationSignals(sessionDir!);
 }
 
 // ============================================================================

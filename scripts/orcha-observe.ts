@@ -180,12 +180,14 @@ async function runObservation(expandedDir: string, jsonlPath: string): Promise<v
   const sessionId = header?.id || 'unknown';
   const anchors = header?.anchors || [];
 
-  // 5. Write signals to ledger (skipped automatically if empty by writeMarkdownLedger)
+  // 5. Write signals to canonical Markdown ledger + evidence sidecar
   let signalCount = 0;
-  let ledgerPath: string | null = null;
+  let mdLedgerPath: string | null = null;
   if (observations.length > 0) {
-    ledgerPath = findLedgerPath(expandedDir);
-    signalCount = writeSignalsToLedger(ledgerPath, observations, sessionId, anchors, messages);
+    const runCreatedAt = new Date().toISOString();
+    writeMarkdownLedger(expandedDir, observations, runCreatedAt, anchors);
+    mdLedgerPath = findMarkdownLedgerPath(expandedDir);
+    signalCount = observations.length;
   } else {
     console.log('Observer: No extractable observations found — advancing watermark anyway to avoid reprocessing.');
   }
@@ -220,7 +222,7 @@ async function runObservation(expandedDir: string, jsonlPath: string): Promise<v
     `Observer: Extracted ${signalCount} signals from ${messages.length} messages.\n` +
     `  🔴 ${pivotal} pivotal | 🟡 ${question} questions | 🟢 ${context} context\n` +
     `  Watermark: ${lastMessage.id.substring(0, 30)}...\n` +
-    `  Ledger: ${ledgerPath ?? '(none)'}`
+    `  Ledger: ${mdLedgerPath ?? '(none)'}`
   );
 }
 
@@ -592,40 +594,6 @@ function parseObservationsMarkdown(
   return result;
 }
 
-function parseObservationsJson(raw: string): Observation[] | null {
-  // The model sometimes wraps JSON in code fences; strip them defensively.
-  let text = raw.trim();
-  if (text.startsWith('```')) {
-    text = text.replace(/^```[a-zA-Z]*\n?/, '').replace(/```$/, '').trim();
-  }
-  try {
-    const parsed = JSON.parse(text) as { observations?: unknown };
-    const arr = parsed.observations;
-    if (!Array.isArray(arr)) return null;
-    const result: Observation[] = [];
-    for (const entry of arr) {
-      if (!entry || typeof entry !== 'object') continue;
-      const o = entry as Record<string, unknown>;
-      const summary = typeof o.summary === 'string' ? o.summary : null;
-      const salience = o.salience === 'pivotal' || o.salience === 'question' || o.salience === 'context' ? o.salience : null;
-      const actor = o.actor === 'user' || o.actor === 'agent' ? o.actor : null;
-      const range = o.messageRange as Record<string, unknown> | undefined;
-      const from = range && typeof range.from === 'string' ? range.from : null;
-      const to = range && typeof range.to === 'string' ? range.to : null;
-      const excerpt = typeof o.excerpt === 'string' ? o.excerpt : '';
-      if (!summary || !salience || !actor || !from || !to) continue;
-      // Drop echoes — summary that mirrors the excerpt is not an
-      // observation, it's a quote. The viewer flags surviving echoes
-      // visually but we shouldn't waste storage on the obvious ones.
-      if (isEcho(summary, excerpt)) continue;
-      result.push({ summary, salience, actor, messageRange: { from, to }, excerpt });
-    }
-    return result;
-  } catch {
-    return null;
-  }
-}
-
 /**
  * Extract observations using an LLM. Falls back to pattern matching if no
  * credentials are configured or the call fails — keeps the observer running
@@ -649,21 +617,13 @@ async function extractObservationsViaLlm(messages: ObservableMessage[]): Promise
       console.warn('Observer: Empty LLM response, falling back to pattern matching.');
       return extractObservations(messages);
     }
-    // Primary path: Markdown bullet format (post-Plan-A). Defensive fallback
-    // to legacy JSON parser in case a custom ORCHA_OBSERVER_MODEL still
-    // returns JSON, or to ease rollback. Both null = pattern matching.
-    let parsed = parseObservationsMarkdown(raw, dialogue);
-    let parserUsed: 'markdown' | 'json' = 'markdown';
+    // Canonical path post Plan A/C: Markdown bullets. JSON output is no
+    // longer accepted — if the LLM returns JSON, we surface that loudly and
+    // fall back to pattern matching so the failure is visible upstream.
+    const parsed = parseObservationsMarkdown(raw, dialogue);
     if (!parsed) {
-      parsed = parseObservationsJson(raw);
-      parserUsed = 'json';
-    }
-    if (!parsed) {
-      // Dump the first 400 chars of the LLM output to stdout so the trigger
-      // log captures *what* the model returned. Without this, a pattern
-      // fallback in production tells us nothing about why the LLM path failed.
       const sample = raw.replace(/\s+/g, ' ').trim().slice(0, 400);
-      console.warn(`Observer: Could not parse LLM output (neither Markdown nor JSON), falling back to pattern matching. Sample: ${sample}`);
+      console.warn(`Observer: LLM output is not parseable Markdown bullets, falling back to pattern matching. Sample: ${sample}`);
       return extractObservations(messages);
     }
     if (parsed.length === 0) {
@@ -676,12 +636,12 @@ async function extractObservationsViaLlm(messages: ObservableMessage[]): Promise
       const sample = raw.replace(/\s+/g, ' ').trim().slice(0, 600);
       const availableAnchors = dialogue.slice(-20).map(m => m.id.slice(-6)).join(',');
       console.warn(
-        `Observer: Parser produced 0 records despite raw output (parser=${parserUsed}). ` +
+        `Observer: Parser produced 0 records despite raw output. ` +
         `Raw sample (600 chars): ${sample}\n` +
         `  Last 20 available anchors (tail of msg-IDs): ${availableAnchors}`,
       );
     }
-    console.log(`Observer: LLM extracted ${parsed.length} observations from ${dialogue.length} messages (parser=${parserUsed}, mode=${extractor.kind}, model=${extractor.model}).`);
+    console.log(`Observer: LLM extracted ${parsed.length} observations from ${dialogue.length} messages (mode=${extractor.kind}, model=${extractor.model}).`);
     return parsed;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -833,32 +793,8 @@ function summarizeQuestion(text: string): string { return cleanSummary(text); }
 function summarizeContext(text: string): string { return cleanSummary(text); }
 
 // ============================================================================
-// Ledger Integration
+// Ledger Integration — canonical post Plan A/C: observations.md + sidecar
 // ============================================================================
-
-interface LedgerData {
-  rawSignals?: RawLedgerSignal[];
-  [key: string]: unknown;
-}
-
-interface RawLedgerSignal {
-  id: string;
-  createdAt: string;
-  source: string;
-  summary: string;
-  status: string;
-  evidenceRefs?: string[];
-  anchorRefs?: unknown[];
-  conversation?: unknown;
-  salience?: string;
-}
-
-function findLedgerPath(sessionDir: string): string {
-  // First check session working directory for ledger
-  // The ledger lives in the orcha project directory, not the session dir
-  // But for observation purposes, we write to a session-local observations file
-  return join(sessionDir, 'data', 'observations.json');
-}
 
 function findMarkdownLedgerPath(sessionDir: string): string {
   return join(sessionDir, 'data', 'observations.md');
@@ -1011,61 +947,6 @@ function writeMarkdownLedger(
     };
   }
   writeFileSync(evidencePath, JSON.stringify(sidecar, null, 2) + '\n', 'utf-8');
-}
-
-function writeSignalsToLedger(
-  ledgerPath: string,
-  observations: Observation[],
-  sessionId: string,
-  anchors: unknown[],
-  messages: ObservableMessage[],
-): number {
-  const dir = dirname(ledgerPath);
-  if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true });
-  }
-
-  // Read existing
-  let existing: RawLedgerSignal[] = [];
-  if (existsSync(ledgerPath)) {
-    try {
-      const raw = readFileSync(ledgerPath, 'utf-8');
-      const parsed = JSON.parse(raw);
-      existing = parsed.signals || parsed || [];
-    } catch {
-      existing = [];
-    }
-  }
-
-  const runCreatedAt = new Date().toISOString();
-
-  // Build new signals
-  const newSignals: RawLedgerSignal[] = observations.map((obs, i) => ({
-    id: `obs-${Date.now()}-${i}`,
-    createdAt: runCreatedAt,
-    source: 'conversation',
-    summary: obs.summary,
-    status: 'raw',
-    salience: obs.salience,
-    anchorRefs: anchors.length > 0 ? anchors : undefined,
-    conversation: {
-      sessionId,
-      messageRange: obs.messageRange,
-      excerpt: obs.excerpt,
-      actor: obs.actor,
-    },
-  }));
-
-  // Write back JSON ledger (defensive — kept as rollback path during Plan A
-  // rollout; the canonical store is observations.md + sidecar).
-  const allSignals = [...existing, ...newSignals];
-  writeFileSync(ledgerPath, JSON.stringify({ signals: allSignals }, null, 2) + '\n', 'utf-8');
-
-  // Canonical Markdown ledger + evidence sidecar (post Plan A).
-  const sessionDir = dirname(dir);
-  writeMarkdownLedger(sessionDir, observations, runCreatedAt, anchors);
-
-  return newSignals.length;
 }
 
 // ============================================================================

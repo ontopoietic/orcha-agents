@@ -13,8 +13,8 @@
  *   3. If above threshold (default 40_000), call LLM with reflector prompt
  *   4. Replace condensed observations in-place; keep recent raw ones
  *      untouched as a tail buffer
- *   5. Dual-write: rebuild observations.md (preserving survivor lines verbatim,
- *      rendering condensed L2 entries fresh) AND legacy observations.json
+ *   5. Rebuild observations.md (preserving survivor lines verbatim, rendering
+ *      condensed L2 entries fresh) + rewrite observations-evidence.json
  *   6. Optionally bridge high-salience condensed items as RawSignals into
  *      the Orcha-CLI ledger via `orcha signal add-many --from-json`
  *
@@ -854,18 +854,10 @@ async function main(): Promise<void> {
     ...tail,
   ];
 
-  // Dual-write: canonical Markdown ledger + legacy JSON.
-  // - Markdown (`observations.md` + `observations-evidence.json`): primary
-  //   source of truth post Plan A/C. Survivors keep their original bullet line
-  //   verbatim; condensed L2 entries get freshly rendered lines.
-  // - JSON: retained for legacy readers + rollback during transition. Will be
-  //   dropped in a follow-up cleanup once nothing reads it.
+  // Canonical write: Markdown ledger + evidence sidecar. JSON is no longer
+  // written (post Plan C cleanup) — legacy readers go through the loader's
+  // JSON fallback for un-migrated sessions only.
   writeMarkdownLedger(expandedDir, stripRuntimeFields(newAll));
-  writeFileSync(
-    obsPath,
-    JSON.stringify({ signals: stripRuntimeFields(newAll) }, null, 2) + '\n',
-    'utf-8',
-  );
 
   // Touch watermark so UI re-fetches
   const watermarkPath = join(expandedDir, 'meta', 'observation-watermark.json');
@@ -912,7 +904,7 @@ async function main(): Promise<void> {
       `  Tail buffer (untouched): ${tail.length}\n` +
       `  Bridge: ${bridge.bridged} → ${bridge.reason}\n` +
       `  Backup: ${backupPath}\n` +
-      `  Output: ${mdPath} + ${obsPath}`,
+      `  Output: ${mdPath} (+ evidence sidecar)`,
   );
 }
 

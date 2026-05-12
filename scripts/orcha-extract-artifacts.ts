@@ -37,6 +37,7 @@ import {
   type ArtifactEdge,
   type ArtifactConfidence,
 } from '../packages/shared/src/sessions/index.ts';
+import { loadObservationSignals } from '../packages/shared/src/sessions/observation-loader.ts';
 
 // ============================================================================
 // CLI
@@ -73,13 +74,6 @@ interface JsonlMessage {
   timestamp?: number;
 }
 
-interface ObservationSignal {
-  id: string;
-  summary: string;
-  salience?: string;
-  conversation?: { messageRange?: { from?: string; to?: string } };
-}
-
 function readPhase(): { phaseText: string; observationsText: string } {
   const jsonlPath = join(sessionDir!, 'session.jsonl');
   const lines = existsSync(jsonlPath)
@@ -106,21 +100,15 @@ function readPhase(): { phaseText: string; observationsText: string } {
     if (m.id === endMsg) break;
   }
 
-  const obsPath = join(sessionDir!, 'data', 'observations.json');
-  let obsLines: string[] = [];
-  if (existsSync(obsPath)) {
-    try {
-      const raw = JSON.parse(readFileSync(obsPath, 'utf-8'));
-      const sigs: ObservationSignal[] = Array.isArray(raw) ? raw : raw.signals ?? [];
-      for (const s of sigs) {
-        const r = s.conversation?.messageRange;
-        const inWindow = (r?.from && phaseMsgIds.has(r.from)) || (r?.to && phaseMsgIds.has(r.to));
-        if (!inWindow) continue;
-        obsLines.push(`[${s.salience ?? 'context'}] ${s.summary}`);
-      }
-    } catch {
-      // ignore
-    }
+  // Canonical post Plan A/C: read observations.md + evidence sidecar (with
+  // legacy JSON fallback baked into the loader).
+  const sigs = loadObservationSignals(sessionDir!);
+  const obsLines: string[] = [];
+  for (const s of sigs) {
+    const r = s.conversation?.messageRange;
+    const inWindow = (r?.from && phaseMsgIds.has(r.from)) || (r?.to && phaseMsgIds.has(r.to));
+    if (!inWindow) continue;
+    obsLines.push(`[${s.salience ?? 'context'}] ${s.summary}`);
   }
   return {
     phaseText: phaseLines.join('\n').slice(0, 30_000),
