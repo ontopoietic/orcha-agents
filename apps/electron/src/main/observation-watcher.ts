@@ -18,6 +18,9 @@ import {
 } from '@craft-agent/shared/sessions/observation-markdown-parser'
 import { getLlmConnections } from '@craft-agent/shared/config/storage'
 import { getValidClaudeOAuthToken } from '@craft-agent/shared/auth/state'
+import log from 'electron-log/main'
+
+const obsLog = log.scope('observation-watcher')
 
 /**
  * Resolve auth env vars for the observer subprocess. The observer doesn't
@@ -49,30 +52,30 @@ async function resolveObserverAuthEnv(): Promise<Record<string, string>> {
         c.providerType === 'anthropic' && (c as unknown as Record<string, unknown>).authType === 'oauth'
       ) ?? conns.find((c) => c.providerType === 'anthropic')
       if (candidate) {
-        console.log(`[observation-watcher] auth: refreshing OAuth via connection ${candidate.slug} (provider=${candidate.providerType})`)
+        obsLog.info(`auth: refreshing OAuth via connection ${candidate.slug} (provider=${candidate.providerType})`)
         const result = await getValidClaudeOAuthToken(candidate.slug)
         if (result.accessToken) {
-          console.log(`[observation-watcher] auth: got OAuth token (length=${result.accessToken.length})`)
+          obsLog.info(`auth: got OAuth token (length=${result.accessToken.length})`)
           return { CLAUDE_CODE_OAUTH_TOKEN: result.accessToken }
         }
-        console.warn(`[observation-watcher] auth: getValidClaudeOAuthToken returned no token for ${candidate.slug}`)
+        obsLog.warn(`auth: getValidClaudeOAuthToken returned no token for ${candidate.slug}`)
       } else {
-        console.warn(`[observation-watcher] auth: no Anthropic connection found among [${conns.map(c => c.slug + ':' + c.providerType).join(', ')}]`)
+        obsLog.warn(`auth: no Anthropic connection found among [${conns.map(c => c.slug + ':' + c.providerType).join(', ')}]`)
       }
     } else {
-      console.log('[observation-watcher] auth: 0 LLM connections in config')
+      obsLog.info('auth: 0 LLM connections in config')
     }
   } catch (err) {
-    console.warn('[observation-watcher] auth: lookup threw:', err instanceof Error ? err.message : err)
+    obsLog.warn('auth: lookup threw:', err instanceof Error ? err.message : err)
   }
   // Fallback paths — only used when the OAuth-refresh path above didn't yield
   // a token (e.g. user is on API-key-only setup).
   if (process.env.CLAUDE_CODE_OAUTH_TOKEN) {
-    console.log('[observation-watcher] auth: falling back to CLAUDE_CODE_OAUTH_TOKEN from process.env')
+    obsLog.info('auth: falling back to CLAUDE_CODE_OAUTH_TOKEN from process.env')
     return { CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN }
   }
   if (process.env.ANTHROPIC_API_KEY) {
-    console.log('[observation-watcher] auth: falling back to ANTHROPIC_API_KEY from process.env')
+    obsLog.info('auth: falling back to ANTHROPIC_API_KEY from process.env')
     return { ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY }
   }
   return {}
@@ -242,11 +245,22 @@ export async function runObserverNow(sessionDir: string): Promise<string> {
 
     const killer = setTimeout(() => {
       child.kill('SIGTERM')
+      obsLog.warn(`subprocess timed out after 60s; partial stdout=${stdout.trim().slice(0, 400)} stderr=${stderr.trim().slice(0, 400)}`)
       rejectOut(new Error('Observer script timed out after 60s'))
     }, 60_000)
 
     child.on('close', (code) => {
       clearTimeout(killer)
+      // ALWAYS persist subprocess output to electron-log. process.stdout
+      // mirroring above only helps dev terminals; production runs lose all
+      // diagnostics without this. Truncate at 1200 chars to bound noise but
+      // keep the LLM-failure diagnostic sample (~400 chars) intact.
+      if (stdout.trim()) {
+        obsLog.info(`subprocess stdout (code=${code ?? 'null'}): ${stdout.trim().slice(0, 1200)}`)
+      }
+      if (stderr.trim()) {
+        obsLog.warn(`subprocess stderr (code=${code ?? 'null'}): ${stderr.trim().slice(0, 1200)}`)
+      }
       if (code === 0) {
         resolveOut(stdout.trim() || 'Observer ran (no output).')
       } else {
@@ -256,6 +270,7 @@ export async function runObserverNow(sessionDir: string): Promise<string> {
 
     child.on('error', (err) => {
       clearTimeout(killer)
+      obsLog.warn(`subprocess spawn error: ${err.message}`)
       rejectOut(err)
     })
   })

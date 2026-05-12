@@ -661,28 +661,19 @@ function extractObservations(messages: ObservableMessage[]): Observation[] {
       }
     }
 
-    // Agent messages: context-level observations for significant findings
-    if (actor === 'agent' && text.length > 100) {
-      // Look for agent conclusions, summaries, or key findings
-      const agentPatterns = [
-        /(?:zusammenfass|summary|ergebnis|result|fazit|conclusion|befund|finding)/i,
-        /(?:empfehle|recommend|vorschlag|suggestion|plan|nächster schritt|next step)/i,
-        /(?:implementier|implement|erstellt|created|geändert|modified|gelöst|resolved)/i,
-      ];
-
-      for (const pattern of agentPatterns) {
-        if (pattern.test(text)) {
-          observations.push({
-            summary: summarizeContext(text),
-            salience: 'context',
-            actor,
-            messageRange: { from: msg.id, to: msg.id },
-            excerpt: text.substring(0, 200),
-          });
-          break;
-        }
-      }
-    }
+    // Agent messages: skip in pattern fallback.
+    //
+    // The pattern path can only compress, not extract — and agent messages
+    // tend to be long Markdown reports (summary blocks, file diffs, code
+    // listings). Compressing those produces 140-char echoes that say
+    // nothing the conversation tail won't show better. Empirically validated
+    // against 260509-lively-carbon: every agent-context bullet from this
+    // path was rejected as echo or read as noise.
+    //
+    // The LLM path still extracts agent observations correctly because it
+    // understands intent. When the LLM path fails (auth/network), losing
+    // those agent context-bullets is the right tradeoff vs. emitting
+    // pseudo-extractions.
   }
 
   // Deduplicate: keep max 1 observation per message, drop echoes.
