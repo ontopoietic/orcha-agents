@@ -162,30 +162,51 @@ async function runObservation(expandedDir: string, jsonlPath: string): Promise<v
   // 1. Read watermark
   const watermark = readWatermark(expandedDir);
 
-  // 2. Read new messages
+  // 2. Read new messages (slice) AND all session messages (for anchor scope).
+  // First run: process the entire conversation so the LLM can build the
+  // narrative from the start. Token cost is one-shot; subsequent runs are
+  // bounded by the watermark.
+  const allMessages = readAllMessages(jsonlPath);
   const messages = watermark
     ? messagesSinceWatermark(jsonlPath, watermark.lastObservedMessageId)
-    : readAllMessages(jsonlPath).slice(-50); // First run: last 50 messages
+    : allMessages;
 
   if (messages.length === 0) {
     console.log('Observer: No new messages since watermark.');
     return;
   }
 
-  // 3. Extract observations — LLM-first, pattern fallback
-  const observations = await extractObservationsViaLlm(messages);
+  // 3. Load prior narrative — enables the LLM to extend/consolidate instead of
+  // restart from scratch each run (Mastra working-memory pattern).
+  const priorNarrative = loadObservationsMd(expandedDir);
+  const priorBulletCount = countBullets(priorNarrative);
 
-  // 4. Read session header for anchor info (needed for watermark even on empty result)
+  // 4. Extract observations — LLM-first, pattern fallback
+  const { observations, fromLlm, rawNarrative } = await extractObservationsViaLlm(messages, allMessages, priorNarrative);
+
+  // 5. Read session header for anchor info (needed for watermark even on empty result)
   const header = readSessionId(jsonlPath);
   const sessionId = header?.id || 'unknown';
   const anchors = header?.anchors || [];
 
-  // 5. Write signals to canonical Markdown ledger + evidence sidecar
+  // 6. Write signals to canonical Markdown ledger + evidence sidecar.
+  // LLM path returns the FULL updated narrative — REPLACE the ledger.
+  // Pattern fallback returns slice deltas only — APPEND.
+  // Safety: if the LLM-rewrite path drops below 50 % of prior bullet count,
+  // suspect a regression and append-only instead of replacing.
   let signalCount = 0;
   let mdLedgerPath: string | null = null;
   if (observations.length > 0) {
     const runCreatedAt = new Date().toISOString();
-    writeMarkdownLedger(expandedDir, observations, runCreatedAt, anchors);
+    const wouldRegress = priorBulletCount > 0 && observations.length * 2 < priorBulletCount;
+    if (fromLlm && !wouldRegress && rawNarrative) {
+      writeMarkdownLedgerReplace(expandedDir, observations, rawNarrative, runCreatedAt, anchors);
+    } else {
+      if (fromLlm && wouldRegress) {
+        console.warn(`Observer: LLM emitted ${observations.length} bullets but prior had ${priorBulletCount} — appending instead of replacing to avoid regression.`);
+      }
+      writeMarkdownLedger(expandedDir, observations, runCreatedAt, anchors);
+    }
     mdLedgerPath = findMarkdownLedgerPath(expandedDir);
     signalCount = observations.length;
   } else {
@@ -332,20 +353,27 @@ function findClaudeBinary(): string | null {
  * showed ~70 % token reduction vs. JSON output at parity quality.
  */
 function buildObserverSystemPrompt(): string {
-  return `You are an Observational Memory writer. Read a slice of an ongoing conversation and emit a Markdown bullet list of observations. Future turns of the assistant will read THIS list INSTEAD OF the raw messages.
+  return `You are an Observational Memory writer maintaining a coherent NARRATIVE of an ongoing conversation. Future turns of the assistant will read THIS narrative INSTEAD OF the raw messages, so it must be self-sufficient and tell the story of the work.
 
-Discipline (MUST follow):
-1. CRITICAL: USER ASSERTIONS TAKE PRECEDENCE over user questions. If a user states a fact, decision, or constraint, that is a 🔴 pivotal observation. If the user merely asks something, that is a 🟡 question.
+You receive:
+  (a) the CURRENT narrative (everything observed so far, by date), and
+  (b) NEW messages since the last run.
+Your job is to emit the FULL updated narrative — extending the story with what the new slice added, AND revising/consolidating older bullets when the new slice resolves, supersedes, or clarifies them.
+
+Mastra-style working-memory discipline (MUST follow):
+1. CRITICAL: USER ASSERTIONS TAKE PRECEDENCE over user questions. User assertions = 🔴 pivotal. Mere questions = 🟡 question.
 2. Distinguish assertions from questions. "Use feature branches" is 🔴. "Should we use feature branches?" is 🟡.
-3. Represent state changes as overrides, not appends. If a user switches from option A to option B, write the new state, not the history.
-4. Use precise verbs. "Subscribed to channel X" beats "got channel X".
-5. Split multiple events into separate observations.
-6. Anchor every observation: append \` {shortId}\` where shortId is the last 6 chars of the source msg-ID (e.g. msg-1778338128969-u5luxw → {u5luxw}).
-7. Do not invent facts. If a turn is ambiguous, skip it rather than guess.
-8. Salience taxonomy:
+3. Represent state changes as OVERRIDES, not appends. If the user switched from option A to option B, the bullet for A should be REMOVED or revised — do not keep both.
+4. RESOLVE OPEN QUESTIONS. If an earlier 🟡 was answered later, replace it with a 🔴 capturing the resolution (anchor the new bullet to the answer message).
+5. CONSOLIDATE. If three older bullets describe one decision arc, collapse them into one or two precise bullets.
+6. Use precise verbs. "Subscribed to channel X" beats "got channel X".
+7. Anchor every bullet: append \` {shortId}\` where shortId is the last 6 chars of the source msg-ID (e.g. msg-1778338128969-u5luxw → {u5luxw}). For consolidated bullets use the most representative anchor (usually the latest).
+8. Do not invent facts. If a turn is ambiguous, skip it rather than guess.
+9. Salience taxonomy:
    - 🔴 pivotal: user assertions, decisions, constraints, corrections, schema/architecture choices
    - 🟡 question: open questions awaiting answers
    - 🟢 context: ambient state, completed steps, references — useful but not load-bearing
+10. PRESERVE prior bullets unchanged unless the new slice gives you a reason to revise them. Do NOT rewrite older history just because you can.
 
 ABSOLUTE RULE — DO NOT ECHO:
 The summary is NOT the message. It is a *fact extracted from* the message,
@@ -416,14 +444,17 @@ Do NOT start with \`\`\`, do NOT start with \`{\`, do NOT start with \`[\`, do N
 Return ONLY the Markdown bullet list. No code fences, no prose around it, no JSON.`;
 }
 
-function buildObserverUserPrompt(messages: ObservableMessage[]): string {
+function buildObserverUserPrompt(messages: ObservableMessage[], priorNarrative: string): string {
   const lines = messages.map((m) => {
     const id = m.id;
     const actor = m.type === 'user' ? 'user' : m.type === 'assistant' ? 'agent' : m.type;
     const text = m.content.replace(/\s+/g, ' ').trim().slice(0, 1500);
     return `[${actor} ${id}] ${text}`;
   });
-  return `Conversation slice (${messages.length} messages):\n\n${lines.join('\n')}\n\nReturn ONLY the Markdown bullet list (one bullet per observation, anchored with {shortId}). NO JSON. NO code fences. NO prose.`;
+  const priorBlock = priorNarrative.trim().length > 0
+    ? `CURRENT NARRATIVE (everything observed so far):\n\n${priorNarrative.trim()}\n\n`
+    : `CURRENT NARRATIVE: (empty — this is the first observation run)\n\n`;
+  return `${priorBlock}NEW MESSAGES since last run (${messages.length} messages):\n\n${lines.join('\n')}\n\nEmit the FULL updated narrative as Markdown bullets grouped by \`# YYYY-MM-DD\` headers. Preserve older bullets unless the new slice gives you a reason to revise/consolidate them. Add new bullets for the new messages. Resolve open questions when the new slice answered them. Return ONLY the Markdown bullet list. NO JSON. NO code fences. NO prose.`;
 }
 
 interface AnthropicMessagesResponse {
@@ -541,7 +572,8 @@ function isEcho(summary: string, excerpt: string): boolean {
       .replace(/\*\*([^*]+)\*\*/g, '$1')       // bold
       .replace(/\*([^*]+)\*/g, '$1')           // italic
       .replace(/^[ \t]*#+\s*/gm, '')           // heading markers
-      .replace(/^[ \t]*>\s?/gm, '')            // blockquote markers
+      .replace(/^[ \t]*>\s?/gm, '')            // blockquote markers (line-start)
+      .replace(/\s>\s/g, ' ')                  // inline `>` separators (e.g. "Follow-ups > [#1]")
       .replace(/…/g, '');                   // ellipsis added by cleanSummary on truncate
   const norm = (s: string) => stripMd(s).toLowerCase().replace(/\s+/g, ' ').trim();
   // Strip the salience prefix the LLM sometimes still adds.
@@ -563,7 +595,7 @@ function isEcho(summary: string, excerpt: string): boolean {
  */
 function parseObservationsMarkdown(
   raw: string,
-  sliceMessages: ObservableMessage[],
+  candidateMessages: ObservableMessage[],
 ): Observation[] | null {
   const bullets = parseMdBullets(raw);
   if (!bullets) return null;
@@ -571,7 +603,7 @@ function parseObservationsMarkdown(
   const result: Observation[] = [];
   for (const bullet of bullets) {
     const msg = bullet.anchorShortId
-      ? resolveAnchorShortId(bullet.anchorShortId, sliceMessages)
+      ? resolveAnchorShortId(bullet.anchorShortId, candidateMessages)
       : null;
     if (!msg) {
       console.warn(
@@ -599,32 +631,52 @@ function parseObservationsMarkdown(
  * credentials are configured or the call fails — keeps the observer running
  * even in degraded environments.
  */
-async function extractObservationsViaLlm(messages: ObservableMessage[]): Promise<Observation[]> {
+interface ExtractionResult {
+  observations: Observation[];
+  /** True iff observations came from a successful LLM call (= full narrative
+   * rewrite). False for pattern fallback (= slice-only deltas). */
+  fromLlm: boolean;
+  /** Raw Markdown the LLM produced — preserved verbatim for replace-write so
+   * the LLM's exact narrative shape (date groups, ordering, formatting) lands
+   * in the ledger without round-tripping through our renderer. */
+  rawNarrative?: string;
+}
+
+async function extractObservationsViaLlm(
+  messages: ObservableMessage[],
+  allSessionMessages: ObservableMessage[],
+  priorNarrative: string,
+): Promise<ExtractionResult> {
   // Filter out tool / system / error messages up-front so the LLM sees only
   // user/agent dialogue. Saves tokens and matches the prior pattern path.
   const dialogue = messages.filter((m) => (m.type === 'user' || m.type === 'assistant') && m.content.trim().length >= 10);
-  if (dialogue.length === 0) return [];
+  if (dialogue.length === 0) return { observations: [], fromLlm: false };
+
+  // Anchor candidates: the LLM may keep prior bullets (anchored to messages
+  // outside this slice) — resolve against ALL session dialogue so they
+  // survive instead of being silently dropped.
+  const anchorCandidates = allSessionMessages.filter((m) => (m.type === 'user' || m.type === 'assistant') && m.content.trim().length >= 10);
 
   const extractor = resolveExtractor();
   if (!extractor) {
     console.warn('Observer: No LLM auth (CLAUDE_CODE_OAUTH_TOKEN, ORCHA_OBSERVER_API_KEY, or ANTHROPIC_API_KEY). Falling back to pattern matching — quality will be lower.');
-    return extractObservations(messages);
+    return { observations: extractObservations(messages), fromLlm: false };
   }
 
   try {
-    const raw = await callExtractor(extractor, buildObserverSystemPrompt(), buildObserverUserPrompt(dialogue));
+    const raw = await callExtractor(extractor, buildObserverSystemPrompt(), buildObserverUserPrompt(dialogue, priorNarrative));
     if (!raw) {
       console.warn('Observer: Empty LLM response, falling back to pattern matching.');
-      return extractObservations(messages);
+      return { observations: extractObservations(messages), fromLlm: false };
     }
     // Canonical path post Plan A/C: Markdown bullets. JSON output is no
     // longer accepted — if the LLM returns JSON, we surface that loudly and
     // fall back to pattern matching so the failure is visible upstream.
-    const parsed = parseObservationsMarkdown(raw, dialogue);
+    const parsed = parseObservationsMarkdown(raw, anchorCandidates);
     if (!parsed) {
       const sample = raw.replace(/\s+/g, ' ').trim().slice(0, 400);
       console.warn(`Observer: LLM output is not parseable Markdown bullets, falling back to pattern matching. Sample: ${sample}`);
-      return extractObservations(messages);
+      return { observations: extractObservations(messages), fromLlm: false };
     }
     if (parsed.length === 0) {
       // Parser ran successfully but produced zero records. Two common causes:
@@ -634,7 +686,7 @@ async function extractObservationsViaLlm(messages: ObservableMessage[]): Promise
       // Without dumping a sample we can't tell which — and the user just sees
       // "0 observations" with no recourse.
       const sample = raw.replace(/\s+/g, ' ').trim().slice(0, 600);
-      const availableAnchors = dialogue.slice(-20).map(m => m.id.slice(-6)).join(',');
+      const availableAnchors = anchorCandidates.slice(-20).map(m => m.id.slice(-6)).join(',');
       console.warn(
         `Observer: Parser produced 0 records despite raw output. ` +
         `Raw sample (600 chars): ${sample}\n` +
@@ -642,12 +694,12 @@ async function extractObservationsViaLlm(messages: ObservableMessage[]): Promise
       );
     }
     console.log(`Observer: LLM extracted ${parsed.length} observations from ${dialogue.length} messages (mode=${extractor.kind}, model=${extractor.model}).`);
-    return parsed;
+    return { observations: parsed, fromLlm: true, rawNarrative: stripCodeFences(raw) };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     const stack = err instanceof Error && err.stack ? err.stack.split('\n').slice(0, 3).join(' | ') : '';
     console.warn(`Observer: LLM call threw (mode=${extractor.kind}, model=${extractor.model}), falling back to pattern matching: ${msg} ${stack}`);
-    return extractObservations(messages);
+    return { observations: extractObservations(messages), fromLlm: false };
   }
 }
 
@@ -947,6 +999,84 @@ function writeMarkdownLedger(
     };
   }
   writeFileSync(evidencePath, JSON.stringify(sidecar, null, 2) + '\n', 'utf-8');
+}
+
+/**
+ * Replace the ledger with the LLM's full updated narrative (Mastra-style
+ * working-memory rewrite). The raw Markdown is written verbatim so the LLM's
+ * date groups, ordering, and any consolidations land exactly as it produced
+ * them. The sidecar is then refreshed with anchor evidence for every bullet
+ * the parser recognized — old sidecar entries are kept (they may still be
+ * referenced by archived bullets we just rewrote).
+ */
+function writeMarkdownLedgerReplace(
+  sessionDir: string,
+  observations: Observation[],
+  rawNarrative: string,
+  createdAt: string,
+  anchors: unknown[],
+): void {
+  const mdPath = findMarkdownLedgerPath(sessionDir);
+  const evidencePath = findEvidenceSidecarPath(sessionDir);
+  const dir = dirname(mdPath);
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+
+  const normalized = rawNarrative.trim().endsWith('\n') ? rawNarrative.trim() + '\n' : rawNarrative.trim() + '\n';
+  writeFileSync(mdPath, normalized, 'utf-8');
+
+  // Sidecar: merge — never drop existing anchors (the LLM may have referenced
+  // an older message we also want evidence for; new observations also add
+  // entries).
+  let sidecar: Record<string, EvidenceEntry> = {};
+  if (existsSync(evidencePath)) {
+    try {
+      const raw = readFileSync(evidencePath, 'utf-8');
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') sidecar = parsed as Record<string, EvidenceEntry>;
+    } catch {
+      sidecar = {};
+    }
+  }
+  for (const obs of observations) {
+    const fromId = obs.messageRange?.from;
+    if (!fromId) continue;
+    const shortId = shortIdFromMsgId(fromId);
+    sidecar[shortId] = {
+      fullMessageId: fromId,
+      messageRangeTo: obs.messageRange.to ?? fromId,
+      excerpt: obs.excerpt,
+      actor: obs.actor,
+      createdAt,
+      ...(anchors.length > 0 ? { anchorRefs: anchors } : {}),
+    };
+  }
+  writeFileSync(evidencePath, JSON.stringify(sidecar, null, 2) + '\n', 'utf-8');
+}
+
+/** Read observations.md for narrative-context injection. Returns '' if absent. */
+function loadObservationsMd(sessionDir: string): string {
+  const p = findMarkdownLedgerPath(sessionDir);
+  if (!existsSync(p)) return '';
+  try { return readFileSync(p, 'utf-8'); } catch { return ''; }
+}
+
+/** Count top-level bullets in a Markdown narrative (for regression safety). */
+function countBullets(md: string): number {
+  if (!md) return 0;
+  let n = 0;
+  for (const line of md.split(/\r?\n/)) {
+    if (/^- (🔴|🟡|🟢)/.test(line)) n++;
+  }
+  return n;
+}
+
+/** Strip a leading/trailing ```markdown fence if the LLM added one. */
+function stripCodeFences(s: string): string {
+  let t = s.trim();
+  if (t.startsWith('```')) {
+    t = t.replace(/^```[a-zA-Z]*\n?/, '').replace(/```\s*$/, '').trim();
+  }
+  return t;
 }
 
 // ============================================================================
