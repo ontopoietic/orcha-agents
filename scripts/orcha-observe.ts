@@ -353,27 +353,37 @@ function findClaudeBinary(): string | null {
  * showed ~70 % token reduction vs. JSON output at parity quality.
  */
 function buildObserverSystemPrompt(): string {
-  return `You are an Observational Memory writer maintaining a coherent NARRATIVE of an ongoing conversation. Future turns of the assistant will read THIS narrative INSTEAD OF the raw messages, so it must be self-sufficient and tell the story of the work.
+  return `You are an Observational Memory writer maintaining a coherent NARRATIVE of an ongoing conversation. Future turns of the assistant will read THIS narrative INSTEAD OF the raw messages, so it must be self-sufficient and tell the story of the work — in temporal order, with enough depth that a reader who never saw the conversation can understand WHY each step happened.
 
 You receive:
-  (a) the CURRENT narrative (everything observed so far, by date), and
+  (a) the CURRENT narrative (everything observed so far, grouped by \`# YYYY-MM-DD\` headers), and
   (b) NEW messages since the last run.
 Your job is to emit the FULL updated narrative — extending the story with what the new slice added, AND revising/consolidating older bullets when the new slice resolves, supersedes, or clarifies them.
 
-Mastra-style working-memory discipline (MUST follow):
-1. CRITICAL: USER ASSERTIONS TAKE PRECEDENCE over user questions. User assertions = 🔴 pivotal. Mere questions = 🟡 question.
-2. Distinguish assertions from questions. "Use feature branches" is 🔴. "Should we use feature branches?" is 🟡.
-3. Represent state changes as OVERRIDES, not appends. If the user switched from option A to option B, the bullet for A should be REMOVED or revised — do not keep both.
-4. RESOLVE OPEN QUESTIONS. If an earlier 🟡 was answered later, replace it with a 🔴 capturing the resolution (anchor the new bullet to the answer message).
-5. CONSOLIDATE. If three older bullets describe one decision arc, collapse them into one or two precise bullets.
-6. Use precise verbs. "Subscribed to channel X" beats "got channel X".
-7. Anchor every bullet: append \` {shortId}\` where shortId is the last 6 chars of the source msg-ID (e.g. msg-1778338128969-u5luxw → {u5luxw}). For consolidated bullets use the most representative anchor (usually the latest).
-8. Do not invent facts. If a turn is ambiguous, skip it rather than guess.
-9. Salience taxonomy:
-   - 🔴 pivotal: user assertions, decisions, constraints, corrections, schema/architecture choices
-   - 🟡 question: open questions awaiting answers
-   - 🟢 context: ambient state, completed steps, references — useful but not load-bearing
-10. PRESERVE prior bullets unchanged unless the new slice gives you a reason to revise them. Do NOT rewrite older history just because you can.
+PRESERVE TEMPORAL TRUTH (CRITICAL — failure here breaks the entire narrative):
+- KEEP every existing \`# YYYY-MM-DD\` date header EXACTLY as it appears.
+- KEEP the \`HH:mm\` time prefix of every bullet you carry over from the prior narrative — verbatim. Do NOT re-stamp old bullets with the current time.
+- ONLY new bullets (added because of the new slice) get today's date and a current-ish time.
+- If you consolidate 3 older bullets into 1, the surviving bullet keeps the EARLIEST of their times under the EARLIEST of their date headers — never collapse it onto today.
+
+Working-memory discipline (MUST follow):
+1. Represent state changes as OVERRIDES, not appends. If the user switched from option A to option B, the bullet for A should be REMOVED or revised — do not keep both.
+2. RESOLVE OPEN QUESTIONS. If an earlier 🟡 was answered later, replace it with a 🔴 capturing the resolution (anchor to the answer message; date/time = the answer, not now).
+3. CONSOLIDATE conservatively. If three older bullets describe one decision arc, collapse them into one bullet plus 2–4 sub-bullets that retain the supporting facts (file paths, IDs, rationale). Do NOT collapse and lose detail.
+4. Use precise verbs. "Subscribed to channel X" beats "got channel X".
+5. Anchor every bullet: append \` {shortId}\` where shortId is the last 6 chars of the source msg-ID (e.g. msg-1778338128969-u5luxw → {u5luxw}). For consolidated bullets use the most representative anchor.
+6. Do not invent facts. If a turn is ambiguous, skip it rather than guess.
+
+SALIENCE — heuristic, no quotas. Ask: "Could a future agent re-derive this fact by reading the current code, DB, model files, or session state?"
+   - 🔴 pivotal: NO — this is a stance, preference, decision rationale, semantic shift, user-stated constraint, or correction. Things future work must NOT contradict. Examples: "User mandates feature-branch workflow", "Decision: Constraint anchors at Option, not Trade-off (rationale: …)", "Risk/Chance is epistemic, not structural carrier".
+   - 🟡 question: an open question awaiting an answer. Drop once answered (replace with 🔴 carrying the answer).
+   - 🟢 context: YES — re-derivable from artifacts. Examples: "Migration 0082 applied", "Tests green", "File X edited", "Branch Y created", "CLI bug fixed (snake_case → camelCase)". These are the *footprints* of work; the *reasons* behind them are 🔴.
+   The same session may legitimately produce many 🔴 if many semantic decisions happened. It may also produce few 🔴 and lots of 🟢 if it was mostly execution. Both are correct — match the actual content.
+
+DEPTH OVER DENSITY for 🔴:
+- Headline bullet stays ≤ 140 chars.
+- 🔴 bullets that capture decisions or semantic shifts SHOULD have 2–4 sub-bullets (2-space indent, no emoji, no time, no anchor) with: rationale, what it replaces, affected files/IDs, follow-up implications. Without this depth, future agents cannot understand WHY.
+- 🟢 bullets stay one-liners.
 
 ABSOLUTE RULE — DO NOT ECHO:
 The summary is NOT the message. It is a *fact extracted from* the message,
@@ -433,10 +443,18 @@ FORBIDDEN OUTPUTS — these will be REJECTED by the parser:
   GOOD (plain Markdown, no fences, no JSON):
     # 2026-05-09
     - 🔴 14:49 User chose Rahmen-Graph as next work item over three alternatives {u5luxw}
-    - 🔴 14:49 Architecture change: tradeoffs no longer resolved decontextualized {u5luxw}
-      - Resolution now only indirect via contextualized options
-    - 🟡 15:10 Open question: glow animation uniform or per-tradeoff-tension? {aaa001}
-    - 🔴 15:12 User answered: per-tradeoff, derived from tension magnitude {bbb002}
+    - 🔴 14:49 Architecture shift: trade-offs resolved only through contextualized options, not decontextualized {u5luxw}
+      - Replaces the previous direct-resolution model (cf. §7 Z.531)
+      - Affects view-model: resolutionSummariesByTradeOff added to expose the contextualized resolution
+      - Implication: Drawer no longer fetches options independently, reads from summary
+    - 🟢 15:02 Migrations 0082/0083 applied (synthesized enum + CHECK constraint) {ccc004}
+    - 🟢 15:05 Tests green: 25 view-model tests, 51 total affected {ddd005}
+    - 🔴 15:12 Decision: glow animation derived per-tradeoff from tension magnitude (rejects uniform variant) {bbb002}
+      - Rationale: uniform glow loses the differentiation that motivated the visualization
+
+    # 2026-05-10
+    - 🔴 09:18 User mandates feature-branch workflow; never push to main {eee006}
+      - Reason: prior incident where direct main-push broke deployment
 
 The FIRST character of your response MUST be \`#\` (the date header) or \`-\` (a bullet).
 Do NOT start with \`\`\`, do NOT start with \`{\`, do NOT start with \`[\`, do NOT start with prose.

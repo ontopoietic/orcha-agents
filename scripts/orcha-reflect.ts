@@ -328,10 +328,11 @@ Discipline (MUST follow):
 7. Keep summaries SHORT (≤ 140 chars) and in third-person fact form, like the originals.
 8. Each output observation MUST list the IDs of input observations it replaces in "replacedIds".
 
-Salience taxonomy (same as input):
-  - "pivotal" 🔴: decisions, constraints, corrections, schema/architecture choices
-  - "question" 🟡: open questions awaiting answers
-  - "context" 🟢: ambient state, completed steps, references
+Salience taxonomy (heuristic — "Can a future agent re-derive this from current artifacts?"):
+  - "pivotal" 🔴: NO — stances, decisions, semantic shifts, user constraints, rationales. Things future work must NOT contradict.
+  - "question" 🟡: open questions awaiting answers; drop once a "pivotal" answer exists.
+  - "context" 🟢: YES — re-derivable from code/DB/files. Migrations applied, tests green, files edited, branches created.
+  No quotas. A condensed bullet inherits the salience that best describes the consolidated fact, not a forced default.
 
 Output schema — return ONLY this JSON, nothing else:
 
@@ -825,9 +826,19 @@ async function main(): Promise<void> {
       c.anchorRefs && c.anchorRefs.length > 0
         ? c.anchorRefs
         : firstAnchorRefs(candidates, c.replacedIds);
+    // Inherit earliest createdAt + original date from the items being replaced.
+    // Otherwise condensed bullets all collapse onto today's date and lose the
+    // narrative's temporal arc.
+    const replacedItems = candidates.filter((s) => c.replacedIds.includes(s.id));
+    const earliest = replacedItems.reduce<ObservationSignal | null>((acc, s) => {
+      if (!acc) return s;
+      return new Date(s.createdAt).getTime() < new Date(acc.createdAt).getTime() ? s : acc;
+    }, null);
+    const inheritedCreatedAt = earliest?.createdAt ?? new Date().toISOString();
+    const inheritedMdDate = earliest?._originalMdDate;
     return {
       id: `obs-l2-${Date.now()}-${idx}`,
-      createdAt: new Date().toISOString(),
+      createdAt: inheritedCreatedAt,
       source: 'conversation',
       summary: c.summary,
       status: 'raw',
@@ -840,6 +851,7 @@ async function main(): Promise<void> {
       },
       compressed: true,
       replacedIds: c.replacedIds,
+      _originalMdDate: inheritedMdDate,
     };
   });
 
