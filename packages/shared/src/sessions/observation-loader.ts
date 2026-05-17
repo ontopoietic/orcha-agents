@@ -19,6 +19,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseObservationsMarkdown, type ParsedBullet } from './observation-markdown-parser.ts';
+import { parseMastraLedger, type MastraParsedBullet } from './mastra-om/parse-ledger.ts';
 import type { ObservationSignal } from './observation-watermark.ts';
 
 interface EvidenceEntry {
@@ -131,13 +132,73 @@ export function loadObservationSignalsFromJson(sessionDir: string): ObservationS
 }
 
 /**
- * Combined accessor: MD if available, else legacy JSON. Empty array on both
- * missing/malformed.
+ * Read `observations.mastra.md` into ObservationSignal[]. Returns null when
+ * the file is missing or parses empty. Mastra bullets do not carry per-bullet
+ * anchor short-IDs the way our legacy format does, so the evidence sidecar
+ * is consulted only as a best-effort source for excerpt/createdAt — most
+ * Mastra bullets will surface with empty `messageRange` until we layer the
+ * extractor agent on top.
+ */
+export function loadObservationSignalsFromMastraMarkdown(
+  sessionDir: string,
+  idStrategy: ObservationIdStrategy = 'anchor-stable',
+): ObservationSignal[] | null {
+  const mdPath = join(sessionDir, 'data', 'observations.mastra.md');
+  if (!existsSync(mdPath)) return null;
+  let bullets: MastraParsedBullet[] | null;
+  try {
+    bullets = parseMastraLedger(readFileSync(mdPath, 'utf-8'));
+  } catch {
+    return null;
+  }
+  if (!bullets || bullets.length === 0) return null;
+
+  const result: ObservationSignal[] = [];
+  for (let i = 0; i < bullets.length; i++) {
+    const bullet = bullets[i]!;
+    const createdAt = bullet.date && bullet.time
+      ? (() => {
+          const d = new Date(`${bullet.date}T${bullet.time}:00`);
+          return Number.isNaN(d.getTime()) ? new Date().toISOString() : d.toISOString();
+        })()
+      : new Date().toISOString();
+
+    const id =
+      idStrategy === 'bullet-index'
+        ? `bullet-${i}`
+        : `obs-mastra-${i}`;
+
+    result.push({
+      id,
+      createdAt,
+      source: 'conversation',
+      summary: bullet.summary,
+      status: 'raw',
+      salience: bullet.salience,
+      conversation: {
+        sessionId: '',
+        // Mastra bullets are not anchored to specific source messages; the
+        // extractor agent (future work) is the natural place to back-derive
+        // message ranges. Leave empty so the UI doesn't render a broken link.
+        messageRange: { from: '', to: '' },
+        excerpt: '',
+        actor: 'agent',
+      },
+    });
+  }
+  return result;
+}
+
+/**
+ * Combined accessor: Mastra ledger if present (post-cutover), else legacy MD,
+ * else legacy JSON. Empty array on all-missing.
  */
 export function loadObservationSignals(
   sessionDir: string,
   idStrategy: ObservationIdStrategy = 'anchor-stable',
 ): ObservationSignal[] {
+  const fromMastra = loadObservationSignalsFromMastraMarkdown(sessionDir, idStrategy);
+  if (fromMastra && fromMastra.length > 0) return fromMastra;
   const fromMd = loadObservationSignalsFromMarkdown(sessionDir, idStrategy);
   if (fromMd && fromMd.length > 0) return fromMd;
   return loadObservationSignalsFromJson(sessionDir);

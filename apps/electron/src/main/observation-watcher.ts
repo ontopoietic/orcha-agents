@@ -16,6 +16,7 @@ import {
   parseObservationsMarkdown,
   type ParsedBullet,
 } from '@craft-agent/shared/sessions/observation-markdown-parser'
+import { parseMastraLedger } from '@craft-agent/shared/sessions/mastra-om/parse-ledger'
 import { getLlmConnections } from '@craft-agent/shared/config/storage'
 import { getValidClaudeOAuthToken } from '@craft-agent/shared/auth/state'
 import log from 'electron-log/main'
@@ -450,14 +451,64 @@ function deriveCreatedAt(bullet: ParsedBullet): string {
 }
 
 /**
+ * Read Mastra-format observations.mastra.md. Returns null if the file
+ * doesn't exist or has no recognizable bullets. Mastra bullets don't carry
+ * per-bullet anchor short-IDs the way our legacy format does, so the
+ * evidence sidecar isn't consulted here; `messageRange` is left empty until
+ * the future extractor-agent pass back-derives source pointers.
+ */
+function readMastraObservationsFromMarkdown(sessionDir: string): ObservationSignal[] | null {
+  const mdPath = join(sessionDir, 'data', 'observations.mastra.md')
+  if (!existsSync(mdPath)) return null
+  let bullets
+  try {
+    bullets = parseMastraLedger(readFileSync(mdPath, 'utf-8'))
+  } catch {
+    return null
+  }
+  if (!bullets || bullets.length === 0) return null
+
+  const result: ObservationSignal[] = []
+  for (let i = 0; i < bullets.length; i++) {
+    const bullet = bullets[i]!
+    const createdAt =
+      bullet.date && bullet.time
+        ? (() => {
+            const d = new Date(`${bullet.date}T${bullet.time}:00`)
+            return Number.isNaN(d.getTime()) ? new Date().toISOString() : d.toISOString()
+          })()
+        : new Date().toISOString()
+    result.push({
+      id: `obs-mastra-${i}`,
+      createdAt,
+      source: 'conversation',
+      summary: bullet.summary,
+      status: 'raw',
+      salience: bullet.salience,
+      conversation: {
+        sessionId: '',
+        messageRange: { from: '', to: '' },
+        excerpt: '',
+        actor: 'agent',
+      },
+    })
+  }
+  return result
+}
+
+/**
  * Read all observations for a session. Returns [] if the file does not
  * exist or is malformed (best-effort — the UI should still render).
  *
- * Markdown (`observations.md` + `observations-evidence.json`) is the canonical
- * source post Plan A/C. JSON is read only as a last-resort fallback for old
- * sessions that haven't been migrated by `scripts/orcha-migrate-observations.ts`.
+ * Source-of-truth order (first-match wins):
+ *   1. observations.mastra.md  (Mastra-style ledger from the new path)
+ *   2. observations.md         (legacy Markdown ledger)
+ *   3. observations.json       (legacy JSON for un-migrated sessions)
  */
 export function readObservationsList(sessionDir: string): ObservationSignal[] {
+  const fromMastra = readMastraObservationsFromMarkdown(sessionDir)
+  if (fromMastra && fromMastra.length > 0) return fromMastra
+
   const fromMarkdown = readObservationsFromMarkdown(sessionDir)
   if (fromMarkdown && fromMarkdown.length > 0) return fromMarkdown
 

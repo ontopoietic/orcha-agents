@@ -371,8 +371,51 @@ Do NOT guess. Wrong anchors are worse than no anchors. If the user is just explo
    */
   getSessionObservations(sessionId: string): string | null {
     const sessionDir = getSessionPath(this.workspaceRootPath, sessionId);
+    const mastraMdPath = join(sessionDir, 'data', 'observations.mastra.md');
     const markdownPath = join(sessionDir, 'data', 'observations.md');
     const jsonlPath = join(sessionDir, 'session.jsonl');
+
+    // Mastra-format ledger takes precedence when present. It carries no
+    // per-bullet anchors, so we inject it whole (no anchor-scoping); the
+    // continuity-hints sidecar is appended for the next-turn agent.
+    if (existsSync(mastraMdPath)) {
+      const lineCount = this.countJsonlLines(jsonlPath);
+      if (lineCount < PromptBuilder.MIN_LINES_BEFORE_INJECTION) return null;
+      try {
+        const body = readFileSync(mastraMdPath, 'utf-8').trim();
+        if (!body) return null;
+        const taskMetaPath = join(sessionDir, 'meta', 'observation-task.json');
+        let continuity = '';
+        if (existsSync(taskMetaPath)) {
+          try {
+            const meta = JSON.parse(readFileSync(taskMetaPath, 'utf-8'));
+            const parts: string[] = [];
+            if (typeof meta?.currentTask === 'string' && meta.currentTask.trim()) {
+              parts.push(`<current-task>\n${meta.currentTask.trim()}\n</current-task>`);
+            }
+            if (typeof meta?.suggestedResponse === 'string' && meta.suggestedResponse.trim()) {
+              parts.push(
+                `<suggested-response>\n${meta.suggestedResponse.trim()}\n</suggested-response>`,
+              );
+            }
+            if (parts.length > 0) continuity = '\n\n' + parts.join('\n\n');
+          } catch {
+            /* meta optional */
+          }
+        }
+        const header = '<session_memory>';
+        const footer = '</session_memory>';
+        const intro =
+          'Structured observations from past conversation turns (Mastra-style observational memory). These persist across compaction — do NOT re-derive them. Treat the most recent bullets as the highest-priority context.';
+        log.debug(
+          `[getSessionObservations] Injecting Mastra ledger for session ${sessionId} (${body.length} chars)`,
+        );
+        return `${header}\n${intro}\n\n${body}${continuity}\n${footer}`;
+      } catch (err) {
+        log.debug('[getSessionObservations] Failed to read observations.mastra.md:', err);
+        // Fall through to legacy path.
+      }
+    }
 
     if (!existsSync(markdownPath)) return null;
 
