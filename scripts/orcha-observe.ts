@@ -152,10 +152,208 @@ async function main(): Promise<void> {
   process.on('SIGINT', () => { clearRunningMarker(markerPath); process.exit(130); });
 
   try {
-    await runObservation(expandedDir, jsonlPath);
+    if (process.env.ORCHA_OBSERVER_USE_MASTRA === '1') {
+      await runMastraObservation(expandedDir, jsonlPath);
+    } else {
+      await runObservation(expandedDir, jsonlPath);
+    }
   } finally {
     clearRunningMarker(markerPath);
   }
+}
+
+// ============================================================================
+// Mastra-style Observer (vendored prompts/parsers, append-only)
+// ============================================================================
+
+/**
+ * New Observer path that uses the vendored Mastra OM primitives.
+ *
+ * Writes to `data/observations.mastra.md` (kept separate from the existing
+ * `data/observations.md` so both paths can coexist for A/B comparison).
+ * The continuity hints from `<current-task>` / `<suggested-response>` are
+ * persisted to `meta/observation-task.json` and overwritten each run.
+ *
+ * Append-only contract — matches Mastra: prior observations go into the
+ * prompt verbatim with "Do not repeat these" guidance; the LLM emits only
+ * new bullets which we concatenate onto the file.
+ *
+ * Switch on with `ORCHA_OBSERVER_USE_MASTRA=1`.
+ */
+async function runMastraObservation(expandedDir: string, jsonlPath: string): Promise<void> {
+  const {
+    buildObserverPrompt,
+    buildObserverSystemPrompt,
+    parseObserverOutput,
+  } = await import('../packages/shared/src/sessions/mastra-om/index.ts');
+
+  // 1. Watermark + message slice
+  const watermark = readWatermark(expandedDir);
+  const allMessages = readAllMessages(jsonlPath);
+  const messages = watermark
+    ? messagesSinceWatermark(jsonlPath, watermark.lastObservedMessageId)
+    : allMessages;
+  if (messages.length === 0) {
+    console.log('Observer[mastra]: No new messages since watermark.');
+    return;
+  }
+
+  // 2. Filter to dialogue + drop placeholder text (Mastra rule: empty payload is no observation)
+  const dialogue = messages.filter(
+    (m) => (m.type === 'user' || m.type === 'assistant') && m.content.trim().length >= 10,
+  );
+  if (dialogue.length === 0) {
+    advanceMastraWatermark(expandedDir, jsonlPath, messages, watermark, 0);
+    console.log('Observer[mastra]: No dialogue in slice — watermark advanced (0 signals).');
+    return;
+  }
+
+  // 3. Load prior narrative + prior task/continuation hints
+  const mastraLedgerPath = findMastraLedgerPath(expandedDir);
+  const priorObservations = existsSync(mastraLedgerPath)
+    ? tailTruncate(readFileSync(mastraLedgerPath, 'utf-8'), MASTRA_PREVIOUS_TOKENS_CHARS)
+    : '';
+  const wasTruncated =
+    existsSync(mastraLedgerPath) &&
+    readFileSync(mastraLedgerPath, 'utf-8').length > MASTRA_PREVIOUS_TOKENS_CHARS;
+  const priorTask = readPriorTaskMeta(expandedDir);
+
+  // 4. Resolve extractor
+  const extractor = resolveExtractor();
+  if (!extractor) {
+    console.warn('Observer[mastra]: No LLM auth — aborting (no pattern fallback in Mastra path).');
+    return;
+  }
+
+  // 5. Build prompts + call LLM
+  const system = buildObserverSystemPrompt();
+  const user = buildObserverPrompt(priorObservations || undefined, dialogue, {
+    priorCurrentTask: priorTask?.currentTask,
+    priorSuggestedResponse: priorTask?.suggestedResponse,
+    wasTruncated,
+  });
+  const raw = await callExtractor(extractor, system, user);
+  if (!raw) {
+    console.warn('Observer[mastra]: Empty LLM response — watermark NOT advanced (will retry).');
+    return;
+  }
+
+  // 6. Parse
+  const parsed = parseObserverOutput(raw);
+  if (parsed.degenerate) {
+    console.warn('Observer[mastra]: Degenerate output detected — dropping, watermark NOT advanced.');
+    return;
+  }
+  const newObservations = parsed.observations.trim();
+  if (!newObservations) {
+    console.warn(
+      `Observer[mastra]: Empty observation block. Sample: ${raw.trim().slice(0, 400)}`,
+    );
+    // Still advance watermark — re-running on the same slice will just re-cost tokens.
+    advanceMastraWatermark(expandedDir, jsonlPath, messages, watermark, 0);
+    return;
+  }
+
+  // 7. Append to ledger + write continuity meta
+  appendToMastraLedger(mastraLedgerPath, priorObservations, newObservations);
+  writePriorTaskMeta(expandedDir, {
+    currentTask: parsed.currentTask,
+    suggestedResponse: parsed.suggestedContinuation,
+    threadTitle: parsed.threadTitle,
+    updatedAt: new Date().toISOString(),
+  });
+
+  // 8. Watermark
+  const bulletCount = (newObservations.match(/^\s*[*\-]\s/gm) ?? []).length;
+  advanceMastraWatermark(expandedDir, jsonlPath, messages, watermark, bulletCount);
+
+  console.log(
+    `Observer[mastra]: appended ${bulletCount} bullets from ${dialogue.length} dialogue / ${messages.length} total messages.\n` +
+      `  Ledger: ${mastraLedgerPath}\n` +
+      `  Current-task: ${parsed.currentTask ? parsed.currentTask.slice(0, 120) : '(none)'}`,
+  );
+}
+
+/**
+ * Append the new observation block to the existing ledger. We don't try to
+ * merge by date — Mastra's Observer already emits date headers, and the
+ * ledger is read by the next Observer call verbatim, so concatenation is
+ * sufficient. Successive same-day headers can be consolidated by the
+ * Reflector later.
+ */
+function appendToMastraLedger(path: string, prior: string, newBlock: string): void {
+  const dir = dirname(path);
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  if (!prior) {
+    writeFileSync(path, newBlock.trim() + '\n', 'utf-8');
+    return;
+  }
+  const existing = existsSync(path) ? readFileSync(path, 'utf-8') : '';
+  const merged = existing.replace(/\s+$/, '') + '\n\n' + newBlock.trim() + '\n';
+  writeFileSync(path, merged, 'utf-8');
+}
+
+function findMastraLedgerPath(sessionDir: string): string {
+  return join(sessionDir, 'data', 'observations.mastra.md');
+}
+
+function findPriorTaskMetaPath(sessionDir: string): string {
+  return join(sessionDir, 'meta', 'observation-task.json');
+}
+
+interface PriorTaskMeta {
+  currentTask?: string;
+  suggestedResponse?: string;
+  threadTitle?: string;
+  updatedAt: string;
+}
+
+function readPriorTaskMeta(sessionDir: string): PriorTaskMeta | null {
+  const p = findPriorTaskMetaPath(sessionDir);
+  if (!existsSync(p)) return null;
+  try {
+    const parsed = JSON.parse(readFileSync(p, 'utf-8'));
+    if (parsed && typeof parsed === 'object') return parsed as PriorTaskMeta;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function writePriorTaskMeta(sessionDir: string, meta: PriorTaskMeta): void {
+  const p = findPriorTaskMetaPath(sessionDir);
+  const dir = dirname(p);
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  writeFileSync(p, JSON.stringify(meta, null, 2) + '\n', 'utf-8');
+}
+
+/** Tail-truncate prior observations to ~2k tokens (Mastra default). */
+const MASTRA_PREVIOUS_TOKENS_CHARS = 2_000 * 4;
+
+function tailTruncate(s: string, maxChars: number): string {
+  if (s.length <= maxChars) return s;
+  return s.slice(s.length - maxChars);
+}
+
+function advanceMastraWatermark(
+  expandedDir: string,
+  jsonlPath: string,
+  messages: ObservableMessage[],
+  prior: ObservationWatermark | null,
+  signalCount: number,
+): void {
+  const header = readSessionId(jsonlPath);
+  const sessionId = header?.id || 'unknown';
+  const lastMessage = messages[messages.length - 1];
+  if (!lastMessage) return;
+  const wm: ObservationWatermark = {
+    sessionId,
+    lastObservedMessageId: lastMessage.id,
+    lastObservedAt: new Date().toISOString(),
+    observedCount: (prior?.observedCount ?? 0) + messages.length,
+    lastSignalCount: signalCount,
+  };
+  writeWatermark(expandedDir, wm);
 }
 
 async function runObservation(expandedDir: string, jsonlPath: string): Promise<void> {

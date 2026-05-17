@@ -703,6 +703,138 @@ function normalizeActor(a: unknown): 'user' | 'assistant' | undefined {
 }
 
 // ============================================================================
+// Mastra-style Reflector (vendored prompts, escalating compression retry)
+// ============================================================================
+
+/**
+ * Mastra-style reflection: read observations.mastra.md, run the Reflector
+ * agent with progressively stronger compression (levels 0 → 4) until the
+ * output fits under `observationTokens`, then replace the file. Tail-buffer
+ * is NOT preserved here because the Mastra Observer is append-only — each
+ * Observer run already adds a fresh block at the end, and the Reflector's
+ * job is to take the whole thing and condense the older parts.
+ *
+ * Switch on with `ORCHA_REFLECTOR_USE_MASTRA=1`.
+ */
+async function runMastraReflection(expandedDir: string): Promise<void> {
+  const {
+    buildReflectorPrompt,
+    buildReflectorSystemPrompt,
+    parseReflectorOutput,
+    MAX_COMPRESSION_LEVEL,
+    OBSERVATIONAL_MEMORY_DEFAULTS,
+  } = await import('../packages/shared/src/sessions/mastra-om/index.ts');
+
+  const ledgerPath = join(expandedDir, 'data', 'observations.mastra.md');
+  if (!existsSync(ledgerPath)) {
+    console.log('Reflector[mastra]: no observations.mastra.md, skipping.');
+    return;
+  }
+  const observations = readFileSync(ledgerPath, 'utf-8').trim();
+  if (!observations) {
+    console.log('Reflector[mastra]: ledger empty, skipping.');
+    return;
+  }
+
+  const threshold = Number(
+    process.env.ORCHA_REFLECTOR_THRESHOLD_TOKENS ??
+      OBSERVATIONAL_MEMORY_DEFAULTS.reflection.observationTokens,
+  );
+  const force = process.env.ORCHA_REFLECT_FORCE === '1';
+  const inputTokens = Math.ceil(observations.length / 4);
+  if (!force && inputTokens < threshold) {
+    console.log(
+      `Reflector[mastra]: ${inputTokens} tokens < threshold ${threshold} — skipping.`,
+    );
+    return;
+  }
+
+  const extractor = resolveExtractor();
+  if (!extractor) {
+    console.warn('Reflector[mastra]: no LLM auth available, aborting.');
+    process.exit(1);
+  }
+
+  const system = buildReflectorSystemPrompt();
+
+  // Escalating retry loop (Mastra style).
+  let chosen: { level: number; observations: string; tokens: number } | null = null;
+  let smallest: { level: number; observations: string; tokens: number } | null = null;
+  for (let level = 0; level <= MAX_COMPRESSION_LEVEL; level++) {
+    const user = buildReflectorPrompt(observations, undefined, level);
+    const raw = await callExtractor(extractor, system, user);
+    if (!raw) {
+      console.warn(`Reflector[mastra]: level ${level} → empty LLM response, escalating.`);
+      continue;
+    }
+    const parsed = parseReflectorOutput(raw);
+    if (parsed.degenerate || !parsed.observations.trim()) {
+      console.warn(`Reflector[mastra]: level ${level} → degenerate/empty, escalating.`);
+      continue;
+    }
+    const outTokens = Math.ceil(parsed.observations.length / 4);
+    if (!smallest || outTokens < smallest.tokens) {
+      smallest = { level, observations: parsed.observations.trim(), tokens: outTokens };
+    }
+    if (outTokens < threshold) {
+      chosen = { level, observations: parsed.observations.trim(), tokens: outTokens };
+      break;
+    }
+    console.log(
+      `Reflector[mastra]: level ${level} produced ${outTokens} tokens (>= ${threshold}), escalating.`,
+    );
+  }
+
+  // If even the most aggressive level didn't fit, fall back to the smallest
+  // candidate so the loop terminates (Mastra-aligned: "return the smallest
+  // non-degenerate candidate produced during retries").
+  const result = chosen ?? smallest;
+  if (!result) {
+    console.warn('Reflector[mastra]: every compression level failed — leaving ledger untouched.');
+    return;
+  }
+
+  // Back up before mutation.
+  const backupPath = ledgerPath.replace(/\.md$/, `.before-reflect-${Date.now()}.md`);
+  copyFileSync(ledgerPath, backupPath);
+  writeFileSync(ledgerPath, result.observations + '\n', 'utf-8');
+
+  // Reflection watermark
+  const reflectMetaDir = join(expandedDir, 'meta');
+  if (!existsSync(reflectMetaDir)) mkdirSync(reflectMetaDir, { recursive: true });
+  const reflectWatermarkPath = join(reflectMetaDir, 'reflection-watermark.json');
+  let prevRuns = 0;
+  if (existsSync(reflectWatermarkPath)) {
+    try {
+      prevRuns =
+        (JSON.parse(readFileSync(reflectWatermarkPath, 'utf-8')) as ReflectionWatermark)
+          .totalRunsCount ?? 0;
+    } catch {
+      /* ignore */
+    }
+  }
+  const sessionIdForOutput = expandedDir.split('/').pop() ?? 'unknown';
+  const newWatermark: ReflectionWatermark = {
+    sessionId: sessionIdForOutput,
+    lastReflectedAt: new Date().toISOString(),
+    totalRunsCount: prevRuns + 1,
+    lastInputCount: 1,
+    lastOutputCount: 1,
+    lastTokenEstimate: inputTokens,
+  };
+  writeFileSync(reflectWatermarkPath, JSON.stringify(newWatermark, null, 2), 'utf-8');
+
+  const fitNote = chosen
+    ? `fit at level ${chosen.level}`
+    : `did NOT fit; kept smallest from level ${result.level}`;
+  console.log(
+    `Reflector[mastra]: ${inputTokens} → ${result.tokens} tokens (${fitNote}).\n` +
+      `  Backup: ${backupPath}\n` +
+      `  Ledger: ${ledgerPath}`,
+  );
+}
+
+// ============================================================================
 // Main
 // ============================================================================
 
@@ -713,6 +845,14 @@ async function main(): Promise<void> {
     return;
   }
   const expandedDir = sessionDir.replace(/^~/, process.env.HOME || '~');
+
+  // Mastra-style reflection path (gated by env flag, runs on the new
+  // observations.mastra.md ledger written by the Mastra-style observer).
+  if (process.env.ORCHA_REFLECTOR_USE_MASTRA === '1') {
+    await runMastraReflection(expandedDir);
+    return;
+  }
+
   const obsPath = join(expandedDir, 'data', 'observations.json');
   const mdPath = join(expandedDir, 'data', 'observations.md');
   const mdExists = existsSync(mdPath);
