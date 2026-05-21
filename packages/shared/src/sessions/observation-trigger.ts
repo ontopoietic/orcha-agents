@@ -24,6 +24,10 @@
  *                                        the slice grows too big to chunk
  *                                        cheaply)
  *   ORCHA_OBSERVER_MIN_INTERVAL_SECONDS  default 60
+ *   ORCHA_OBSERVER_KILL_TIMEOUT_MS       default 240000 (4 min) — outer
+ *                                        killswitch covering N chunks at
+ *                                        Haiku speed; was 60s, too tight
+ *                                        for chunked Mastra runs
  *   ORCHA_OBSERVER_DISABLE_TRIGGER       set to "1" to opt out entirely
  *
  * Resolution of the script: CRAFT_APP_ROOT (set by the Electron main
@@ -176,14 +180,20 @@ function spawnObserver(sessionDir: string, sessionId: string): void {
     log.debug(`Observer (token-trigger) spawn error for ${sessionId}: ${err.message}`);
   });
 
-  // Kill switch — observer should never run longer than 60s.
+  // Kill switch — must cover N chunks at Haiku-class latency. Default 4 min
+  // accommodates ~6 chunks at ~30s each; tunable via env. Each chunk advances
+  // the watermark, so a kill mid-run is self-healing on the next trigger.
+  const killTimeoutMs = (() => {
+    const v = parseInt(process.env.ORCHA_OBSERVER_KILL_TIMEOUT_MS ?? '', 10);
+    return Number.isFinite(v) && v > 0 ? v : 240_000;
+  })();
   setTimeout(() => {
     if (state.inFlight) {
       child.kill('SIGTERM');
       state.inFlight = false;
-      log.debug(`Observer (token-trigger) killed for ${sessionId} (60s timeout)`);
+      log.debug(`Observer (token-trigger) killed for ${sessionId} (${killTimeoutMs}ms timeout)`);
     }
-  }, 60_000);
+  }, killTimeoutMs);
 }
 
 /**
