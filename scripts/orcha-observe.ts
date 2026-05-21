@@ -778,11 +778,18 @@ async function callClaudeCLI(cliPath: string, model: string, system: string, use
     let stderr = '';
     child.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
     child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
+    // Per-call timeout: a single Haiku chunk should finish well inside 90s.
+    // The OUTER killswitch (observation-watcher / observation-trigger) bounds
+    // total wallclock across chunks. Env override for slow links.
+    const llmTimeoutMs = (() => {
+      const v = parseInt(process.env.ORCHA_OBSERVER_LLM_TIMEOUT_MS ?? '', 10);
+      return Number.isFinite(v) && v > 0 ? v : 90_000;
+    })();
     const timer = setTimeout(() => {
       child.kill('SIGTERM');
-      console.warn('Observer: claude CLI timed out after 60s');
+      console.warn(`Observer: claude CLI timed out after ${llmTimeoutMs}ms`);
       resolve(null);
-    }, 60_000);
+    }, llmTimeoutMs);
     child.on('close', (code) => {
       clearTimeout(timer);
       if (code === 0) {

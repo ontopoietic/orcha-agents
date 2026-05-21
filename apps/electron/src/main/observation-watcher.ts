@@ -263,11 +263,18 @@ export async function runObserverNow(sessionDir: string): Promise<string> {
       process.stderr.write(s)
     })
 
+    // Must cover N chunks at Haiku-class latency. Default 4 min mirrors
+    // observation-trigger.ts. Each chunk advances the watermark, so a mid-run
+    // kill is self-healing on the next trigger.
+    const killTimeoutMs = (() => {
+      const v = parseInt(process.env.ORCHA_OBSERVER_KILL_TIMEOUT_MS ?? '', 10)
+      return Number.isFinite(v) && v > 0 ? v : 240_000
+    })()
     const killer = setTimeout(() => {
       child.kill('SIGTERM')
-      obsLog.warn(`subprocess timed out after 60s; partial stdout=${stdout.trim().slice(0, 400)} stderr=${stderr.trim().slice(0, 400)}`)
-      rejectOut(new Error('Observer script timed out after 60s'))
-    }, 60_000)
+      obsLog.warn(`subprocess timed out after ${killTimeoutMs}ms; partial stdout=${stdout.trim().slice(0, 400)} stderr=${stderr.trim().slice(0, 400)}`)
+      rejectOut(new Error(`Observer script timed out after ${killTimeoutMs}ms`))
+    }, killTimeoutMs)
 
     child.on('close', (code) => {
       clearTimeout(killer)
