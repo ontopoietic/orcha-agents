@@ -163,6 +163,54 @@ async function main(): Promise<void> {
 }
 
 // ============================================================================
+// Chunking — Mastra `maxTokensPerBatch` analogue
+// ============================================================================
+
+/**
+ * Maximum NEW-content tokens we feed into a single Observer LLM call. Mastra's
+ * `OBSERVATIONAL_MEMORY_DEFAULTS.observation.maxTokensPerBatch` is 10_000 —
+ * we adopt the same default. With Haiku 4.5 this keeps each call ≤25s, so a
+ * 30k-token slice splits into ~3 chunks that all finish inside the 60s
+ * trigger killswitch with margin.
+ *
+ * Override with `ORCHA_OBSERVER_MAX_TOKENS_PER_BATCH`.
+ */
+const OBSERVER_MAX_TOKENS_PER_BATCH = (() => {
+  const v = parseInt(process.env.ORCHA_OBSERVER_MAX_TOKENS_PER_BATCH ?? '', 10);
+  return Number.isFinite(v) && v > 0 ? v : 10_000;
+})();
+
+/**
+ * Split a message slice into chunks whose cumulative content length stays
+ * under `maxTokens` (chars/4 heuristic). Splits at message boundaries — a
+ * single oversized message becomes its own chunk rather than being dropped.
+ * The chunks preserve original order so the watermark advances by contiguous
+ * ranges.
+ */
+function chunkMessagesByTokens(
+  messages: ObservableMessage[],
+  maxTokens: number,
+): ObservableMessage[][] {
+  if (messages.length === 0) return [];
+  const maxChars = maxTokens * 4;
+  const chunks: ObservableMessage[][] = [];
+  let current: ObservableMessage[] = [];
+  let currentChars = 0;
+  for (const m of messages) {
+    const len = m.content.length;
+    if (current.length > 0 && currentChars + len > maxChars) {
+      chunks.push(current);
+      current = [];
+      currentChars = 0;
+    }
+    current.push(m);
+    currentChars += len;
+  }
+  if (current.length > 0) chunks.push(current);
+  return chunks;
+}
+
+// ============================================================================
 // Mastra-style Observer (vendored prompts/parsers, append-only)
 // ============================================================================
 
@@ -188,89 +236,106 @@ async function runMastraObservation(expandedDir: string, jsonlPath: string): Pro
   } = await import('../packages/shared/src/sessions/mastra-om/index.ts');
 
   // 1. Watermark + message slice
-  const watermark = readWatermark(expandedDir);
+  const initialWatermark = readWatermark(expandedDir);
   const allMessages = readAllMessages(jsonlPath);
-  const messages = watermark
-    ? messagesSinceWatermark(jsonlPath, watermark.lastObservedMessageId)
+  const slice = initialWatermark
+    ? messagesSinceWatermark(jsonlPath, initialWatermark.lastObservedMessageId)
     : allMessages;
-  if (messages.length === 0) {
+  if (slice.length === 0) {
     console.log('Observer[mastra]: No new messages since watermark.');
     return;
   }
 
-  // 2. Filter to dialogue + drop placeholder text (Mastra rule: empty payload is no observation)
-  const dialogue = messages.filter(
-    (m) => (m.type === 'user' || m.type === 'assistant') && m.content.trim().length >= 10,
-  );
-  if (dialogue.length === 0) {
-    advanceMastraWatermark(expandedDir, jsonlPath, messages, watermark, 0);
-    console.log('Observer[mastra]: No dialogue in slice — watermark advanced (0 signals).');
-    return;
-  }
-
-  // 3. Load prior narrative + prior task/continuation hints
-  const mastraLedgerPath = findMastraLedgerPath(expandedDir);
-  const priorObservations = existsSync(mastraLedgerPath)
-    ? tailTruncate(readFileSync(mastraLedgerPath, 'utf-8'), MASTRA_PREVIOUS_TOKENS_CHARS)
-    : '';
-  const wasTruncated =
-    existsSync(mastraLedgerPath) &&
-    readFileSync(mastraLedgerPath, 'utf-8').length > MASTRA_PREVIOUS_TOKENS_CHARS;
-  const priorTask = readPriorTaskMeta(expandedDir);
-
-  // 4. Resolve extractor
+  // 2. Resolve extractor up front — same auth for every chunk
   const extractor = resolveExtractor();
   if (!extractor) {
     console.warn('Observer[mastra]: No LLM auth — aborting (no pattern fallback in Mastra path).');
     return;
   }
 
-  // 5. Build prompts + call LLM
+  // 3. Chunk the slice so each LLM call sees ≤OBSERVER_MAX_TOKENS_PER_BATCH of
+  // NEW content. Mastra's analogue: `maxTokensPerBatch: 10_000`. Chunking
+  // happens BEFORE dialogue filtering so the watermark advances by a
+  // contiguous message range each iteration (incl. tool calls that sit
+  // between user+assistant turns).
+  const chunks = chunkMessagesByTokens(slice, OBSERVER_MAX_TOKENS_PER_BATCH);
+  const mastraLedgerPath = findMastraLedgerPath(expandedDir);
   const system = buildObserverSystemPrompt();
-  const user = buildObserverPrompt(priorObservations || undefined, dialogue, {
-    priorCurrentTask: priorTask?.currentTask,
-    priorSuggestedResponse: priorTask?.suggestedResponse,
-    wasTruncated,
-  });
-  const raw = await callExtractor(extractor, system, user);
-  if (!raw) {
-    console.warn('Observer[mastra]: Empty LLM response — watermark NOT advanced (will retry).');
-    return;
-  }
 
-  // 6. Parse
-  const parsed = parseObserverOutput(raw);
-  if (parsed.degenerate) {
-    console.warn('Observer[mastra]: Degenerate output detected — dropping, watermark NOT advanced.');
-    return;
-  }
-  const newObservations = parsed.observations.trim();
-  if (!newObservations) {
-    console.warn(
-      `Observer[mastra]: Empty observation block. Sample: ${raw.trim().slice(0, 400)}`,
+  let runningWatermark: ObservationWatermark | null = initialWatermark;
+  let totalBullets = 0;
+  let totalDialogue = 0;
+  let lastCurrentTask: string | undefined;
+
+  for (let i = 0; i < chunks.length; i++) {
+    const chunk = chunks[i];
+    const chunkLabel = `chunk ${i + 1}/${chunks.length}`;
+
+    // Filter to dialogue — empty payload is no observation (Mastra rule).
+    const dialogue = chunk.filter(
+      (m) => (m.type === 'user' || m.type === 'assistant') && m.content.trim().length >= 10,
     );
-    // Still advance watermark — re-running on the same slice will just re-cost tokens.
-    advanceMastraWatermark(expandedDir, jsonlPath, messages, watermark, 0);
-    return;
+    if (dialogue.length === 0) {
+      runningWatermark = advanceMastraWatermark(expandedDir, jsonlPath, chunk, runningWatermark, 0);
+      console.log(`Observer[mastra]: ${chunkLabel} no dialogue — watermark advanced (0 signals).`);
+      continue;
+    }
+    totalDialogue += dialogue.length;
+
+    // Re-load prior narrative + task between chunks — the previous chunk
+    // already appended; the next call must see the updated state.
+    const priorObservations = existsSync(mastraLedgerPath)
+      ? tailTruncate(readFileSync(mastraLedgerPath, 'utf-8'), MASTRA_PREVIOUS_TOKENS_CHARS)
+      : '';
+    const wasTruncated =
+      existsSync(mastraLedgerPath) &&
+      readFileSync(mastraLedgerPath, 'utf-8').length > MASTRA_PREVIOUS_TOKENS_CHARS;
+    const priorTask = readPriorTaskMeta(expandedDir);
+
+    const user = buildObserverPrompt(priorObservations || undefined, dialogue, {
+      priorCurrentTask: priorTask?.currentTask,
+      priorSuggestedResponse: priorTask?.suggestedResponse,
+      wasTruncated,
+    });
+    const raw = await callExtractor(extractor, system, user);
+    if (!raw) {
+      console.warn(`Observer[mastra]: ${chunkLabel} empty LLM response — aborting chunk loop, watermark NOT advanced further.`);
+      return;
+    }
+
+    const parsed = parseObserverOutput(raw);
+    if (parsed.degenerate) {
+      console.warn(`Observer[mastra]: ${chunkLabel} degenerate output — aborting chunk loop, watermark NOT advanced further.`);
+      return;
+    }
+    const newObservations = parsed.observations.trim();
+    if (!newObservations) {
+      console.warn(
+        `Observer[mastra]: ${chunkLabel} empty observation block. Sample: ${raw.trim().slice(0, 400)}`,
+      );
+      runningWatermark = advanceMastraWatermark(expandedDir, jsonlPath, chunk, runningWatermark, 0);
+      continue;
+    }
+
+    appendToMastraLedger(mastraLedgerPath, priorObservations, newObservations);
+    writePriorTaskMeta(expandedDir, {
+      currentTask: parsed.currentTask,
+      suggestedResponse: parsed.suggestedContinuation,
+      threadTitle: parsed.threadTitle,
+      updatedAt: new Date().toISOString(),
+    });
+    if (parsed.currentTask) lastCurrentTask = parsed.currentTask;
+
+    const bulletCount = (newObservations.match(/^\s*[*\-]\s/gm) ?? []).length;
+    totalBullets += bulletCount;
+    runningWatermark = advanceMastraWatermark(expandedDir, jsonlPath, chunk, runningWatermark, bulletCount);
   }
-
-  // 7. Append to ledger + write continuity meta
-  appendToMastraLedger(mastraLedgerPath, priorObservations, newObservations);
-  writePriorTaskMeta(expandedDir, {
-    currentTask: parsed.currentTask,
-    suggestedResponse: parsed.suggestedContinuation,
-    threadTitle: parsed.threadTitle,
-    updatedAt: new Date().toISOString(),
-  });
-
-  // 8. Watermark
-  const bulletCount = (newObservations.match(/^\s*[*\-]\s/gm) ?? []).length;
-  advanceMastraWatermark(expandedDir, jsonlPath, messages, watermark, bulletCount);
 
   console.log(
-    `Observer[mastra]: appended ${bulletCount} bullets from ${dialogue.length} dialogue / ${messages.length} total messages.\n` +
+    `Observer[mastra]: appended ${totalBullets} bullets across ${chunks.length} chunk(s) ` +
+      `(${totalDialogue} dialogue / ${slice.length} total messages).\n` +
       `  Ledger: ${mastraLedgerPath}\n` +
-      `  Current-task: ${parsed.currentTask ? parsed.currentTask.slice(0, 120) : '(none)'}`,
+      `  Current-task: ${lastCurrentTask ? lastCurrentTask.slice(0, 120) : '(none)'}`,
   );
 }
 
@@ -341,11 +406,11 @@ function advanceMastraWatermark(
   messages: ObservableMessage[],
   prior: ObservationWatermark | null,
   signalCount: number,
-): void {
+): ObservationWatermark | null {
   const header = readSessionId(jsonlPath);
   const sessionId = header?.id || 'unknown';
   const lastMessage = messages[messages.length - 1];
-  if (!lastMessage) return;
+  if (!lastMessage) return prior;
   const wm: ObservationWatermark = {
     sessionId,
     lastObservedMessageId: lastMessage.id,
@@ -354,93 +419,102 @@ function advanceMastraWatermark(
     lastSignalCount: signalCount,
   };
   writeWatermark(expandedDir, wm);
+  return wm;
 }
 
 async function runObservation(expandedDir: string, jsonlPath: string): Promise<void> {
-  // 1. Read watermark
-  const watermark = readWatermark(expandedDir);
+  const initialWatermark = readWatermark(expandedDir);
 
-  // 2. Read new messages (slice) AND all session messages (for anchor scope).
-  // First run: process the entire conversation so the LLM can build the
-  // narrative from the start. Token cost is one-shot; subsequent runs are
-  // bounded by the watermark.
+  // Slice = new messages since watermark; allMessages = anchor scope for the
+  // LLM (it may keep older bullets whose anchors live before the watermark).
+  // First run: slice equals the entire conversation.
   const allMessages = readAllMessages(jsonlPath);
-  const messages = watermark
-    ? messagesSinceWatermark(jsonlPath, watermark.lastObservedMessageId)
+  const slice = initialWatermark
+    ? messagesSinceWatermark(jsonlPath, initialWatermark.lastObservedMessageId)
     : allMessages;
 
-  if (messages.length === 0) {
+  if (slice.length === 0) {
     console.log('Observer: No new messages since watermark.');
     return;
   }
 
-  // 3. Load prior narrative — enables the LLM to extend/consolidate instead of
-  // restart from scratch each run (Mastra working-memory pattern).
-  const priorNarrative = loadObservationsMd(expandedDir);
-  const priorBulletCount = countBullets(priorNarrative);
-
-  // 4. Extract observations — LLM-first, pattern fallback
-  const { observations, fromLlm, rawNarrative } = await extractObservationsViaLlm(messages, allMessages, priorNarrative);
-
-  // 5. Read session header for anchor info (needed for watermark even on empty result)
   const header = readSessionId(jsonlPath);
   const sessionId = header?.id || 'unknown';
   const anchors = header?.anchors || [];
 
-  // 6. Write signals to canonical Markdown ledger + evidence sidecar.
-  // LLM path returns the FULL updated narrative — REPLACE the ledger.
-  // Pattern fallback returns slice deltas only — APPEND.
-  // Safety: if the LLM-rewrite path drops below 50 % of prior bullet count,
-  // suspect a regression and append-only instead of replacing.
-  let signalCount = 0;
+  // Chunk the slice (Mastra `maxTokensPerBatch` analogue). Each chunk feeds
+  // ≤OBSERVER_MAX_TOKENS_PER_BATCH of NEW content into one LLM call. Between
+  // chunks we re-load the prior narrative because each chunk just wrote to
+  // the ledger.
+  const chunks = chunkMessagesByTokens(slice, OBSERVER_MAX_TOKENS_PER_BATCH);
+
+  let runningWatermark: ObservationWatermark | null = initialWatermark;
+  let totalSignals = 0;
+  let totalPivotal = 0;
+  let totalQuestion = 0;
+  let totalContext = 0;
   let mdLedgerPath: string | null = null;
-  if (observations.length > 0) {
-    const runCreatedAt = new Date().toISOString();
-    const wouldRegress = priorBulletCount > 0 && observations.length * 2 < priorBulletCount;
-    if (fromLlm && !wouldRegress && rawNarrative) {
-      writeMarkdownLedgerReplace(expandedDir, observations, rawNarrative, runCreatedAt, anchors);
-    } else {
-      if (fromLlm && wouldRegress) {
-        console.warn(`Observer: LLM emitted ${observations.length} bullets but prior had ${priorBulletCount} — appending instead of replacing to avoid regression.`);
+
+  for (let i = 0; i < chunks.length; i++) {
+    const chunk = chunks[i];
+    const chunkLabel = `chunk ${i + 1}/${chunks.length}`;
+
+    const priorNarrative = loadObservationsMd(expandedDir);
+    const priorBulletCount = countBullets(priorNarrative);
+
+    const { observations, fromLlm, rawNarrative } =
+      await extractObservationsViaLlm(chunk, allMessages, priorNarrative);
+
+    let signalCount = 0;
+    if (observations.length > 0) {
+      const runCreatedAt = new Date().toISOString();
+      const wouldRegress = priorBulletCount > 0 && observations.length * 2 < priorBulletCount;
+      if (fromLlm && !wouldRegress && rawNarrative) {
+        writeMarkdownLedgerReplace(expandedDir, observations, rawNarrative, runCreatedAt, anchors);
+      } else {
+        if (fromLlm && wouldRegress) {
+          console.warn(`Observer: ${chunkLabel} LLM emitted ${observations.length} bullets but prior had ${priorBulletCount} — appending instead of replacing to avoid regression.`);
+        }
+        writeMarkdownLedger(expandedDir, observations, runCreatedAt, anchors);
       }
-      writeMarkdownLedger(expandedDir, observations, runCreatedAt, anchors);
+      mdLedgerPath = findMarkdownLedgerPath(expandedDir);
+      signalCount = observations.length;
+      totalSignals += signalCount;
+      totalPivotal += observations.filter(o => o.salience === 'pivotal').length;
+      totalQuestion += observations.filter(o => o.salience === 'question').length;
+      totalContext += observations.filter(o => o.salience === 'context').length;
+    } else {
+      console.log(`Observer: ${chunkLabel} 0 observations — advancing watermark anyway to avoid reprocessing.`);
     }
-    mdLedgerPath = findMarkdownLedgerPath(expandedDir);
-    signalCount = observations.length;
-  } else {
-    console.log('Observer: No extractable observations found — advancing watermark anyway to avoid reprocessing.');
+
+    // Watermark advances ALWAYS, even on 0 observations — otherwise the same
+    // slice gets re-analyzed on every trigger, burning tokens.
+    const lastMessage = chunk[chunk.length - 1];
+    const newWatermark: ObservationWatermark = {
+      sessionId,
+      lastObservedMessageId: lastMessage.id,
+      lastObservedAt: new Date().toISOString(),
+      observedCount: (runningWatermark?.observedCount ?? 0) + chunk.length,
+      lastSignalCount: signalCount,
+    };
+    writeWatermark(expandedDir, newWatermark);
+    runningWatermark = newWatermark;
   }
 
-  // 6. Update watermark — ALWAYS, even when 0 observations were extracted.
-  // Otherwise the same slice gets re-analyzed on every subsequent trigger,
-  // burning tokens and leaving the UI stuck on a stale "Last run" timestamp.
-  const lastMessage = messages[messages.length - 1];
-  const newWatermark: ObservationWatermark = {
-    sessionId,
-    lastObservedMessageId: lastMessage.id,
-    lastObservedAt: new Date().toISOString(),
-    observedCount: (watermark?.observedCount ?? 0) + messages.length,
-    lastSignalCount: signalCount,
-  };
-  writeWatermark(expandedDir, newWatermark);
+  const finalLastMessageId = runningWatermark?.lastObservedMessageId ?? slice[slice.length - 1].id;
 
-  if (observations.length === 0) {
+  if (totalSignals === 0) {
     console.log(
-      `Observer: Watermark advanced (0 signals). ${messages.length} messages marked as processed.\n` +
-      `  Watermark: ${lastMessage.id.substring(0, 30)}...`
+      `Observer: Watermark advanced (0 signals across ${chunks.length} chunk(s), ${slice.length} messages).\n` +
+      `  Watermark: ${finalLastMessageId.substring(0, 30)}...`
     );
     return;
   }
 
-  // 7. Report summary (visible to agent as hook reason)
-  const pivotal = observations.filter(o => o.salience === 'pivotal').length;
-  const question = observations.filter(o => o.salience === 'question').length;
-  const context = observations.filter(o => o.salience === 'context').length;
-
   console.log(
-    `Observer: Extracted ${signalCount} signals from ${messages.length} messages.\n` +
-    `  🔴 ${pivotal} pivotal | 🟡 ${question} questions | 🟢 ${context} context\n` +
-    `  Watermark: ${lastMessage.id.substring(0, 30)}...\n` +
+    `Observer: Extracted ${totalSignals} signals across ${chunks.length} chunk(s) from ${slice.length} messages.\n` +
+    `  🔴 ${totalPivotal} pivotal | 🟡 ${totalQuestion} questions | 🟢 ${totalContext} context\n` +
+    `  Watermark: ${finalLastMessageId.substring(0, 30)}...\n` +
     `  Ledger: ${mdLedgerPath ?? '(none)'}`
   );
 }
@@ -487,7 +561,10 @@ type ExtractorMode =
  *   ORCHA_OBSERVER_CLI_PATH    explicit override for the claude binary
  */
 function resolveExtractor(): ExtractorMode | null {
-  const model = process.env.ORCHA_OBSERVER_MODEL ?? 'claude-sonnet-4-6';
+  // Haiku 4.5 = our analogue to Mastra's gemini-2.5-flash default: fast enough
+  // (~10-25s per call) that the slice can be chunked into ≤10k batches and the
+  // whole observation completes inside the 60s killswitch.
+  const model = process.env.ORCHA_OBSERVER_MODEL ?? 'claude-haiku-4-5-20251001';
 
   // CLI path takes precedence — the OAuth token is the most common auth in
   // orcha-agents and the CLI hides the header complexity.

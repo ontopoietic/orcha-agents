@@ -19,7 +19,10 @@
  * during a flurry of messages.
  *
  * Env vars:
- *   ORCHA_OBSERVER_THRESHOLD_TOKENS      default 30000
+ *   ORCHA_OBSERVER_THRESHOLD_TOKENS      default 24000 (Mastra bufferActivation
+ *                                        0.8 × messageTokens 30k — fire BEFORE
+ *                                        the slice grows too big to chunk
+ *                                        cheaply)
  *   ORCHA_OBSERVER_MIN_INTERVAL_SECONDS  default 60
  *   ORCHA_OBSERVER_DISABLE_TRIGGER       set to "1" to opt out entirely
  *
@@ -53,7 +56,7 @@ function resolveConfig(): TriggerConfig {
   const t = parseInt(process.env.ORCHA_OBSERVER_THRESHOLD_TOKENS ?? '', 10);
   const m = parseInt(process.env.ORCHA_OBSERVER_MIN_INTERVAL_SECONDS ?? '', 10);
   return {
-    thresholdTokens: Number.isFinite(t) && t > 0 ? t : 30_000,
+    thresholdTokens: Number.isFinite(t) && t > 0 ? t : 24_000,
     minIntervalSeconds: Number.isFinite(m) && m >= 0 ? m : 60,
   };
 }
