@@ -216,16 +216,49 @@ export function loadObservationSignalsFromMastraMarkdown(
 }
 
 /**
- * Combined accessor: Mastra ledger if present (post-cutover), else legacy MD,
- * else legacy JSON. Empty array on all-missing.
+ * Combined accessor.
+ *
+ * Strategy (post Phase 4 of the Mastra migration): MERGE both ledgers when
+ * both are present so legacy content stays visible without forcing a
+ * destructive migration script. Mastra wins on ID collision (same anchor
+ * observed by both paths). Falls back to JSON only when neither MD exists.
+ *
+ * Result is sorted ascending by createdAt so the UI's chronological grouping
+ * Just Works regardless of which path produced which bullet.
  */
 export function loadObservationSignals(
   sessionDir: string,
   idStrategy: ObservationIdStrategy = 'anchor-stable',
 ): ObservationSignal[] {
-  const fromMastra = loadObservationSignalsFromMastraMarkdown(sessionDir, idStrategy);
-  if (fromMastra && fromMastra.length > 0) return fromMastra;
-  const fromMd = loadObservationSignalsFromMarkdown(sessionDir, idStrategy);
-  if (fromMd && fromMd.length > 0) return fromMd;
-  return loadObservationSignalsFromJson(sessionDir);
+  const fromMastra = loadObservationSignalsFromMastraMarkdown(sessionDir, idStrategy) ?? [];
+  const fromLegacyMd = loadObservationSignalsFromMarkdown(sessionDir, idStrategy) ?? [];
+  if (fromMastra.length === 0 && fromLegacyMd.length === 0) {
+    return loadObservationSignalsFromJson(sessionDir);
+  }
+  return mergeObservationSignals(fromMastra, fromLegacyMd);
+}
+
+/**
+ * Merge two ObservationSignal lists. Order is: Mastra entries first (they
+ * "win" on duplicate IDs), then legacy entries that don't collide. Finally
+ * sort by createdAt ascending so chronological grouping in the UI is stable.
+ */
+export function mergeObservationSignals(
+  preferred: ObservationSignal[],
+  fallback: ObservationSignal[],
+): ObservationSignal[] {
+  const seen = new Set<string>();
+  const out: ObservationSignal[] = [];
+  for (const sig of preferred) {
+    if (seen.has(sig.id)) continue;
+    seen.add(sig.id);
+    out.push(sig);
+  }
+  for (const sig of fallback) {
+    if (seen.has(sig.id)) continue;
+    seen.add(sig.id);
+    out.push(sig);
+  }
+  out.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  return out;
 }

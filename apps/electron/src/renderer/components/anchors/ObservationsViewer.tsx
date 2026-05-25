@@ -269,9 +269,9 @@ export function ObservationsContent({ sessionDir }: { sessionDir: string | null 
       </div>
 
       <footer className="px-6 py-2 border-t border-border text-xs text-foreground/65 shrink-0">
-        Source: <code className="text-foreground/70">observations.mastra.md</code> when
-        present, else <code className="text-foreground/70">observations.md</code> (both
-        with evidence sidecar)
+        Sources (merged): <code className="text-foreground/70">observations.mastra.md</code>
+        {' · '}<code className="text-foreground/70">observations.md</code>
+        {' (each with its own evidence sidecar; Mastra wins on duplicate anchor)'}
       </footer>
     </div>
   )

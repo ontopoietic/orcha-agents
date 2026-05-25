@@ -545,17 +545,29 @@ function readMastraObservationsFromMarkdown(sessionDir: string): ObservationSign
  * Read all observations for a session. Returns [] if the file does not
  * exist or is malformed (best-effort — the UI should still render).
  *
- * Source-of-truth order (first-match wins):
- *   1. observations.mastra.md  (Mastra-style ledger from the new path)
- *   2. observations.md         (legacy Markdown ledger)
- *   3. observations.json       (legacy JSON for un-migrated sessions)
+ * Source-of-truth strategy (post Phase 4 of the Mastra migration):
+ *   - If either Markdown ledger has content, MERGE both into one list.
+ *     Mastra entries win on ID collision (same anchor observed by both
+ *     paths). This keeps legacy content visible without a destructive
+ *     migration step.
+ *   - Otherwise fall back to observations.json for un-migrated legacy
+ *     sessions.
  */
 export function readObservationsList(sessionDir: string): ObservationSignal[] {
-  const fromMastra = readMastraObservationsFromMarkdown(sessionDir)
-  if (fromMastra && fromMastra.length > 0) return fromMastra
+  const fromMastra = readMastraObservationsFromMarkdown(sessionDir) ?? []
+  const fromMarkdown = readObservationsFromMarkdown(sessionDir) ?? []
 
-  const fromMarkdown = readObservationsFromMarkdown(sessionDir)
-  if (fromMarkdown && fromMarkdown.length > 0) return fromMarkdown
+  if (fromMastra.length > 0 || fromMarkdown.length > 0) {
+    const seen = new Set<string>()
+    const merged: ObservationSignal[] = []
+    for (const sig of [...fromMastra, ...fromMarkdown]) {
+      if (seen.has(sig.id)) continue
+      seen.add(sig.id)
+      merged.push(sig)
+    }
+    merged.sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+    return merged
+  }
 
   const jsonPath = join(sessionDir, 'data', 'observations.json')
   if (!existsSync(jsonPath)) return []
