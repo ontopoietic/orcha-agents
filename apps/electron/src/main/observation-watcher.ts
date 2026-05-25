@@ -459,11 +459,30 @@ function deriveCreatedAt(bullet: ParsedBullet): string {
 
 /**
  * Read Mastra-format observations.mastra.md. Returns null if the file
- * doesn't exist or has no recognizable bullets. Mastra bullets don't carry
- * per-bullet anchor short-IDs the way our legacy format does, so the
- * evidence sidecar isn't consulted here; `messageRange` is left empty until
- * the future extractor-agent pass back-derives source pointers.
+ * doesn't exist or has no recognizable bullets.
+ *
+ * Anchors: post Phase 1, Mastra bullets carry `{shortId}` anchors. We resolve
+ * them via `observations-evidence.mastra.json` (sister file to the ledger) so
+ * the UI back-link populates the same as the legacy path.
  */
+interface MastraEvidenceEntry {
+  fullMessageId: string
+  excerpt?: string
+  actor?: 'user' | 'agent'
+  createdAt?: string
+}
+
+function loadMastraEvidence(sessionDir: string): Record<string, MastraEvidenceEntry> {
+  const p = join(sessionDir, 'data', 'observations-evidence.mastra.json')
+  if (!existsSync(p)) return {}
+  try {
+    const raw = JSON.parse(readFileSync(p, 'utf-8'))
+    return raw && typeof raw === 'object' ? (raw as Record<string, MastraEvidenceEntry>) : {}
+  } catch {
+    return {}
+  }
+}
+
 function readMastraObservationsFromMarkdown(sessionDir: string): ObservationSignal[] | null {
   const mdPath = join(sessionDir, 'data', 'observations.mastra.md')
   if (!existsSync(mdPath)) return null
@@ -475,18 +494,34 @@ function readMastraObservationsFromMarkdown(sessionDir: string): ObservationSign
   }
   if (!bullets || bullets.length === 0) return null
 
+  const sidecar = loadMastraEvidence(sessionDir)
   const result: ObservationSignal[] = []
+  const seenAnchorCounts = new Map<string, number>()
+
   for (let i = 0; i < bullets.length; i++) {
     const bullet = bullets[i]!
-    const createdAt =
-      bullet.date && bullet.time
+    const evidence = bullet.anchorShortId ? sidecar[bullet.anchorShortId] : undefined
+    const createdAt = evidence?.createdAt
+      ? evidence.createdAt
+      : bullet.date && bullet.time
         ? (() => {
             const d = new Date(`${bullet.date}T${bullet.time}:00`)
             return Number.isNaN(d.getTime()) ? new Date().toISOString() : d.toISOString()
           })()
         : new Date().toISOString()
+
+    let id: string
+    if (bullet.anchorShortId) {
+      const anchor = bullet.anchorShortId
+      const dupIdx = seenAnchorCounts.get(anchor) ?? 0
+      seenAnchorCounts.set(anchor, dupIdx + 1)
+      id = `obs-${anchor}${dupIdx > 0 ? `-${dupIdx}` : ''}`
+    } else {
+      id = `obs-mastra-${i}`
+    }
+
     result.push({
-      id: `obs-mastra-${i}`,
+      id,
       createdAt,
       source: 'conversation',
       summary: bullet.summary,
@@ -494,9 +529,12 @@ function readMastraObservationsFromMarkdown(sessionDir: string): ObservationSign
       salience: bullet.salience,
       conversation: {
         sessionId: '',
-        messageRange: { from: '', to: '' },
-        excerpt: '',
-        actor: 'agent',
+        messageRange: {
+          from: evidence?.fullMessageId ?? '',
+          to: evidence?.fullMessageId ?? '',
+        },
+        excerpt: evidence?.excerpt ?? '',
+        actor: evidence?.actor ?? 'agent',
       },
     })
   }

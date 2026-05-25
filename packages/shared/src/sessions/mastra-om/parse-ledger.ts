@@ -45,6 +45,12 @@ export interface MastraParsedBullet {
   date: string | null;
   /** Headline text, with any sub-bullets folded in as " — detail" suffixes. */
   summary: string;
+  /**
+   * Orcha anchor shortId extracted from the trailing `{shortId}` of the
+   * top-level bullet line, or null if the LLM omitted it. Sub-bullet anchors
+   * are intentionally NOT propagated (see orcha-anchor-instruction.ts).
+   */
+  anchorShortId: string | null;
 }
 
 const DATE_HEADER_RE =
@@ -54,6 +60,9 @@ const BULLET_RE =
   /^[*-]\s+(🔴|🟡|🟢|✅)\s+(?:\(([0-2]?\d:\d{2})(?:\s*[AP]M)?\)\s+)?(.+?)\s*$/u;
 // Sub-bullet (2-space indent): `  * -> text` or `  * ✅ text` or `  * 🔴 (…) text`
 const SUB_BULLET_RE = /^\s{2,}[*-]\s+(.+?)\s*$/;
+// Trailing `{shortId}` (the orcha-anchor convention emitted by the LLM under
+// our ORCHA_ANCHOR_INSTRUCTION override). 3-40 chars of [A-Za-z0-9_-].
+const TRAILING_ANCHOR_RE = /\s*\{([A-Za-z0-9_-]{3,40})\}\s*$/;
 
 const EMOJI_TO_SALIENCE: Record<string, { salience: Salience; completed: boolean }> = {
   '🔴': { salience: 'pivotal', completed: false },
@@ -113,12 +122,20 @@ export function parseMastraLedger(raw: string): MastraParsedBullet[] | null {
         lastBullet = null;
         continue;
       }
+      let trimmedSummary = summary.trim();
+      let anchorShortId: string | null = null;
+      const anchorMatch = TRAILING_ANCHOR_RE.exec(trimmedSummary);
+      if (anchorMatch) {
+        anchorShortId = anchorMatch[1] ?? null;
+        trimmedSummary = trimmedSummary.slice(0, anchorMatch.index).trimEnd();
+      }
       const bullet: MastraParsedBullet = {
         salience: mapping.salience,
         completed: mapping.completed,
         time: time ?? '',
         date: currentDate,
-        summary: summary.trim(),
+        summary: trimmedSummary,
+        anchorShortId,
       };
       result.push(bullet);
       lastBullet = bullet;

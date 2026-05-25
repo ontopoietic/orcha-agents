@@ -88,4 +88,24 @@ random prose breaking the chain
     expect(out[0]?.summary.length).toBeLessThanOrEqual(600);
     expect(out[0]?.summary.endsWith('…')).toBe(true);
   });
+
+  it('extracts trailing {shortId} anchor and strips it from the summary', () => {
+    const md = `Date: May 21, 2026
+* 🔴 (14:30) User chose feature-branch workflow {abc123}
+* 🟡 (14:31) Open question on DB choice {def456}`;
+    const out = parseMastraLedger(md)!;
+    expect(out).toHaveLength(2);
+    expect(out[0]?.anchorShortId).toBe('abc123');
+    expect(out[0]?.summary).toBe('User chose feature-branch workflow');
+    expect(out[1]?.anchorShortId).toBe('def456');
+    expect(out[1]?.summary).toBe('Open question on DB choice');
+  });
+
+  it('returns anchorShortId: null when the bullet has no anchor', () => {
+    const md = `Date: May 21, 2026
+* 🔴 (14:30) Bullet without anchor`;
+    const out = parseMastraLedger(md)!;
+    expect(out[0]?.anchorShortId).toBeNull();
+    expect(out[0]?.summary).toBe('Bullet without anchor');
+  });
 });
