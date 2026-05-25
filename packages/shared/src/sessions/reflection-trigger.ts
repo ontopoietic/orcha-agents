@@ -9,13 +9,15 @@
  * unboundedly until manual "Reflect & condense" is clicked in the UI.
  *
  * Env vars:
- *   ORCHA_REFLECTOR_THRESHOLD_TOKENS     default 40000
+ *   ORCHA_REFLECTOR_THRESHOLD_TOKENS     default 20000 (Mastra bufferActivation
+ *                                        0.5 × observationTokens 40k — fire
+ *                                        BEFORE the ledger doubles its load)
  *   ORCHA_REFLECTOR_MIN_INTERVAL_SECONDS default 120
  *   ORCHA_REFLECTOR_DISABLE_TRIGGER      "1" to opt out entirely
  *
  * Design notes:
- * - Token estimate is chars/4 over the max(observations.md, observations.json) file size (the same
- *   coarse estimator the Reflector itself uses).
+ * - Token estimate is chars/4 over the LARGEST of observations.mastra.md,
+ *   observations.md, observations.json — whichever ledger the session is on.
  * - Throttle is in-memory per session — process restarts reset it.
  * - Spawn is fire-and-forget; the agent's turn is not blocked.
  */
@@ -43,20 +45,22 @@ function resolveConfig(): TriggerConfig {
   const t = parseInt(process.env.ORCHA_REFLECTOR_THRESHOLD_TOKENS ?? '', 10);
   const m = parseInt(process.env.ORCHA_REFLECTOR_MIN_INTERVAL_SECONDS ?? '', 10);
   return {
-    thresholdTokens: Number.isFinite(t) && t > 0 ? t : 40_000,
+    thresholdTokens: Number.isFinite(t) && t > 0 ? t : 20_000,
     minIntervalSeconds: Number.isFinite(m) && m >= 0 ? m : 120,
   };
 }
 
 /**
  * Estimate Reflector "input tokens" by file size divided by 4. Reflection cost
- * is dominated by the prompt-side payload. Measures the LARGER of
- * `observations.md` (canonical post Plan A/C) and `observations.json` (legacy /
- * transitional) so the trigger works whichever side is currently load-bearing.
+ * is dominated by the prompt-side payload. Measures the LARGEST of
+ * `observations.mastra.md` (Mastra path, append-only — primary driver of
+ * unbounded growth), `observations.md` (legacy LLM-rewrite path), and
+ * `observations.json` (legacy JSON) so the trigger works whichever ledger
+ * is currently load-bearing.
  */
 function estimateObservationTokens(sessionDataDir: string): number {
   let max = 0;
-  for (const name of ['observations.md', 'observations.json']) {
+  for (const name of ['observations.mastra.md', 'observations.md', 'observations.json']) {
     const p = join(sessionDataDir, name);
     if (!existsSync(p)) continue;
     try {

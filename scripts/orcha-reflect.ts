@@ -846,9 +846,13 @@ async function main(): Promise<void> {
   }
   const expandedDir = sessionDir.replace(/^~/, process.env.HOME || '~');
 
-  // Mastra-style reflection path (gated by env flag, runs on the new
-  // observations.mastra.md ledger written by the Mastra-style observer).
-  if (process.env.ORCHA_REFLECTOR_USE_MASTRA === '1') {
+  // Mastra-style reflection path: gated by env flag OR by file presence.
+  // If the Mastra ledger exists, the session is on the Mastra path — using
+  // the legacy reflector on it would write to the wrong file and lose work.
+  // Auto-switching here means the user only needs the Observer flag set;
+  // the reflector follows the data.
+  const mastraLedgerPath = join(expandedDir, 'data', 'observations.mastra.md');
+  if (process.env.ORCHA_REFLECTOR_USE_MASTRA === '1' || existsSync(mastraLedgerPath)) {
     await runMastraReflection(expandedDir);
     return;
   }
