@@ -48,4 +48,16 @@ describe('formatMessagesForObserver', () => {
   it('handles an empty input gracefully', () => {
     expect(formatMessagesForObserver([])).toBe('');
   });
+
+  it('embeds [#shortId] anchor markers per message so the LLM can transport them', () => {
+    const msgs: ObservableMessage[] = [
+      { id: 'msg-1234-abc123', content: 'first msg', timestamp: MAY_15_1430, type: 'user' },
+      { id: 'msg-5678-def456', content: 'second msg', timestamp: MAY_15_1430_PLUS_60S, type: 'assistant' },
+    ];
+    const out = formatMessagesForObserver(msgs);
+    expect(out).toContain('[#abc123]');
+    expect(out).toContain('[#def456]');
+    // Anchor sits between the time label and the colon
+    expect(out).toMatch(/User .*\[#abc123\]: first msg/);
+  });
 });

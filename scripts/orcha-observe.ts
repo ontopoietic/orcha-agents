@@ -233,6 +233,8 @@ async function runMastraObservation(expandedDir: string, jsonlPath: string): Pro
     buildObserverPrompt,
     buildObserverSystemPrompt,
     parseObserverOutput,
+    parseAnchoredBullets,
+    ORCHA_ANCHOR_INSTRUCTION,
   } = await import('../packages/shared/src/sessions/mastra-om/index.ts');
 
   // 1. Watermark + message slice
@@ -260,7 +262,15 @@ async function runMastraObservation(expandedDir: string, jsonlPath: string): Pro
   // between user+assistant turns).
   const chunks = chunkMessagesByTokens(slice, OBSERVER_MAX_TOKENS_PER_BATCH);
   const mastraLedgerPath = findMastraLedgerPath(expandedDir);
-  const system = buildObserverSystemPrompt();
+  // Anchor candidates: bullets may refer to messages BEFORE the watermark
+  // (e.g. when consolidating across runs). Resolve against ALL dialogue.
+  const anchorCandidates = allMessages.filter(
+    (m) => (m.type === 'user' || m.type === 'assistant') && m.content.trim().length >= 10,
+  );
+  // Custom-instruction override: tells the LLM to append {shortId} per
+  // bullet using the [#shortId] markers our formatMessagesForObserver puts
+  // on each source message header. Keeps the vendored Mastra prompts intact.
+  const system = buildObserverSystemPrompt({ instruction: ORCHA_ANCHOR_INSTRUCTION });
 
   let runningWatermark: ObservationWatermark | null = initialWatermark;
   let totalBullets = 0;
@@ -326,9 +336,35 @@ async function runMastraObservation(expandedDir: string, jsonlPath: string): Pro
     });
     if (parsed.currentTask) lastCurrentTask = parsed.currentTask;
 
-    const bulletCount = (newObservations.match(/^\s*[*\-]\s/gm) ?? []).length;
+    // Parse anchored bullets, resolve each shortId against source messages,
+    // and update the Mastra evidence sidecar. Bullets whose anchor cannot be
+    // resolved are surfaced as warnings so we can tune the prompt — the
+    // ledger keeps them anyway (they may still be readable to a human).
+    const anchored = parseAnchoredBullets(newObservations);
+    let resolvedAnchors = 0;
+    let unresolvedAnchors = 0;
+    const sidecarUpdate = buildMastraSidecarFromBullets(
+      anchored,
+      anchorCandidates,
+      new Date().toISOString(),
+    );
+    resolvedAnchors = sidecarUpdate.resolved;
+    unresolvedAnchors = sidecarUpdate.unresolved;
+    if (Object.keys(sidecarUpdate.entries).length > 0) {
+      writeMastraEvidenceSidecar(expandedDir, sidecarUpdate.entries);
+    }
+    if (unresolvedAnchors > 0) {
+      console.warn(
+        `Observer[mastra]: ${chunkLabel} ${unresolvedAnchors} bullet(s) with unresolved/missing anchor — UI back-link unavailable for those.`,
+      );
+    }
+
+    const bulletCount = anchored.length || (newObservations.match(/^\s*[*\-]\s/gm) ?? []).length;
     totalBullets += bulletCount;
     runningWatermark = advanceMastraWatermark(expandedDir, jsonlPath, chunk, runningWatermark, bulletCount);
+    console.log(
+      `Observer[mastra]: ${chunkLabel} appended ${bulletCount} bullets (${resolvedAnchors} anchored, ${unresolvedAnchors} unanchored).`,
+    );
   }
 
   console.log(
@@ -360,6 +396,76 @@ function appendToMastraLedger(path: string, prior: string, newBlock: string): vo
 
 function findMastraLedgerPath(sessionDir: string): string {
   return join(sessionDir, 'data', 'observations.mastra.md');
+}
+
+function findMastraEvidenceSidecarPath(sessionDir: string): string {
+  return join(sessionDir, 'data', 'observations-evidence.mastra.json');
+}
+
+interface MastraEvidenceEntry {
+  fullMessageId: string;
+  excerpt: string;
+  actor: 'user' | 'agent';
+  createdAt: string;
+}
+
+/**
+ * Resolve `{shortId}` anchors emitted by the LLM against the source messages
+ * the slice was extracted from. Returns the new sidecar entries to merge in,
+ * plus counters for diagnostic output.
+ */
+function buildMastraSidecarFromBullets(
+  bullets: Array<{ anchorShortId: string | null; summary: string }>,
+  candidates: ObservableMessage[],
+  createdAt: string,
+): { entries: Record<string, MastraEvidenceEntry>; resolved: number; unresolved: number } {
+  const entries: Record<string, MastraEvidenceEntry> = {};
+  let resolved = 0;
+  let unresolved = 0;
+  for (const bullet of bullets) {
+    if (!bullet.anchorShortId) {
+      unresolved++;
+      continue;
+    }
+    const msg = candidates.find((m) => m.id.endsWith(`-${bullet.anchorShortId}`) || m.id.endsWith(bullet.anchorShortId!));
+    if (!msg) {
+      unresolved++;
+      continue;
+    }
+    resolved++;
+    entries[bullet.anchorShortId] = {
+      fullMessageId: msg.id,
+      excerpt: msg.content.replace(/\s+/g, ' ').trim().slice(0, 200),
+      actor: msg.type === 'user' ? 'user' : 'agent',
+      createdAt,
+    };
+  }
+  return { entries, resolved, unresolved };
+}
+
+/**
+ * Merge new evidence entries into the on-disk Mastra sidecar. Existing
+ * entries are kept — historic anchors may still be referenced by older
+ * bullets we haven't seen again this run.
+ */
+function writeMastraEvidenceSidecar(
+  sessionDir: string,
+  newEntries: Record<string, MastraEvidenceEntry>,
+): void {
+  const p = findMastraEvidenceSidecarPath(sessionDir);
+  const dir = dirname(p);
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  let existing: Record<string, MastraEvidenceEntry> = {};
+  if (existsSync(p)) {
+    try {
+      const parsed = JSON.parse(readFileSync(p, 'utf-8'));
+      if (parsed && typeof parsed === 'object') existing = parsed as Record<string, MastraEvidenceEntry>;
+    } catch {
+      existing = {};
+    }
+  }
+  const merged = { ...existing, ...newEntries };
+  writeFileSync(p, JSON.stringify(merged, null, 2) + '\n', 'utf-8');
 }
 
 function findPriorTaskMetaPath(sessionDir: string): string {

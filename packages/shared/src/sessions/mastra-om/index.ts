@@ -61,3 +61,11 @@ export {
 } from './parsers.ts';
 
 export { formatMessagesForObserver } from './format-messages.ts';
+
+export { ORCHA_ANCHOR_INSTRUCTION } from './orcha-anchor-instruction.ts';
+
+export {
+  parseAnchoredBullets,
+  type AnchoredBullet,
+  type AnchoredSalience,
+} from './parse-anchored-bullets.ts';
