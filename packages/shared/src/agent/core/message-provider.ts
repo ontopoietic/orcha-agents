@@ -67,6 +67,20 @@ export function isStreamingModeEnabled(): boolean {
 }
 
 /**
+ * Cheap coverage check for the streaming-mode gate: returns true only when a
+ * conversation tail can be built that provably includes every message after
+ * the observation watermark. When false, the SDK's resume-history must NOT be
+ * suppressed — older unobserved messages would otherwise be lost. Reasons for
+ * false: no jsonl, no watermark yet, or the watermark id was compacted away.
+ */
+export function streamingTailCoversHistory(
+  sessionId: string,
+  workspaceRootPath: string,
+): boolean {
+  return buildConversationTail(sessionId, workspaceRootPath)?.coversFromWatermark ?? false;
+}
+
+/**
  * Build a `<conversation_tail>` block from the session's jsonl.
  * Returns null when the session file is missing, empty, or below the
  * minimum-injection threshold.

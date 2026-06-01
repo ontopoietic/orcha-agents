@@ -69,6 +69,7 @@ import {
 } from './core/pre-tool-use.ts';
 import { type ThinkingLevel, THINKING_TO_EFFORT, getThinkingTokens, DEFAULT_THINKING_LEVEL } from './thinking-levels.ts';
 import { generateConversationSummary } from './conversation-summary.ts';
+import { isStreamingModeEnabled, streamingTailCoversHistory } from './core/message-provider.ts';
 import type { LoadedSource } from '../sources/types.ts';
 import { sourceNeedsAuthentication } from '../sources/credential-manager.ts';
 import type {
@@ -919,6 +920,21 @@ export class ClaudeAgent extends BaseAgent {
         ? `${model}[1m]`
         : model;
 
+      // STREAMING-REPLACEMENT gate. Streaming mode suppresses SDK resume so
+      // observations + conversation-tail REPLACE the raw history. That is only
+      // safe when the tail provably covers every message after the observation
+      // watermark — otherwise older unobserved messages would be lost. When
+      // streaming is on but coverage isn't met yet (no observations, or the
+      // observer is behind), we fall back to resume for this turn and let the
+      // observer catch up; the gate flips automatically once coverage holds.
+      const streamingReplacementActive =
+        !_isRetry &&
+        isStreamingModeEnabled() &&
+        streamingTailCoversHistory(sessionId, this.workspaceRootPath);
+      if (isStreamingModeEnabled() && !streamingReplacementActive && !_isRetry) {
+        debug('[ClaudeAgent] Streaming mode on but tail does not cover watermark — falling back to SDK resume this turn (observer behind or no observations yet)');
+      }
+
       const options: Options = {
         ...getDefaultOptions(this.config.envOverrides),
         model: effectiveModel,
@@ -1283,7 +1299,8 @@ export class ClaudeAgent extends BaseAgent {
         // observations via system-prompt and a conversation-tail block via
         // the user message — see message-provider.ts. The SDK starts each
         // turn fresh, no jsonl re-load → ~5x token savings on 60k sessions.
-        ...((process.env.ORCHA_STREAMING_MODE === '1' || process.env.ORCHA_STREAMING_MODE === 'true')
+        // Only engaged when the tail covers the watermark (see gate above).
+        ...(streamingReplacementActive
           ? { settings: { autoCompactEnabled: false } }
           : !_isRetry && this.sessionId
             ? { resume: this.sessionId }
