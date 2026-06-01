@@ -17,6 +17,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createLogger } from '../../utils/debug.ts';
 import { getSessionPath } from '../../sessions/storage.ts';
+import { readWatermark } from '../../sessions/observation-watermark.ts';
 
 const log = createLogger('message-provider');
 
@@ -40,6 +41,15 @@ export interface ConversationTail {
   messageCount: number;
   /** Final size of the block in characters (proxy for tokens via /4). */
   charCount: number;
+  /**
+   * True when the tail provably includes every message after the observation
+   * watermark — i.e. no unobserved message is missing from this slice. When
+   * false (no watermark yet, or none found), the tail is a plain recent-N
+   * window and older unobserved messages are NOT represented anywhere. The
+   * caller must treat `false` as "not safe to drop SDK history" under
+   * streaming-replacement mode.
+   */
+  coversFromWatermark: boolean;
 }
 
 /** Default tail size — aligns with Mastra's "last 8-10 raw messages" guidance. */
@@ -64,6 +74,14 @@ export function isStreamingModeEnabled(): boolean {
  * Strategy A from the plan: tail rendered as a single text block in the
  * user message, NOT as separate SDKUserMessage turns. Simpler, robust,
  * survives mixed user/assistant/tool events.
+ *
+ * Watermark-aware coverage: when an observation watermark exists, the tail
+ * ALWAYS includes every message after it (the not-yet-observed region), plus
+ * a recent-message floor of `limit` messages. This is the correctness
+ * guarantee that lets streaming-replacement drop SDK history safely — every
+ * message is then represented either as an observation (≤ watermark) or
+ * verbatim in this tail (> watermark). The total-char budget never drops an
+ * unobserved message; it only trims the observed floor from the oldest end.
  */
 export function buildConversationTail(
   sessionId: string,
@@ -78,20 +96,44 @@ export function buildConversationTail(
   const maxChars = options.maxChars ?? DEFAULT_MAX_CHARS;
   const maxCharsPerMessage = options.maxCharsPerMessage ?? DEFAULT_MAX_CHARS_PER_MESSAGE;
 
-  const entries = readTailEntries(jsonlPath, limit, maxCharsPerMessage);
+  // Resolve the watermark's raw-line index (exclusive lower bound of the
+  // unobserved region). -1 = no watermark / not found → recent-N fallback.
+  const watermarkId = readWatermark(sessionDir)?.lastObservedMessageId ?? null;
+
+  const rendered = renderAllEntries(jsonlPath, maxCharsPerMessage, watermarkId);
+  if (!rendered) return null;
+  const { entries, watermarkRawIndex } = rendered;
   if (entries.length === 0) return null;
 
-  // Render newest-last so the model reads chronologically.
+  const hasWatermark = watermarkRawIndex >= 0;
+
+  // The unobserved region is the newest contiguous block (everything after
+  // the watermark). The recent floor is the last `limit` rendered messages.
+  // Both are suffixes of `entries`; the include-set is their union — the
+  // wider suffix starting at `candidateStartIdx`. Entries older than that are
+  // never sent (they're covered by observations).
+  const floorStartIdx = Math.max(0, entries.length - limit);
+  let firstUnobservedIdx = entries.length;
+  if (hasWatermark) {
+    for (let i = 0; i < entries.length; i++) {
+      if (entries[i]!.rawIndex > watermarkRawIndex) {
+        firstUnobservedIdx = i;
+        break;
+      }
+    }
+  }
+  const candidateStartIdx = Math.min(floorStartIdx, firstUnobservedIdx);
+
+  // Walk newest → oldest within the candidate suffix. Unobserved entries are
+  // always kept (correctness). Observed entries yield to the char budget:
+  // since unobserved is the newest suffix, once we cross into observed
+  // territory everything older is also observed, so stopping is safe.
   const lines: string[] = [];
   let accChars = 0;
-  for (let i = entries.length - 1; i >= 0; i--) {
+  for (let i = entries.length - 1; i >= candidateStartIdx; i--) {
     const e = entries[i]!;
-    if (accChars + e.length > maxChars) {
-      // Drop OLDEST entries (start of array) when over budget.
-      // Since we walk newest-last, this means truncating from the front
-      // by stopping additions once budget is exhausted.
-      break;
-    }
+    const isUnobserved = hasWatermark && e.rawIndex > watermarkRawIndex;
+    if (accChars + e.length > maxChars && !isUnobserved) break;
     accChars += e.length;
     lines.unshift(e.text);
   }
@@ -103,7 +145,12 @@ The following is a verbatim slice of the most recent ${lines.length} messages in
 ${lines.join('\n\n')}
 </conversation_tail>`;
 
-  return { block, messageCount: lines.length, charCount: block.length };
+  return {
+    block,
+    messageCount: lines.length,
+    charCount: block.length,
+    coversFromWatermark: hasWatermark,
+  };
 }
 
 // ============================================================================
@@ -113,6 +160,12 @@ ${lines.join('\n\n')}
 interface TailEntry {
   text: string;
   length: number;
+  /**
+   * Index of this message within the message-lines array (header excluded,
+   * 0-based). Used to compare against the watermark's position so unobserved
+   * messages are never dropped for budget.
+   */
+  rawIndex: number;
 }
 
 function envLimit(): number | null {
@@ -124,37 +177,53 @@ function envLimit(): number | null {
 }
 
 /**
- * Read the last `limit` non-header lines from the jsonl and render each
- * into a compact one-block string. Skips synthetic/system lines.
+ * Read and render every conversational message line in the jsonl (oldest →
+ * newest), tagging each with its raw-line index. Also resolves the watermark
+ * message-id to its raw-line index so the caller can split observed from
+ * unobserved. Skips synthetic/system lines and corrupted JSON.
+ *
+ * `watermarkRawIndex` is -1 when no watermark id is given or the id isn't
+ * found in the file (e.g. compacted away) — both mean "treat as recent-N
+ * fallback, coverage NOT guaranteed".
  */
-function readTailEntries(jsonlPath: string, limit: number, maxCharsPerMessage: number): TailEntry[] {
+function renderAllEntries(
+  jsonlPath: string,
+  maxCharsPerMessage: number,
+  watermarkId: string | null,
+): { entries: TailEntry[]; watermarkRawIndex: number } | null {
   let raw: string;
   try {
     raw = readFileSync(jsonlPath, 'utf-8');
   } catch (err) {
-    log.debug('readTailEntries: read failed', err);
-    return [];
+    log.debug('renderAllEntries: read failed', err);
+    return null;
   }
 
   const lines = raw.split('\n').filter(Boolean);
-  if (lines.length <= 1) return [];
+  if (lines.length <= 1) return { entries: [], watermarkRawIndex: -1 };
 
-  // Skip header (line 0), walk from end backwards collecting up to `limit` items.
-  const collected: TailEntry[] = [];
-  for (let i = lines.length - 1; i >= 1 && collected.length < limit; i--) {
-    const line = lines[i]!;
+  // Skip header (line 0). messageLines index = rawIndex.
+  const messageLines = lines.slice(1);
+  const entries: TailEntry[] = [];
+  let watermarkRawIndex = -1;
+
+  for (let i = 0; i < messageLines.length; i++) {
+    const line = messageLines[i]!;
     let parsed: Record<string, unknown>;
     try {
       parsed = JSON.parse(line);
     } catch {
       continue;
     }
+    if (watermarkId && watermarkRawIndex < 0 && parsed.id === watermarkId) {
+      watermarkRawIndex = i;
+    }
     const rendered = renderMessage(parsed, maxCharsPerMessage);
     if (!rendered) continue;
-    collected.push({ text: rendered, length: rendered.length });
+    entries.push({ text: rendered, length: rendered.length, rawIndex: i });
   }
-  // collected is newest-first; reverse so caller can iterate naturally.
-  return collected.reverse();
+
+  return { entries, watermarkRawIndex };
 }
 
 /**

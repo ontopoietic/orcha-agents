@@ -165,7 +165,10 @@ export class PromptBuilder {
         try {
           const tail = buildConversationTail(sessionId, this.workspaceRootPath);
           if (tail) {
-            log.debug(`[buildContextParts] Conversation tail injected (${tail.messageCount} msgs, ${tail.charCount}c)`);
+            log.debug(`[buildContextParts] Conversation tail injected (${tail.messageCount} msgs, ${tail.charCount}c, coversFromWatermark=${tail.coversFromWatermark})`);
+            if (!tail.coversFromWatermark) {
+              log.debug('[buildContextParts] WARNING: tail does not cover the observation watermark — older unobserved messages are NOT represented. Observer may be behind.');
+            }
             parts.push(tail.block);
           }
         } catch (err) {
