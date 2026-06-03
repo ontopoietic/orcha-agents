@@ -17,6 +17,7 @@ import {
   type ParsedBullet,
 } from '@craft-agent/shared/sessions/observation-markdown-parser'
 import { parseMastraLedger } from '@craft-agent/shared/sessions/mastra-om/parse-ledger'
+import { estimateBacklogTokens, getObserverThresholdTokens } from '@craft-agent/shared/sessions/observation-trigger'
 import { getLlmConnections } from '@craft-agent/shared/config/storage'
 import { getValidClaudeOAuthToken } from '@craft-agent/shared/auth/state'
 import log from 'electron-log/main'
@@ -182,6 +183,41 @@ export function startObservationWatch(
   // Emit initial state if watermark exists
   const initial = readObservationStatus(sessionDir)
   if (initial) onUpdate(initial)
+
+  // Wake-trigger (P1): the per-turn observer trigger only fires when the user
+  // sends a new message. A session that ended on a long autonomous tool-loop
+  // (or was simply left open) accumulates an un-observed backlog that never
+  // gets processed until the next user turn — under streaming replacement that
+  // means a large, stale conversation tail. On session-open, if the backlog
+  // already exceeds the observer threshold and no run is in flight, fire the
+  // observer once to catch up. Fire-and-forget; errors are logged, not thrown.
+  maybeWakeObserver(sessionDir)
+}
+
+/** Whether an observer subprocess is currently running for this session. */
+function isObserverRunning(sessionDir: string): boolean {
+  return existsSync(join(sessionDir, 'meta', RUNNING_MARKER))
+}
+
+/**
+ * Fire the observer on session-open when a quiescent backlog has built up.
+ * Guarded by the running-marker so it never overlaps an in-flight run, and by
+ * the same token threshold the per-turn trigger uses, so we only spend an LLM
+ * call when there is real backlog to clear.
+ */
+function maybeWakeObserver(sessionDir: string): void {
+  try {
+    if (isObserverRunning(sessionDir)) return
+    const backlog = estimateBacklogTokens(sessionDir)
+    const threshold = getObserverThresholdTokens()
+    if (backlog < threshold) return
+    obsLog.info(`wake-trigger: backlog ${backlog} ≥ ${threshold} tokens on session-open — firing observer`)
+    void runObserverNow(sessionDir).catch((err) => {
+      obsLog.warn(`wake-trigger: observer run failed: ${err instanceof Error ? err.message : String(err)}`)
+    })
+  } catch (err) {
+    obsLog.warn(`wake-trigger: backlog check threw: ${err instanceof Error ? err.message : String(err)}`)
+  }
 }
 
 /**

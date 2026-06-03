@@ -65,6 +65,27 @@ function resolveConfig(): TriggerConfig {
   };
 }
 
+/** Outer killswitch duration for an observer subprocess (ms). */
+function resolveKillTimeoutMs(): number {
+  const v = parseInt(process.env.ORCHA_OBSERVER_KILL_TIMEOUT_MS ?? '', 10);
+  return Number.isFinite(v) && v > 0 ? v : 240_000;
+}
+
+/** The observer's token threshold — exported so wake-triggers share it. */
+export function getObserverThresholdTokens(): number {
+  return resolveConfig().thresholdTokens;
+}
+
+/**
+ * Estimate how many tokens of new conversation have accumulated since the
+ * observation watermark for a session. Used by the session-open wake-trigger
+ * to decide whether a quiescent backlog warrants firing the observer.
+ */
+export function estimateBacklogTokens(sessionDir: string): number {
+  const jsonlPath = join(sessionDir, 'session.jsonl');
+  return estimateTokensSinceWatermark(jsonlPath, readWatermarkLastId(sessionDir));
+}
+
 /**
  * Approximate token count from byte size. We use file stat for the JSONL
  * and subtract the byte-offset of the watermark line. chars/4 is a coarse
@@ -183,10 +204,7 @@ function spawnObserver(sessionDir: string, sessionId: string): void {
   // Kill switch — must cover N chunks at Haiku-class latency. Default 4 min
   // accommodates ~6 chunks at ~30s each; tunable via env. Each chunk advances
   // the watermark, so a kill mid-run is self-healing on the next trigger.
-  const killTimeoutMs = (() => {
-    const v = parseInt(process.env.ORCHA_OBSERVER_KILL_TIMEOUT_MS ?? '', 10);
-    return Number.isFinite(v) && v > 0 ? v : 240_000;
-  })();
+  const killTimeoutMs = resolveKillTimeoutMs();
   setTimeout(() => {
     if (state.inFlight) {
       child.kill('SIGTERM');
@@ -226,6 +244,15 @@ export function maybeTriggerObserver(
   // Throttle
   const now = Date.now();
   const state = throttle.get(sessionId) ?? { lastTriggerMs: 0, inFlight: false };
+  // Stale-inFlight recovery (P2): the spawnObserver killswitch is a
+  // setTimeout, which does not advance while the machine is asleep. After a
+  // macOS suspend mid-run, `inFlight` can stay true for far longer than the
+  // kill timeout, blocking every subsequent trigger. If the last trigger was
+  // more than 2× the kill timeout ago, treat the flag as stale and clear it.
+  if (state.inFlight && now - state.lastTriggerMs > 2 * resolveKillTimeoutMs()) {
+    log.debug(`Stale inFlight cleared for ${sessionId} (${Math.floor((now - state.lastTriggerMs) / 1000)}s since last trigger > 2× killTimeout)`);
+    state.inFlight = false;
+  }
   if (state.inFlight) {
     return { triggered: false, reason: 'previous run still in flight', tokensSinceWatermark: tokens };
   }

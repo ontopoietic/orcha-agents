@@ -152,7 +152,13 @@ async function main(): Promise<void> {
   process.on('SIGINT', () => { clearRunningMarker(markerPath); process.exit(130); });
 
   try {
-    if (process.env.ORCHA_OBSERVER_USE_MASTRA === '1') {
+    // Mastra is the DEFAULT observer path (env is opt-OUT). The read side
+    // (prompt-builder.getSessionObservations + streaming tail) reads
+    // observations.mastra.md with priority, so the write side must produce it
+    // too — otherwise fresh observations land in the legacy ledger that the
+    // agent never sees (the divergence that froze golden-stag's ledger for
+    // days). Set ORCHA_OBSERVER_USE_MASTRA=0 only for legacy A/B comparison.
+    if (process.env.ORCHA_OBSERVER_USE_MASTRA !== '0') {
       await runMastraObservation(expandedDir, jsonlPath);
     } else {
       await runObservation(expandedDir, jsonlPath);
@@ -320,9 +326,20 @@ async function runMastraObservation(expandedDir: string, jsonlPath: string): Pro
     }
     const newObservations = parsed.observations.trim();
     if (!newObservations) {
+      // The LLM ran on REAL dialogue (this chunk passed the dialogue filter
+      // above) but returned no bullets. Under streaming replacement, advancing
+      // the watermark past these messages without a ledger entry would erase
+      // them: they fall out of the conversation tail (now ≤ watermark) yet are
+      // absent from observations. So we append a placeholder coverage bullet
+      // that records the reviewed span, preserving the invariant "everything
+      // ≤ watermark is represented in the ledger" while still making forward
+      // progress (no infinite reprocessing). True LLM FAILURES (empty/
+      // degenerate raw output) are handled above and abort WITHOUT advancing.
       console.warn(
-        `Observer[mastra]: ${chunkLabel} empty observation block. Sample: ${raw.trim().slice(0, 400)}`,
+        `Observer[mastra]: ${chunkLabel} empty observation block on ${dialogue.length} dialogue msg(s) — writing placeholder coverage bullet. Sample: ${raw.trim().slice(0, 200)}`,
       );
+      const placeholder = buildCoveragePlaceholder(dialogue);
+      appendToMastraLedger(mastraLedgerPath, priorObservations, placeholder);
       runningWatermark = advanceMastraWatermark(expandedDir, jsonlPath, chunk, runningWatermark, 0);
       continue;
     }
@@ -382,6 +399,27 @@ async function runMastraObservation(expandedDir: string, jsonlPath: string): Pro
  * sufficient. Successive same-day headers can be consolidated by the
  * Reflector later.
  */
+/**
+ * Build a minimal coverage placeholder block for a dialogue span the LLM
+ * reviewed but produced no bullets for. Keeps the Mastra ledger lossless under
+ * streaming replacement: the span is recorded as low-salience context rather
+ * than silently dropped. Parser-safe (parse-ledger.ts tolerates a headerless,
+ * timeless `* 🟢` bullet). The Reflector can later collapse these.
+ */
+function buildCoveragePlaceholder(dialogue: ObservableMessage[]): string {
+  const last = dialogue[dialogue.length - 1];
+  let timePart = '';
+  if (last && Number.isFinite(last.timestamp)) {
+    // Match the ledger's `(h:mm AM/PM)` convention so it groups cleanly.
+    const t = new Date(last.timestamp).toLocaleTimeString('en-US', {
+      hour: 'numeric',
+      minute: '2-digit',
+    });
+    timePart = `(${t}) `;
+  }
+  return `* 🟢 ${timePart}[${dialogue.length} message(s) reviewed, no individually salient signal — routine work, recorded for coverage]`;
+}
+
 function appendToMastraLedger(path: string, prior: string, newBlock: string): void {
   const dir = dirname(path);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });

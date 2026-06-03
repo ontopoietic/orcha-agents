@@ -1,7 +1,12 @@
 import { describe, expect, it, beforeEach, afterEach } from 'bun:test';
 import { mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { maybeTriggerObserver, resetTriggerThrottle } from '../observation-trigger.ts';
+import {
+  maybeTriggerObserver,
+  resetTriggerThrottle,
+  estimateBacklogTokens,
+  getObserverThresholdTokens,
+} from '../observation-trigger.ts';
 
 const TEST_DIR = join(import.meta.dir, '__test_observation_trigger__');
 const SESSION_ID = 'test-session-trigger';
@@ -115,5 +120,42 @@ describe('maybeTriggerObserver', () => {
     const result = maybeTriggerObserver(SESSION_DIR, SESSION_ID);
     expect(result.triggered).toBe(false);
     expect(result.reason).toContain('disabled');
+  });
+});
+
+describe('wake-trigger helpers', () => {
+  beforeEach(() => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(SESSION_DIR, { recursive: true });
+    delete process.env.ORCHA_OBSERVER_THRESHOLD_TOKENS;
+  });
+  afterEach(() => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    delete process.env.ORCHA_OBSERVER_THRESHOLD_TOKENS;
+  });
+
+  it('getObserverThresholdTokens returns default and respects env', () => {
+    expect(getObserverThresholdTokens()).toBe(24_000);
+    process.env.ORCHA_OBSERVER_THRESHOLD_TOKENS = '5000';
+    expect(getObserverThresholdTokens()).toBe(5000);
+  });
+
+  it('estimateBacklogTokens is 0 for a missing session', () => {
+    expect(estimateBacklogTokens(join(TEST_DIR, 'nonexistent'))).toBe(0);
+  });
+
+  it('estimateBacklogTokens counts only content after the watermark', () => {
+    const big = Array.from({ length: 50 }, (_, i) => ({
+      id: `msg-${i}`,
+      content: 'x'.repeat(500),
+    }));
+    writeJsonl(big);
+    const full = estimateBacklogTokens(SESSION_DIR);
+    expect(full).toBeGreaterThan(1000);
+
+    // Watermark near the end → backlog shrinks toward zero.
+    writeWatermark('msg-49');
+    const afterWm = estimateBacklogTokens(SESSION_DIR);
+    expect(afterWm).toBeLessThan(full);
   });
 });
