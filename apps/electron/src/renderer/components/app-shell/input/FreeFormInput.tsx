@@ -2366,7 +2366,9 @@ export function FreeFormInput({
           </DropdownMenu>
           )}
 
-          {/* 5.5 Context Usage Warning Badge - shows when approaching auto-compaction threshold */}
+          {/* 5.5 Context Usage Badge - persistent token-usage indicator next to the model selector.
+              Always visible once token data is available, regardless of fill level. Switches to a
+              tinted warning style (and stays click-to-compact) once it nears the compaction threshold. */}
           {(() => {
             // Calculate usage percentage based on compaction threshold (~77.5% of context window),
             // not the full context window - this gives users meaningful warnings before compaction kicks in.
@@ -2379,11 +2381,13 @@ export function FreeFormInput({
             const usagePercent = contextStatus?.inputTokens && compactionThreshold
               ? Math.min(99, Math.round((contextStatus.inputTokens / compactionThreshold) * 100))
               : null
-            // Show badge when >= 80% of compaction threshold AND not currently compacting
-            // Hide for Codex and Copilot models which don't support context compaction
-            const showWarning = usagePercent !== null && usagePercent >= 80 && !contextStatus?.isCompacting
 
-            if (!showWarning) return null
+            // Persistent: render as soon as we have a usage figure, no matter how full.
+            if (usagePercent === null) return null
+
+            const isCompacting = !!contextStatus?.isCompacting
+            // Tinted warning style once we approach the compaction threshold; subtle/muted below that.
+            const isWarning = usagePercent >= 80 && !isCompacting
 
             const handleCompactClick = () => {
               if (!isProcessing) {
@@ -2398,17 +2402,25 @@ export function FreeFormInput({
                     type="button"
                     onClick={handleCompactClick}
                     disabled={isProcessing}
-                    className="inline-flex items-center h-6 px-2 text-[12px] font-medium bg-info/10 rounded-[6px] shadow-tinted select-none cursor-pointer hover:bg-info/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                    style={{
+                    className={cn(
+                      "inline-flex items-center h-6 px-2 text-[12px] font-medium rounded-[6px] select-none cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed",
+                      isWarning
+                        ? "bg-info/10 shadow-tinted hover:bg-info/20"
+                        : "text-muted-foreground hover:bg-foreground/5",
+                    )}
+                    style={isWarning ? {
                       '--shadow-color': 'var(--info-rgb)',
                       color: 'color-mix(in oklab, var(--info) 30%, var(--foreground))',
-                    } as React.CSSProperties}
+                    } as React.CSSProperties : undefined}
                   >
+                    {isCompacting && <Spinner className="h-3 w-3 mr-1" />}
                     {usagePercent}%
                   </button>
                 </TooltipTrigger>
                 <TooltipContent side="top">
-                  {isProcessing
+                  {isCompacting
+                    ? `${usagePercent}% context used — compacting…`
+                    : isProcessing
                     ? `${usagePercent}% context used — wait for current operation`
                     : `${usagePercent}% context used — click to compact`
                   }
