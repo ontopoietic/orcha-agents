@@ -45,19 +45,26 @@ afterEach(() => {
 });
 
 describe('isStreamingModeEnabled', () => {
-  it('is off by default', () => {
+  it('is ON by default (no env set)', () => {
     delete process.env.ORCHA_STREAMING_MODE;
+    expect(isStreamingModeEnabled()).toBe(true);
+  });
+
+  it('stays on with explicit =1 / =true', () => {
+    process.env.ORCHA_STREAMING_MODE = '1';
+    expect(isStreamingModeEnabled()).toBe(true);
+    process.env.ORCHA_STREAMING_MODE = 'true';
+    expect(isStreamingModeEnabled()).toBe(true);
+  });
+
+  it('opts out with =0', () => {
+    process.env.ORCHA_STREAMING_MODE = '0';
     expect(isStreamingModeEnabled()).toBe(false);
   });
 
-  it('flips on with =1', () => {
-    process.env.ORCHA_STREAMING_MODE = '1';
-    expect(isStreamingModeEnabled()).toBe(true);
-  });
-
-  it('flips on with =true', () => {
-    process.env.ORCHA_STREAMING_MODE = 'true';
-    expect(isStreamingModeEnabled()).toBe(true);
+  it('opts out with =false', () => {
+    process.env.ORCHA_STREAMING_MODE = 'false';
+    expect(isStreamingModeEnabled()).toBe(false);
   });
 });
 

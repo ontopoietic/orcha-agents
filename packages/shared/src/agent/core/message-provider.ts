@@ -10,8 +10,11 @@
  * Pairs with: observations injection (system-prompt) for compacted older
  * turns + this tail (user message preamble) for the most-recent turns.
  *
- * Activation: gated by `ORCHA_STREAMING_MODE=1`. When off, this module is
- * a no-op and the SDK keeps its current resume-based behavior.
+ * Activation: ON by default. Set `ORCHA_STREAMING_MODE=0` (or `false`) to opt
+ * out — the SDK then keeps its resume-based behavior and this module is a
+ * no-op. Default-on is safe because claude-agent.ts only actually suppresses
+ * SDK resume when the tail provably covers the watermark (coverage gate);
+ * otherwise it falls back to resume for that turn.
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -63,7 +66,9 @@ const DEFAULT_MAX_CHARS_PER_MESSAGE = 1500;
  */
 export function isStreamingModeEnabled(): boolean {
   const v = process.env.ORCHA_STREAMING_MODE;
-  return v === '1' || v === 'true';
+  // Default ON — opt out with =0/false. The coverage gate in claude-agent.ts
+  // keeps this safe even when the observer is behind.
+  return v !== '0' && v !== 'false';
 }
 
 /**
