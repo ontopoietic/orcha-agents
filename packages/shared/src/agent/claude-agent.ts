@@ -54,6 +54,7 @@ import {
   SAFE_MODE_CONFIG,
 } from './mode-manager.ts';
 import { getSessionDataPath, getSessionPlansPath, getSessionPath } from '../sessions/storage.ts';
+import { appendContextTrace, buildPctOfCompaction } from '../sessions/context-trace.ts';
 import { getLastApiError } from '../interceptor-common.ts';
 import { extractWorkspaceSlug } from '../utils/workspace.ts';
 import {
@@ -1411,6 +1412,8 @@ This is a branched conversation. All prior messages in this conversation are par
       let receivedAssistantContent = false;
       let suppressedSessionExpiredError = false;
       let suppressedBranchCutoffError = false;
+      // Per-turn context-trace flag: did the SDK compact during this turn?
+      let compactedThisTurn = false;
       try {
         for await (const message of this.currentQuery) {
           // Track if we got any text content from assistant
@@ -1515,6 +1518,7 @@ This is a branched conversation. All prior messages in this conversation are par
             // Reset prerequisite state on compaction (LLM loses guide content)
             if (event.type === 'info' && event.message === 'Compacted Conversation') {
               this.resetPrerequisiteState();
+              compactedThisTurn = true;
             }
 
             // Intercept large/binary/media-rich tool results — save assets to disk,
@@ -1587,6 +1591,24 @@ This is a branched conversation. All prior messages in this conversation are par
 
             if (event.type === 'complete') {
               receivedComplete = true;
+              // Per-turn context trace: persist the live trajectory (sawtooth vs
+              // climb) + which path produced it. Best-effort, never throws.
+              const usage = (event as { usage?: { inputTokens?: number; contextWindow?: number } }).usage;
+              const inputTokens = usage?.inputTokens ?? null;
+              const contextWindow = usage?.contextWindow ?? this.usageTracker.getContextWindow() ?? null;
+              appendContextTrace(metadataSessionDir, {
+                ts: new Date().toISOString(),
+                sessionId,
+                inputTokens,
+                contextWindow,
+                pctOfCompaction: buildPctOfCompaction(inputTokens, contextWindow),
+                replacement: streamingReplacementActive,
+                sdkResume:
+                  !streamingReplacementActive &&
+                  !_isRetry &&
+                  (!!this.sessionId || !!this.branchFromSdkSessionId),
+                compacted: compactedThisTurn,
+              });
             }
             yield event;
           }
