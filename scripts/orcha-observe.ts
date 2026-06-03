@@ -232,7 +232,8 @@ function chunkMessagesByTokens(
  * prompt verbatim with "Do not repeat these" guidance; the LLM emits only
  * new bullets which we concatenate onto the file.
  *
- * Switch on with `ORCHA_OBSERVER_USE_MASTRA=1`.
+ * This is the DEFAULT path. Set `ORCHA_OBSERVER_USE_MASTRA=0` to fall back to
+ * the legacy observer (kept only for A/B comparison; slated for removal).
  */
 async function runMastraObservation(expandedDir: string, jsonlPath: string): Promise<void> {
   const {
