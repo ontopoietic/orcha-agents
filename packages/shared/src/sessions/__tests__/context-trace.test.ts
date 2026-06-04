@@ -73,10 +73,10 @@ describe('appendContextTrace', () => {
     expect(existsSync(TRACE_PATH)).toBe(true);
     const lines = readFileSync(TRACE_PATH, 'utf-8').trim().split('\n');
     expect(lines.length).toBe(2);
-    const first = JSON.parse(lines[0]);
+    const first = JSON.parse(lines[0]!);
     expect(first.inputTokens).toBe(30000);
     expect(first.replacement).toBe(true);
-    expect(JSON.parse(lines[1]).inputTokens).toBe(60000);
+    expect(JSON.parse(lines[1]!).inputTokens).toBe(60000);
   });
 
   it('writes nothing when disabled', () => {

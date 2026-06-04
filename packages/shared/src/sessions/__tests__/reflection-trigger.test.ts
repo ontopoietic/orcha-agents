@@ -34,6 +34,14 @@ function writeMastraMarkdownBytes(bytes: number): void {
   writeFileSync(OBS_MASTRA_MD, payload, 'utf-8');
 }
 
+/** Write a Mastra ledger with exactly `n` top-level observation bullets. */
+function writeMastraBullets(n: number): void {
+  mkdirSync(join(SESSION_DIR, 'data'), { recursive: true });
+  const lines = ['Date: May 21, 2026'];
+  for (let i = 0; i < n; i++) lines.push(`* 🟢 (12:0${i % 10}) observation number ${i} {anc${i}}`);
+  writeFileSync(OBS_MASTRA_MD, lines.join('\n') + '\n', 'utf-8');
+}
+
 beforeEach(() => {
   if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true, force: true });
   mkdirSync(TEST_DIR, { recursive: true });
@@ -43,6 +51,7 @@ beforeEach(() => {
 afterEach(() => {
   delete process.env.ORCHA_REFLECTOR_DISABLE_TRIGGER;
   delete process.env.ORCHA_REFLECTOR_THRESHOLD_TOKENS;
+  delete process.env.ORCHA_REFLECTOR_THRESHOLD_OBSERVATIONS;
   delete process.env.ORCHA_REFLECTOR_MIN_INTERVAL_SECONDS;
   delete process.env.CRAFT_APP_ROOT;
   if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true, force: true });
@@ -127,6 +136,39 @@ describe('maybeTriggerReflector', () => {
     const r = maybeTriggerReflector(SESSION_DIR, SESSION_ID);
     expect(r.observationTokens).toBeGreaterThan(14_000);
     expect(r.observationTokens).toBeLessThan(16_000);
+  });
+
+  it('fires on observation COUNT even when token estimate is far below threshold', () => {
+    process.env.CRAFT_APP_ROOT = TEST_DIR;
+    process.env.ORCHA_REFLECTOR_THRESHOLD_TOKENS = '100000'; // unreachable byte threshold
+    // 60 short bullets ≈ a few KB ≈ well under the token threshold, but the
+    // count path must fire (this is the real-world bug: ledgers grow in count,
+    // not bytes, and the byte threshold was effectively never reached).
+    writeMastraBullets(60);
+    const r = maybeTriggerReflector(SESSION_DIR, SESSION_ID);
+    expect(r.observationCount).toBeGreaterThanOrEqual(60);
+    expect(r.observationTokens).toBeLessThan(100000);
+    expect(r.triggered).toBe(true);
+    expect(r.reason).toContain('count');
+  });
+
+  it('does not fire below the count threshold', () => {
+    process.env.ORCHA_REFLECTOR_THRESHOLD_TOKENS = '100000';
+    writeMastraBullets(10);
+    const r = maybeTriggerReflector(SESSION_DIR, SESSION_ID);
+    expect(r.triggered).toBe(false);
+    expect(r.observationCount).toBe(10);
+    expect(r.reason).toContain('below threshold');
+  });
+
+  it('respects ORCHA_REFLECTOR_THRESHOLD_OBSERVATIONS override', () => {
+    process.env.CRAFT_APP_ROOT = TEST_DIR;
+    process.env.ORCHA_REFLECTOR_THRESHOLD_TOKENS = '100000';
+    process.env.ORCHA_REFLECTOR_THRESHOLD_OBSERVATIONS = '15';
+    writeMastraBullets(20); // above the lowered count threshold
+    const r = maybeTriggerReflector(SESSION_DIR, SESSION_ID);
+    expect(r.triggered).toBe(true);
+    expect(r.reason).toContain('count 20 ≥ 15');
   });
 
   it('throttles re-runs within the min interval', () => {
