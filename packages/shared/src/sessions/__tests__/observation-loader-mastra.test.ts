@@ -193,4 +193,44 @@ describe('loadObservationSignals (combined)', () => {
     expect(signals[0]!.id).toBe('obs-def456');
     expect(signals[1]!.id).toBe('obs-abc123');
   });
+
+  it('derives conversation.sessionId from the session directory name (B2 pointer)', () => {
+    // Both ledgers, single bullet each — assert the cross-session pointer
+    // carries the sessionId (folder basename), not the old hardcoded ''.
+    writeFileSync(
+      join(TEST_DIR_COMBINED, 'data', 'observations.mastra.md'),
+      `Date: May 22, 2026
+* 🔴 (10:00) Mastra-era bullet {abc123}`,
+      'utf-8',
+    );
+    writeFileSync(
+      join(TEST_DIR_COMBINED, 'data', 'observations-evidence.mastra.json'),
+      JSON.stringify({
+        abc123: { fullMessageId: 'msg-x-abc123', createdAt: '2026-05-22T10:00:00.000Z' },
+      }),
+      'utf-8',
+    );
+    writeFileSync(
+      join(TEST_DIR_COMBINED, 'data', 'observations.md'),
+      `# 2026-05-18
+- 🟢 09:00 Legacy-era bullet {def456}`,
+      'utf-8',
+    );
+    writeFileSync(
+      join(TEST_DIR_COMBINED, 'data', 'observations-evidence.json'),
+      JSON.stringify({
+        def456: { fullMessageId: 'msg-y-def456', createdAt: '2026-05-18T09:00:00.000Z' },
+      }),
+      'utf-8',
+    );
+
+    const expectedSessionId = '__test_loader_combined__';
+    const signals = loadObservationSignals(TEST_DIR_COMBINED);
+    expect(signals).toHaveLength(2);
+    for (const s of signals) {
+      expect(s.conversation?.sessionId).toBe(expectedSessionId);
+      // Pointer still resolves the message range from the sidecar.
+      expect(s.conversation?.messageRange?.from).toMatch(/^msg-/);
+    }
+  });
 });

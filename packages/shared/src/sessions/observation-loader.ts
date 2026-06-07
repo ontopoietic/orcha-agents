@@ -17,10 +17,23 @@
  */
 
 import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { parseObservationsMarkdown, type ParsedBullet } from './observation-markdown-parser.ts';
 import { parseMastraLedger, type MastraParsedBullet } from './mastra-om/parse-ledger.ts';
 import type { ObservationSignal } from './observation-watermark.ts';
+
+/**
+ * Derive the session ID from a session directory path. The session folder name
+ * IS the canonical session ID (see storage.ts — `sessionId = entry.name`), and
+ * the JSONL header carries the same value under `header.id`. The evidence
+ * sidecar deliberately omits sessionId because, per-session, it is redundant
+ * with the file location. Cross-session retrieval (B2 index) needs the pointer
+ * to carry `(sessionId, messageId)`, so we recover sessionId from the path here
+ * instead of denormalising it into every sidecar entry.
+ */
+function sessionIdFromDir(sessionDir: string): string {
+  return basename(sessionDir);
+}
 
 interface EvidenceEntry {
   fullMessageId: string;
@@ -74,6 +87,7 @@ export function loadObservationSignalsFromMarkdown(
   if (!bullets || bullets.length === 0) return null;
 
   const sidecar = loadEvidenceSidecar(sessionDir);
+  const sessionId = sessionIdFromDir(sessionDir);
   const result: ObservationSignal[] = [];
   // Stable IDs: per-anchor counter so duplicates get -1/-2 suffix and the
   // ID survives unchanged across re-reads of the same file.
@@ -102,7 +116,7 @@ export function loadObservationSignalsFromMarkdown(
       salience: bullet.salience,
       anchorRefs: evidence?.anchorRefs as ObservationSignal['anchorRefs'],
       conversation: {
-        sessionId: '',
+        sessionId,
         messageRange: {
           from: evidence?.fullMessageId ?? '',
           to: evidence?.messageRangeTo ?? evidence?.fullMessageId ?? '',
@@ -166,6 +180,7 @@ export function loadObservationSignalsFromMastraMarkdown(
   if (!bullets || bullets.length === 0) return null;
 
   const sidecar = loadMastraEvidenceSidecar(sessionDir);
+  const sessionId = sessionIdFromDir(sessionDir);
   const result: ObservationSignal[] = [];
   const seenAnchorCounts = new Map<string, number>();
 
@@ -202,7 +217,7 @@ export function loadObservationSignalsFromMastraMarkdown(
       salience: bullet.salience,
       anchorRefs: evidence?.anchorRefs as ObservationSignal['anchorRefs'],
       conversation: {
-        sessionId: '',
+        sessionId,
         messageRange: {
           from: evidence?.fullMessageId ?? '',
           to: evidence?.messageRangeTo ?? evidence?.fullMessageId ?? '',
