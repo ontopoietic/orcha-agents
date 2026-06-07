@@ -99,5 +99,14 @@ describe('auto-anchor-trigger', () => {
       expect(r.triggered).toBe(false);
       expect(r.reason).toContain('does not exist');
     });
+
+    it('accepts an envOverride (used by the electron wake-trigger) without changing the decision', () => {
+      writeSidecar(0, 8);
+      const r = maybeTriggerAutoAnchor(SESSION_DIR, SESSION_ID, {
+        envOverride: { CLAUDE_CODE_OAUTH_TOKEN: 'fresh-token' },
+      });
+      expect(r.triggered).toBe(true);
+      expect(r.untaggedCount).toBe(8);
+    });
   });
 });

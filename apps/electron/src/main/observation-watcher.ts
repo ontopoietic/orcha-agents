@@ -10,7 +10,7 @@
 
 import { watch, readFileSync, existsSync } from 'fs'
 import type { FSWatcher } from 'fs'
-import { join } from 'path'
+import { join, basename } from 'path'
 import type { ObservationSignal } from '@craft-agent/shared/sessions'
 import {
   parseObservationsMarkdown,
@@ -18,6 +18,8 @@ import {
 } from '@craft-agent/shared/sessions/observation-markdown-parser'
 import { parseMastraLedger } from '@craft-agent/shared/sessions/mastra-om/parse-ledger'
 import { estimateBacklogTokens, getObserverThresholdTokens } from '@craft-agent/shared/sessions/observation-trigger'
+import { maybeTriggerReflector } from '@craft-agent/shared/sessions/reflection-trigger'
+import { maybeTriggerAutoAnchor } from '@craft-agent/shared/sessions/auto-anchor-trigger'
 import { getLlmConnections } from '@craft-agent/shared/config/storage'
 import { getValidClaudeOAuthToken } from '@craft-agent/shared/auth/state'
 import log from 'electron-log/main'
@@ -192,6 +194,55 @@ export function startObservationWatch(
   // already exceeds the observer threshold and no run is in flight, fire the
   // observer once to catch up. Fire-and-forget; errors are logged, not thrown.
   maybeWakeObserver(sessionDir)
+  // Same quiescent-backlog gap for the L2 Reflector and the auto-anchor pass:
+  // their per-turn triggers only fire on a new turn, so a session that crossed
+  // a threshold and was then left idle never catches up until reused. Wake both
+  // on session-open. Both reuse the shared trigger (threshold + in-process
+  // inFlight guard); we only inject fresh auth, since the watcher's process.env
+  // may carry a stale/absent OAuth token.
+  maybeWakeReflector(sessionDir)
+  maybeWakeAutoAnchor(sessionDir)
+}
+
+/**
+ * Fire the L2 Reflector on session-open when the observation ledger already
+ * crossed its condense threshold but the session went idle before the per-turn
+ * trigger could fire. Delegates threshold + throttle + in-flight guarding to the
+ * shared trigger; only injects fresh auth for the spawned subprocess.
+ */
+function maybeWakeReflector(sessionDir: string): void {
+  void (async () => {
+    try {
+      const sessionId = basename(sessionDir)
+      const authEnv = await resolveObserverAuthEnv()
+      const decision = maybeTriggerReflector(sessionDir, sessionId, { envOverride: authEnv })
+      if (decision.triggered) {
+        obsLog.info(`wake-trigger: reflector fired on session-open — ${decision.reason}`)
+      }
+    } catch (err) {
+      obsLog.warn(`wake-trigger: reflector wake threw: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  })()
+}
+
+/**
+ * Fire the auto-anchor pass on session-open when enough observations lack a
+ * framework-anchor but the session went idle. Same delegation as the reflector
+ * wake. The pass is idempotent, so this is safe even alongside a per-turn run.
+ */
+function maybeWakeAutoAnchor(sessionDir: string): void {
+  void (async () => {
+    try {
+      const sessionId = basename(sessionDir)
+      const authEnv = await resolveObserverAuthEnv()
+      const decision = maybeTriggerAutoAnchor(sessionDir, sessionId, { envOverride: authEnv })
+      if (decision.triggered) {
+        obsLog.info(`wake-trigger: auto-anchor fired on session-open — ${decision.reason}`)
+      }
+    } catch (err) {
+      obsLog.warn(`wake-trigger: auto-anchor wake threw: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  })()
 }
 
 /** Whether an observer subprocess is currently running for this session. */

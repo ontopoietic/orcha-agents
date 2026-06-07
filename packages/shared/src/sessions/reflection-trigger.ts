@@ -116,7 +116,11 @@ function estimateObservationLedger(sessionDataDir: string): LedgerEstimate {
   return { tokens: Math.floor(maxSize / 4), count };
 }
 
-function spawnReflector(sessionDir: string, sessionId: string): void {
+function spawnReflector(
+  sessionDir: string,
+  sessionId: string,
+  envOverride?: Record<string, string>,
+): void {
   const appRoot = process.env.CRAFT_APP_ROOT;
   if (!appRoot) {
     log.debug('CRAFT_APP_ROOT not set — cannot spawn reflector');
@@ -136,6 +140,9 @@ function spawnReflector(sessionDir: string, sessionId: string): void {
     env: {
       ...process.env,
       CRAFT_WORKSPACE_ROOT: process.env.CRAFT_WORKSPACE_ROOT ?? '',
+      // Auth/env injection for callers (e.g. the electron wake-trigger) whose
+      // process.env may lack a fresh OAuth token. Applied last so it wins.
+      ...(envOverride ?? {}),
     },
     stdio: ['ignore', 'pipe', 'pipe'],
     detached: false,
@@ -177,6 +184,7 @@ function spawnReflector(sessionDir: string, sessionId: string): void {
 export function maybeTriggerReflector(
   sessionDir: string,
   sessionId: string,
+  opts?: { envOverride?: Record<string, string> },
 ): { triggered: boolean; reason: string; observationTokens: number; observationCount: number } {
   if (process.env.ORCHA_REFLECTOR_DISABLE_TRIGGER === '1') {
     return { triggered: false, reason: 'disabled by ORCHA_REFLECTOR_DISABLE_TRIGGER', observationTokens: 0, observationCount: 0 };
@@ -219,7 +227,7 @@ export function maybeTriggerReflector(
     ? `count ${count} ≥ ${config.thresholdObservations}`
     : `tokens ${tokens} ≥ ${config.thresholdTokens}`;
   log.debug(`Reflector trigger fires for ${sessionId}: ${trigger}`);
-  spawnReflector(sessionDir, sessionId);
+  spawnReflector(sessionDir, sessionId, opts?.envOverride);
 
   return { triggered: true, reason: `threshold reached (${trigger})`, observationTokens: tokens, observationCount: count };
 }

@@ -80,7 +80,11 @@ export function countUntaggedObservations(sessionDataDir: string): number {
   return untagged;
 }
 
-function spawnAutoAnchor(sessionDir: string, sessionId: string): void {
+function spawnAutoAnchor(
+  sessionDir: string,
+  sessionId: string,
+  envOverride?: Record<string, string>,
+): void {
   const appRoot = process.env.CRAFT_APP_ROOT;
   if (!appRoot) {
     log.debug('CRAFT_APP_ROOT not set — cannot spawn auto-anchor');
@@ -100,6 +104,9 @@ function spawnAutoAnchor(sessionDir: string, sessionId: string): void {
     env: {
       ...process.env,
       CRAFT_WORKSPACE_ROOT: process.env.CRAFT_WORKSPACE_ROOT ?? '',
+      // Auth/env injection for callers (e.g. the electron wake-trigger) whose
+      // process.env may lack a fresh OAuth token. Applied last so it wins.
+      ...(envOverride ?? {}),
     },
     stdio: ['ignore', 'pipe', 'pipe'],
     detached: false,
@@ -141,6 +148,7 @@ function spawnAutoAnchor(sessionDir: string, sessionId: string): void {
 export function maybeTriggerAutoAnchor(
   sessionDir: string,
   sessionId: string,
+  opts?: { envOverride?: Record<string, string> },
 ): { triggered: boolean; reason: string; untaggedCount: number } {
   if (process.env.ORCHA_AUTOANCHOR_DISABLE_TRIGGER === '1') {
     return { triggered: false, reason: 'disabled by ORCHA_AUTOANCHOR_DISABLE_TRIGGER', untaggedCount: 0 };
@@ -174,7 +182,7 @@ export function maybeTriggerAutoAnchor(
   throttle.set(sessionId, state);
 
   log.debug(`Auto-anchor trigger fires for ${sessionId}: untagged ${untagged} ≥ ${config.threshold}`);
-  spawnAutoAnchor(sessionDir, sessionId);
+  spawnAutoAnchor(sessionDir, sessionId, opts?.envOverride);
 
   return { triggered: true, reason: `threshold reached (untagged ${untagged} ≥ ${config.threshold})`, untaggedCount: untagged };
 }
