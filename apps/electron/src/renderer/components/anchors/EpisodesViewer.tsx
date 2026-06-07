@@ -1,8 +1,12 @@
 /**
  * EpisodesViewer
  *
- * Read-only viewer for the per-session episode index (L3 memory). Lists
- * closed phases with their summary, anchors, decisions count, outcome.
+ * Read-only viewer for the per-session episode index. Lists closed phases
+ * with their summary, anchors, decisions count, outcome.
+ *
+ * Post-B2-pivot this is a purely HUMAN-facing phase-timeline digest (a "what
+ * happened when" view). It is NOT agent memory: the agent's cross-session
+ * recall reads the observation ledgers via the `recall` tool, not this index.
  * Phase A walking skeleton — no detail panel yet, no manual close button.
  */
 import * as React from 'react'
