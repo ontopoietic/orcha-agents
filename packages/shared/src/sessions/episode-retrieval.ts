@@ -130,6 +130,13 @@ function anchorIntersects(epAnchors: EpisodeAnchor[], anchorKeys: Set<string>): 
 // ============================================================================
 
 /**
+ * @deprecated B2 pivot (push→pull). The verbose per-turn injection of full
+ * episode summaries is replaced by the lazy `recall` tool plus the slim
+ * {@link renderRecallHintBlock} pointer. `getRelevantEpisodes` is retained as a
+ * *cheap detector* (index-only scan) to decide whether the hint fires; this
+ * renderer is kept only for tests / potential one-shot uses and is no longer
+ * wired into prompt-builder. Prefer `renderRecallHintBlock`.
+ *
  * Render hits as a `<relevant_episodes>` block ready to drop into a system
  * prompt. Returns null when there are no hits, so the caller can skip the
  * block entirely without conditionals.
@@ -160,6 +167,47 @@ Past phases relevant to your current anchors. Treat as memory of prior work — 
 
 ${lines.join('\n\n')}
 </relevant_episodes>`;
+}
+
+/**
+ * Render a *slim* recall pointer — the B2-pivot replacement for the verbose
+ * episode push-injection. Instead of dumping full summaries every turn, we tell
+ * the agent that prior cross-anchor work exists and that it should pull the
+ * detail on demand via the `recall` tool. Cheap to carry, self-suppressing
+ * (returns null when there is nothing to recall).
+ *
+ * `sessionAnchors` is used to narrow the listed anchors to those the current
+ * session actually shares with the hits — so the pointer names the axis the
+ * agent should query, not every anchor the past phases happened to touch.
+ */
+export function renderRecallHintBlock(
+  hits: RelevantEpisodeHit[],
+  sessionAnchors: Array<{ type: string; id: string }>,
+): string | null {
+  if (hits.length === 0) return null;
+
+  const sessionKeys = new Set(sessionAnchors.map((a) => `${a.type}:${a.id}`));
+  const shared = new Map<string, EpisodeAnchor>();
+  for (const h of hits) {
+    for (const a of h.entry.anchors) {
+      const key = `${a.type}:${a.id}`;
+      if (sessionKeys.has(key)) shared.set(key, a);
+    }
+  }
+  if (shared.size === 0) return null;
+
+  const sessions = new Set(hits.map((h) => h.sessionId));
+  const anchorList = [...shared.values()]
+    .map((a) => `${a.title ?? a.id} (anchorType=${a.type}, anchorId=${a.id})`)
+    .join('; ');
+
+  const phaseWord = hits.length === 1 ? 'phase' : 'phases';
+  const sessWord = sessions.size === 1 ? 'session' : 'sessions';
+
+  return `<relevant_memory>
+${hits.length} past ${phaseWord} across ${sessions.size} ${sessWord} share your current anchors: ${anchorList}.
+Before restarting work tied to these anchors, call the \`recall\` tool with the matching anchorType/anchorId (or a text query) to load that prior context. This pointer is deliberately compact — recall fetches the detail on demand.
+</relevant_memory>`;
 }
 
 function formatRange(startedAt: string, endedAt: string): string {

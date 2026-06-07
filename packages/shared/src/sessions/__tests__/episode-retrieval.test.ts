@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import {
   getRelevantEpisodes,
   renderRelevantEpisodesBlock,
+  renderRecallHintBlock,
 } from '../episode-retrieval.ts';
 import { writeEpisode } from '../episode.ts';
 
@@ -189,5 +190,46 @@ describe('renderRelevantEpisodesBlock', () => {
     expect(block!).toContain('My Feature');
     expect(block!).toContain('outcome=handoff');
     expect(block!).toContain('Did some important work');
+  });
+});
+
+describe('renderRecallHintBlock', () => {
+  it('returns null for empty hits', () => {
+    expect(renderRecallHintBlock([], [{ type: 'feature', id: 'f1' }])).toBeNull();
+  });
+
+  it('returns null when no hit anchor intersects the session anchors', () => {
+    writeEp('s1', {
+      anchors: [{ type: 'feature', id: 'f1', title: 'My Feature' }],
+      endedAt: '2026-05-09T15:00:00.000Z',
+    });
+    const out = getRelevantEpisodes({
+      workspaceRoot: WORKSPACE,
+      anchors: [{ type: 'feature', id: 'f1' }],
+    });
+    // Hits exist, but we narrow against a disjoint session-anchor set.
+    expect(renderRecallHintBlock(out, [{ type: 'feature', id: 'other' }])).toBeNull();
+  });
+
+  it('emits a slim pointer naming the shared anchor and the recall tool', () => {
+    writeEp('s1', {
+      anchors: [{ type: 'feature', id: 'f1', title: 'My Feature' }],
+      endedAt: '2026-05-09T15:00:00.000Z',
+      summary: 'Did some important work',
+    });
+    const out = getRelevantEpisodes({
+      workspaceRoot: WORKSPACE,
+      anchors: [{ type: 'feature', id: 'f1' }],
+    });
+    const block = renderRecallHintBlock(out, [{ type: 'feature', id: 'f1' }]);
+    expect(block).not.toBeNull();
+    expect(block!).toContain('<relevant_memory>');
+    expect(block!).toContain('</relevant_memory>');
+    expect(block!).toContain('My Feature');
+    expect(block!).toContain('anchorType=feature');
+    expect(block!).toContain('anchorId=f1');
+    expect(block!).toContain('`recall`');
+    // The slim pointer must NOT dump the full episode summary.
+    expect(block!).not.toContain('Did some important work');
   });
 });

@@ -23,7 +23,7 @@ import { getSessionPlansPath, getSessionDataPath, getSessionPath } from '../../s
 import { maybeTriggerObserver } from '../../sessions/observation-trigger.ts';
 import { maybeTriggerReflector } from '../../sessions/reflection-trigger.ts';
 import { maybeTriggerAutoAnchor } from '../../sessions/auto-anchor-trigger.ts';
-import { getRelevantEpisodes, renderRelevantEpisodesBlock } from '../../sessions/episode-retrieval.ts';
+import { getRelevantEpisodes, renderRecallHintBlock } from '../../sessions/episode-retrieval.ts';
 import { buildConversationTail, isStreamingModeEnabled } from './message-provider.ts';
 import { createLogger } from '../../utils/debug.ts';
 import type {
@@ -150,9 +150,13 @@ export class PromptBuilder {
         parts.push(observationsBlock);
       }
 
-      // Episodic recall (L3) — surface past phases that share an anchor
-      // with this session. Replaces manual handoff plans for anchor-scoped
-      // continuation work. No-op when session has no anchors yet.
+      // Cross-session recall pointer (B2 pivot: push→pull). We no longer inject
+      // full episode summaries every turn. Instead the cheap episode-index scan
+      // acts purely as a DETECTOR: if past phases share an anchor with this
+      // session, we emit a slim `<relevant_memory>` hint telling the agent to
+      // pull the detail on demand via the `recall` tool. No-op when the session
+      // has no anchors or nothing relevant exists. The verbose renderer
+      // (renderRelevantEpisodesBlock) is deprecated; see episode-retrieval.ts.
       try {
         const sessionAnchors = this.readSessionAnchors(sessionId);
         if (sessionAnchors.length > 0) {
@@ -161,14 +165,14 @@ export class PromptBuilder {
             anchors: sessionAnchors,
             limit: 5,
           });
-          const block = renderRelevantEpisodesBlock(hits);
+          const block = renderRecallHintBlock(hits, sessionAnchors);
           if (block) {
-            log.debug(`[buildContextParts] ${hits.length} relevant episodes injected`);
+            log.debug(`[buildContextParts] Recall hint emitted (${hits.length} relevant past phases)`);
             parts.push(block);
           }
         }
       } catch (err) {
-        log.debug('[buildContextParts] Episode retrieval threw:', err);
+        log.debug('[buildContextParts] Recall hint detection threw:', err);
       }
 
       // Streaming-mode: inject conversation tail. With ORCHA_STREAMING_MODE

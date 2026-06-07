@@ -222,6 +222,7 @@ export type {
 export {
   getRelevantEpisodes,
   renderRelevantEpisodesBlock,
+  renderRecallHintBlock,
 } from './episode-retrieval.ts';
 
 
