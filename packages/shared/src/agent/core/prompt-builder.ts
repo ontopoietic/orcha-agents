@@ -22,6 +22,7 @@ import { getDateTimeContext, getWorkingDirectoryContext } from '../../prompts/sy
 import { getSessionPlansPath, getSessionDataPath, getSessionPath } from '../../sessions/storage.ts';
 import { maybeTriggerObserver } from '../../sessions/observation-trigger.ts';
 import { maybeTriggerReflector } from '../../sessions/reflection-trigger.ts';
+import { maybeTriggerAutoAnchor } from '../../sessions/auto-anchor-trigger.ts';
 import { getRelevantEpisodes, renderRelevantEpisodesBlock } from '../../sessions/episode-retrieval.ts';
 import { buildConversationTail, isStreamingModeEnabled } from './message-provider.ts';
 import { createLogger } from '../../utils/debug.ts';
@@ -130,6 +131,18 @@ export class PromptBuilder {
         }
       } catch (err) {
         log.debug('[buildContextParts] Reflector trigger threw:', err);
+      }
+
+      // Auto-anchor — fires when enough observations lack a framework-anchor,
+      // keeping cross-session recall's anchor axis populated. Independent of
+      // the Reflector (reflect preserves anchorRefs on rebuild). Fire-and-forget.
+      try {
+        const anchorDecision = maybeTriggerAutoAnchor(sessionDir, sessionId);
+        if (anchorDecision.triggered) {
+          log.debug(`[buildContextParts] Auto-anchor triggered: ${anchorDecision.reason}`);
+        }
+      } catch (err) {
+        log.debug('[buildContextParts] Auto-anchor trigger threw:', err);
       }
 
       const observationsBlock = this.getSessionObservations(sessionId);
