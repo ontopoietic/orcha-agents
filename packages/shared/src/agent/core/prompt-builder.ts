@@ -23,7 +23,7 @@ import { getSessionPlansPath, getSessionDataPath, getSessionPath } from '../../s
 import { maybeTriggerObserver } from '../../sessions/observation-trigger.ts';
 import { maybeTriggerReflector } from '../../sessions/reflection-trigger.ts';
 import { maybeTriggerAutoAnchor } from '../../sessions/auto-anchor-trigger.ts';
-import { getRelevantEpisodes, renderRecallHintBlock } from '../../sessions/episode-retrieval.ts';
+import { gatherRecallHint, renderRecallHintBlock } from '../../sessions/recall-engine.ts';
 import { buildConversationTail, isStreamingModeEnabled } from './message-provider.ts';
 import { createLogger } from '../../utils/debug.ts';
 import type {
@@ -151,23 +151,26 @@ export class PromptBuilder {
       }
 
       // Cross-session recall pointer (B2 pivot: push→pull). We no longer inject
-      // full episode summaries every turn. Instead the cheap episode-index scan
-      // acts purely as a DETECTOR: if past phases share an anchor with this
-      // session, we emit a slim `<relevant_memory>` hint telling the agent to
-      // pull the detail on demand via the `recall` tool. No-op when the session
-      // has no anchors or nothing relevant exists. The verbose renderer
-      // (renderRelevantEpisodesBlock) is deprecated; see episode-retrieval.ts.
+      // full summaries every turn. The detector now draws from the SAME source
+      // the `recall` tool reads (per-session observation ledgers + anchorRefs),
+      // not the legacy episode index — so when the hint fires, recall is
+      // guaranteed to return something. If OTHER sessions hold observations
+      // sharing an anchor with this session, we emit a slim `<relevant_memory>`
+      // pointer telling the agent to pull the detail via `recall`. No-op when
+      // the session has no anchors or nothing relevant exists.
       try {
         const sessionAnchors = this.readSessionAnchors(sessionId);
         if (sessionAnchors.length > 0) {
-          const hits = getRelevantEpisodes({
-            workspaceRoot: this.workspaceRootPath,
+          const hintData = gatherRecallHint({
+            workspaceRootPath: this.workspaceRootPath,
+            sessionId,
             anchors: sessionAnchors,
-            limit: 5,
           });
-          const block = renderRecallHintBlock(hits, sessionAnchors);
+          const block = renderRecallHintBlock(hintData);
           if (block) {
-            log.debug(`[buildContextParts] Recall hint emitted (${hits.length} relevant past phases)`);
+            log.debug(
+              `[buildContextParts] Recall hint emitted (${hintData.observationCount} obs across ${hintData.sessionCount} other sessions)`,
+            );
             parts.push(block);
           }
         }

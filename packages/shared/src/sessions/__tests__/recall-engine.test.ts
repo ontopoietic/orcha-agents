@@ -1,7 +1,12 @@
 import { describe, expect, it, beforeEach, afterEach } from 'bun:test';
 import { mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { recall, resolvePointer } from '../recall-engine.ts';
+import {
+  recall,
+  resolvePointer,
+  gatherRecallHint,
+  renderRecallHintBlock,
+} from '../recall-engine.ts';
 
 const ROOT = join(import.meta.dir, '__test_recall_ws__');
 const FEATURE_A = '40296119-bd35-4fe7-8b7d-78b9cba234c4';
@@ -138,5 +143,60 @@ describe('recall-engine', () => {
 
   it('resolvePointer returns null for an unknown message', () => {
     expect(resolvePointer(ROOT, '260507-apt-flood', 'msg-does-not-exist')).toBeNull();
+  });
+
+  describe('gatherRecallHint / renderRecallHintBlock', () => {
+    it('detects cross-session matches and renders a slim pointer', () => {
+      // A NEW session anchored to FEATURE_A; the match lives in 260507-apt-flood.
+      const data = gatherRecallHint({
+        workspaceRootPath: ROOT,
+        sessionId: '260607-new-session',
+        anchors: [{ type: 'feature', id: FEATURE_A }],
+      });
+      expect(data.observationCount).toBe(1);
+      expect(data.sessionCount).toBe(1);
+      expect(data.anchors).toHaveLength(1);
+      // Title is snapshotted from the matched observation's anchorRef.
+      expect(data.anchors[0]!.title).toBe('Userflow Graph 2D');
+
+      const block = renderRecallHintBlock(data);
+      expect(block).not.toBeNull();
+      expect(block!).toContain('<relevant_memory>');
+      expect(block!).toContain(`anchorId=${FEATURE_A}`);
+      expect(block!).toContain('`recall`');
+      // Slim pointer must NOT dump the observation summary.
+      expect(block!).not.toContain('Userflow Graph 2D layout engine');
+    });
+
+    it('excludes the current session (cross-session only)', () => {
+      // The current session IS the one holding the FEATURE_A observation.
+      const data = gatherRecallHint({
+        workspaceRootPath: ROOT,
+        sessionId: '260507-apt-flood',
+        anchors: [{ type: 'feature', id: FEATURE_A }],
+      });
+      expect(data.observationCount).toBe(0);
+      expect(renderRecallHintBlock(data)).toBeNull();
+    });
+
+    it('returns null block when no other session shares the anchor', () => {
+      const data = gatherRecallHint({
+        workspaceRootPath: ROOT,
+        sessionId: '260607-new-session',
+        anchors: [{ type: 'feature', id: 'unknown-anchor-id' }],
+      });
+      expect(data.observationCount).toBe(0);
+      expect(renderRecallHintBlock(data)).toBeNull();
+    });
+
+    it('ignores non-framework anchor types', () => {
+      const data = gatherRecallHint({
+        workspaceRootPath: ROOT,
+        sessionId: '260607-new-session',
+        // 'not-a-real-type' is not a framework AnchorType → must be skipped.
+        anchors: [{ type: 'not-a-real-type', id: FEATURE_A }],
+      });
+      expect(data.observationCount).toBe(0);
+    });
   });
 });

@@ -215,14 +215,5 @@ export {
   maybeTriggerEpisode,
   resetEpisodeTriggerThrottle,
 } from './episode-trigger.ts';
-export type {
-  RelevantEpisodeHit,
-  RelevantEpisodeOptions,
-} from './episode-retrieval.ts';
-export {
-  getRelevantEpisodes,
-  renderRelevantEpisodesBlock,
-  renderRecallHintBlock,
-} from './episode-retrieval.ts';
 
 

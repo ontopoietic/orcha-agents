@@ -20,7 +20,7 @@
 
 import { readdirSync } from 'node:fs';
 import type { AnchorRef, AnchorType } from './anchors.ts';
-import { anchorKey } from './anchors.ts';
+import { anchorKey, ANCHOR_TYPES } from './anchors.ts';
 import { loadObservationSignals } from './observation-loader.ts';
 import { readAllMessages, type ObservableMessage } from './observation-watermark.ts';
 import { getWorkspaceSessionsPath } from '../workspaces/storage.ts';
@@ -209,6 +209,101 @@ export function recall(
 
   hits.sort((a, b) => b.score - a.score || Date.parse(b.createdAt) - Date.parse(a.createdAt));
   return hits.slice(0, limit);
+}
+
+// ============================================================================
+// Public: recall hint (cross-session "you have prior work" pointer)
+// ============================================================================
+
+export interface RecallHintInput {
+  workspaceRootPath: string;
+  /** Current session — excluded so the hint is about OTHER sessions only. */
+  sessionId: string;
+  /** Current session's anchors (loosely typed; non-framework types ignored). */
+  anchors: Array<{ type: string; id: string; title?: string }>;
+  /** Hits scanned per anchor before aggregation. Default 50. */
+  perAnchorLimit?: number;
+}
+
+export interface RecallHintData {
+  /** Distinct matching observations across other sessions. */
+  observationCount: number;
+  /** Distinct other sessions that carry a match. */
+  sessionCount: number;
+  /** The session anchors that actually have cross-session matches. */
+  anchors: Array<{ type: AnchorType; id: string; title?: string }>;
+}
+
+/**
+ * Detect whether OTHER sessions hold observations sharing an anchor with the
+ * current session — the signal behind the `<relevant_memory>` recall pointer.
+ *
+ * Built ON TOP of `recall()` so the hint draws from the SAME source the
+ * `recall` tool reads: when the hint fires, recall is guaranteed to return
+ * something. (The retired episode-index detector could promise matches that
+ * recall couldn't actually surface — two indexes, one truth claim.)
+ * Self-suppressing: empty result → caller emits no block.
+ */
+export function gatherRecallHint(
+  input: RecallHintInput,
+  clock: () => number = () => Date.now(),
+): RecallHintData {
+  const sessions = new Set<string>();
+  const matchedAnchors = new Map<string, { type: AnchorType; id: string; title?: string }>();
+  const seenObs = new Set<string>();
+
+  for (const anchor of input.anchors) {
+    if (!ANCHOR_TYPES.includes(anchor.type as AnchorType)) continue;
+    const type = anchor.type as AnchorType;
+    const hits = recall(
+      input.workspaceRootPath,
+      { anchor: { type, id: anchor.id }, limit: input.perAnchorLimit ?? 50 },
+      clock,
+    );
+    for (const h of hits) {
+      if (h.sessionId === input.sessionId) continue; // other sessions only
+      const obsKey = `${h.sessionId}:${h.messageRange.from || h.createdAt}`;
+      if (!seenObs.has(obsKey)) {
+        seenObs.add(obsKey);
+        sessions.add(h.sessionId);
+      }
+      // Prefer a title from the input anchor, else snapshot from the matched
+      // observation's anchorRef, else whatever we recorded earlier.
+      const key = `${type}:${anchor.id}`;
+      const ref = h.anchorRefs.find((a) => a.type === type && a.id === anchor.id);
+      const title = anchor.title ?? ref?.title ?? matchedAnchors.get(key)?.title;
+      matchedAnchors.set(key, { type, id: anchor.id, title });
+    }
+  }
+
+  return {
+    observationCount: seenObs.size,
+    sessionCount: sessions.size,
+    anchors: [...matchedAnchors.values()],
+  };
+}
+
+/**
+ * Render the slim `<relevant_memory>` pointer from gathered hint data. Returns
+ * null when there is nothing to recall, so the caller can push unconditionally.
+ *
+ * Deliberately compact: it names the shared anchors and tells the agent to PULL
+ * the detail via `recall` — it does NOT dump summaries (that was the per-turn
+ * push bloat the B2 pivot removed).
+ */
+export function renderRecallHintBlock(data: RecallHintData): string | null {
+  if (data.observationCount === 0 || data.anchors.length === 0) return null;
+
+  const anchorList = data.anchors
+    .map((a) => `${a.title ?? a.id} (anchorType=${a.type}, anchorId=${a.id})`)
+    .join('; ');
+  const obsWord = data.observationCount === 1 ? 'observation' : 'observations';
+  const sessWord = data.sessionCount === 1 ? 'session' : 'sessions';
+
+  return `<relevant_memory>
+${data.observationCount} past ${obsWord} across ${data.sessionCount} other ${sessWord} share your current anchors: ${anchorList}.
+Before restarting work tied to these anchors, call the \`recall\` tool with the matching anchorType/anchorId (or a text query) to load that prior context. This pointer is deliberately compact — recall fetches the detail on demand.
+</relevant_memory>`;
 }
 
 // ============================================================================
