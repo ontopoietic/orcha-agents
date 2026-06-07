@@ -42,6 +42,11 @@ import {
 import { join, dirname } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import {
+  resolveExtractor as resolveExtractorBase,
+  callExtractor as callExtractorBase,
+  type ExtractorMode,
+} from './lib/llm-extractor.ts';
+import {
   parseObservationsMarkdown,
   type ParsedBullet,
   type Salience,
@@ -390,149 +395,19 @@ function buildReflectorUserPrompt(items: ObservationSignal[]): string {
 // LLM extractor — same auth strategy as orcha-observe.ts
 // ============================================================================
 
-type ExtractorMode =
-  | { kind: 'cli'; cliPath: string; model: string }
-  | { kind: 'api'; apiKey: string; model: string; endpoint: string; apiVersion: string };
-
-function findClaudeBinary(): string | null {
-  const candidates: string[] = [];
-  const appRoot = process.env.CRAFT_APP_ROOT;
-  if (appRoot) {
-    candidates.push(
-      join(appRoot, 'node_modules', '@anthropic-ai', 'claude-agent-sdk-darwin-arm64', 'claude'),
-      join(appRoot, 'node_modules', '@anthropic-ai', 'claude-agent-sdk-binary', 'claude'),
-      join(appRoot, 'apps', 'electron', 'node_modules', '@anthropic-ai', 'claude-agent-sdk-binary', 'claude'),
-    );
-  }
-  const resourcesPath = (process as unknown as { resourcesPath?: string }).resourcesPath;
-  if (resourcesPath) {
-    candidates.push(
-      join(resourcesPath, 'app', 'node_modules', '@anthropic-ai', 'claude-agent-sdk-binary', 'claude'),
-    );
-  }
-  for (const p of candidates) {
-    if (existsSync(p)) return p;
-  }
-  return null;
-}
-
+// Reflector-specific bindings over the shared extractor helper. Preserves the
+// original env precedence (ORCHA_REFLECTOR_* before ORCHA_OBSERVER_*) and the
+// "Reflector" log prefix; the auth/call mechanics now live in lib/llm-extractor.
 function resolveExtractor(): ExtractorMode | null {
-  const model = process.env.ORCHA_REFLECTOR_MODEL ?? process.env.ORCHA_OBSERVER_MODEL ?? 'claude-sonnet-4-6';
-  const oauth = process.env.CLAUDE_CODE_OAUTH_TOKEN;
-  if (oauth) {
-    const cliPath = process.env.ORCHA_OBSERVER_CLI_PATH ?? findClaudeBinary();
-    if (cliPath) return { kind: 'cli', cliPath, model };
-  }
-  const apiKey =
-    process.env.ORCHA_REFLECTOR_API_KEY ??
-    process.env.ORCHA_OBSERVER_API_KEY ??
-    process.env.ANTHROPIC_API_KEY;
-  if (apiKey) {
-    return {
-      kind: 'api',
-      apiKey,
-      model,
-      endpoint: 'https://api.anthropic.com/v1/messages',
-      apiVersion: '2023-06-01',
-    };
-  }
-  return null;
-}
-
-interface AnthropicMessagesResponse {
-  content?: Array<{ type: string; text?: string }>;
-  error?: { message?: string };
-}
-
-async function callClaudeCLI(
-  cliPath: string,
-  model: string,
-  system: string,
-  user: string,
-): Promise<string | null> {
-  const { spawn } = await import('node:child_process');
-  return new Promise((resolve) => {
-    const child = spawn(
-      cliPath,
-      [
-        '--print',
-        '--model', model,
-        '--append-system-prompt', system,
-        '--disable-slash-commands',
-        '--exclude-dynamic-system-prompt-sections',
-        user,
-      ],
-      { env: process.env, stdio: ['ignore', 'pipe', 'pipe'] },
-    );
-    let stdout = '';
-    let stderr = '';
-    child.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
-    child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
-    const timer = setTimeout(() => {
-      child.kill('SIGTERM');
-      console.warn('Reflector: claude CLI timed out after 90s');
-      resolve(null);
-    }, 90_000);
-    child.on('close', (code) => {
-      clearTimeout(timer);
-      if (code === 0) resolve(stdout.trim() || null);
-      else {
-        console.warn(`Reflector: claude CLI exited ${code}: ${stderr.trim().slice(0, 300) || stdout.trim().slice(0, 300)}`);
-        resolve(null);
-      }
-    });
-    child.on('error', (err) => {
-      clearTimeout(timer);
-      console.warn(`Reflector: claude CLI spawn error: ${err.message}`);
-      resolve(null);
-    });
+  return resolveExtractorBase({
+    defaultModel: 'claude-sonnet-4-6',
+    modelEnvKeys: ['ORCHA_REFLECTOR_MODEL', 'ORCHA_OBSERVER_MODEL'],
+    apiKeyEnvKeys: ['ORCHA_REFLECTOR_API_KEY', 'ORCHA_OBSERVER_API_KEY'],
   });
 }
 
-async function callAnthropicAPI(
-  apiKey: string,
-  model: string,
-  endpoint: string,
-  apiVersion: string,
-  system: string,
-  user: string,
-): Promise<string | null> {
-  const body = {
-    model,
-    max_tokens: 8192,
-    temperature: 0.4,
-    system,
-    messages: [{ role: 'user', content: user }],
-  };
-  const res = await fetch(endpoint, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': apiVersion,
-    },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    console.warn(`Reflector: Anthropic call failed (${res.status}): ${text.slice(0, 200)}`);
-    return null;
-  }
-  const json = (await res.json()) as AnthropicMessagesResponse;
-  if (json.error) {
-    console.warn(`Reflector: Anthropic error: ${json.error.message ?? 'unknown'}`);
-    return null;
-  }
-  return (json.content ?? [])
-    .filter((b) => b.type === 'text' && typeof b.text === 'string')
-    .map((b) => b.text as string)
-    .join('\n')
-    .trim();
-}
-
-async function callExtractor(mode: ExtractorMode, system: string, user: string): Promise<string | null> {
-  if (mode.kind === 'cli') return callClaudeCLI(mode.cliPath, mode.model, system, user);
-  return callAnthropicAPI(mode.apiKey, mode.model, mode.endpoint, mode.apiVersion, system, user);
+function callExtractor(mode: ExtractorMode, system: string, user: string): Promise<string | null> {
+  return callExtractorBase(mode, system, user, { logPrefix: 'Reflector' });
 }
 
 // ============================================================================
