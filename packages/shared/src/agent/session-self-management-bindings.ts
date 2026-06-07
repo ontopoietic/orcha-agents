@@ -18,8 +18,9 @@
  * - All other fields return the raw registry callback directly (signatures match)
  */
 
-import type { SessionToolContext } from '@craft-agent/session-tools-core';
+import type { SessionToolContext, RecallToolArgs, RecallToolResult } from '@craft-agent/session-tools-core';
 import { getSessionScopedToolCallbacks } from './session-scoped-tool-callback-registry.ts';
+import { recall, resolvePointer } from '../sessions/recall-engine.ts';
 
 /**
  * Attach session self-management bindings to a SessionToolContext.
@@ -64,6 +65,40 @@ export function attachSessionSelfManagementBindings(
   Object.defineProperty(context, 'listSessions', {
     get() {
       return getSessionScopedToolCallbacks(sessionId)?.listSessionsFn;
+    },
+    configurable: true,
+    enumerable: true,
+  });
+
+  // recall is pure (filesystem + workspaceRoot) — bound directly to the shared
+  // engine, not via the callback registry. workspacePath resolves lazily so the
+  // binding is valid as soon as the context's path is set.
+  Object.defineProperty(context, 'recall', {
+    get() {
+      const workspaceRootPath = context.workspacePath;
+      if (!workspaceRootPath) return undefined;
+      return (args: RecallToolArgs): RecallToolResult => {
+        const mode = args.mode ?? 'search';
+        if (mode === 'resolve') {
+          const resolved = resolvePointer(
+            workspaceRootPath,
+            args.sessionId ?? sessionId,
+            args.messageId ?? '',
+            { before: args.before, after: args.after },
+          );
+          return { mode, resolved };
+        }
+        const hits = recall(workspaceRootPath, {
+          text: args.text,
+          anchor:
+            args.anchorType && args.anchorId
+              ? { type: args.anchorType, id: args.anchorId }
+              : undefined,
+          sessionId: args.sessionId,
+          limit: args.limit,
+        });
+        return { mode, hits };
+      };
     },
     configurable: true,
     enumerable: true,

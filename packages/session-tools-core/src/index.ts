@@ -130,6 +130,8 @@ export type {
   SessionListItem,
   ListSessionsOptions,
   ListSessionsResult,
+  RecallToolArgs,
+  RecallToolResult,
   ResolvedLabelsResult,
   ResolvedStatusResult,
 } from './context.ts';
