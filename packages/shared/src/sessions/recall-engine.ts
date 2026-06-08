@@ -230,6 +230,8 @@ export interface RecallHintData {
   observationCount: number;
   /** Distinct other sessions that carry a match. */
   sessionCount: number;
+  /** The source session IDs (newest-match first), for naming in the hint. */
+  sessionIds: string[];
   /** The session anchors that actually have cross-session matches. */
   anchors: Array<{ type: AnchorType; id: string; title?: string }>;
 }
@@ -279,6 +281,7 @@ export function gatherRecallHint(
   return {
     observationCount: seenObs.size,
     sessionCount: sessions.size,
+    sessionIds: [...sessions],
     anchors: [...matchedAnchors.values()],
   };
 }
@@ -287,22 +290,30 @@ export function gatherRecallHint(
  * Render the slim `<relevant_memory>` pointer from gathered hint data. Returns
  * null when there is nothing to recall, so the caller can push unconditionally.
  *
- * Deliberately compact: it names the shared anchors and tells the agent to PULL
- * the detail via `recall` — it does NOT dump summaries (that was the per-turn
- * push bloat the B2 pivot removed).
+ * Deliberately compact (it does NOT dump summaries — that was the per-turn push
+ * bloat the B2 pivot removed) but DIRECTIVE: an informational "you may call
+ * recall" pointer was empirically ignored by the agent mid-task even when
+ * highly relevant prior work existed, so this phrases the pull as an explicit
+ * step-zero instruction with a concrete recall invocation and named sources.
  */
 export function renderRecallHintBlock(data: RecallHintData): string | null {
   if (data.observationCount === 0 || data.anchors.length === 0) return null;
 
   const anchorList = data.anchors
-    .map((a) => `${a.title ?? a.id} (anchorType=${a.type}, anchorId=${a.id})`)
+    .map((a) => `${a.title ?? a.id} (anchorType="${a.type}", anchorId="${a.id}")`)
     .join('; ');
-  const obsWord = data.observationCount === 1 ? 'observation' : 'observations';
-  const sessWord = data.sessionCount === 1 ? 'session' : 'sessions';
+  const obsWord = data.observationCount === 1 ? 'decision/observation' : 'decisions/observations';
+  const sessWord = data.sessionCount === 1 ? 'earlier session' : 'earlier sessions';
+  const sources = data.sessionIds.length > 0 ? ` (${data.sessionIds.join(', ')})` : '';
+  // Lead with the first matched anchor as the most likely recall argument.
+  const primary = data.anchors[0]!;
 
   return `<relevant_memory>
-${data.observationCount} past ${obsWord} across ${data.sessionCount} other ${sessWord} share your current anchors: ${anchorList}.
-Before restarting work tied to these anchors, call the \`recall\` tool with the matching anchorType/anchorId (or a text query) to load that prior context. This pointer is deliberately compact — recall fetches the detail on demand.
+You are anchored to: ${anchorList}. ${data.observationCount} ${obsWord} about this already exist in ${data.sessionCount} ${sessWord}${sources}.
+
+This is prior work you cannot see in your current context. Before you answer, decide, or start implementing anything tied to these anchors, your FIRST step is to call the \`recall\` tool to load it — do not re-derive or re-decide what was already settled. For example:
+  recall({ anchorType: "${primary.type}", anchorId: "${primary.id}" })
+or pass a \`text\` query for a specific question. Skip this only if the user's request is clearly unrelated to the anchors above.
 </relevant_memory>`;
 }
 

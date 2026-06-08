@@ -155,6 +155,7 @@ describe('recall-engine', () => {
       });
       expect(data.observationCount).toBe(1);
       expect(data.sessionCount).toBe(1);
+      expect(data.sessionIds).toEqual(['260507-apt-flood']);
       expect(data.anchors).toHaveLength(1);
       // Title is snapshotted from the matched observation's anchorRef.
       expect(data.anchors[0]!.title).toBe('Userflow Graph 2D');
@@ -162,8 +163,12 @@ describe('recall-engine', () => {
       const block = renderRecallHintBlock(data);
       expect(block).not.toBeNull();
       expect(block!).toContain('<relevant_memory>');
-      expect(block!).toContain(`anchorId=${FEATURE_A}`);
+      expect(block!).toContain(`anchorId="${FEATURE_A}"`);
       expect(block!).toContain('`recall`');
+      // Names the source session so the agent knows where the prior work lives.
+      expect(block!).toContain('260507-apt-flood');
+      // Directive: a concrete recall invocation the agent can copy.
+      expect(block!).toContain(`recall({ anchorType: "feature", anchorId: "${FEATURE_A}"`);
       // Slim pointer must NOT dump the observation summary.
       expect(block!).not.toContain('Userflow Graph 2D layout engine');
     });
