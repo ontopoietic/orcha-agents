@@ -324,6 +324,16 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
     () => workspaces.find((w) => w.id === activeWorkspaceId) || null,
     [workspaces, activeWorkspaceId]
   )
+
+  // Session folder path: prefer the server-supplied value (set by SessionManager
+  // when a full Session is hydrated), but fall back to a deterministic compute
+  // from the active workspace root. The fallback covers the skeleton-render
+  // path where `session` is still null but the user already sees the bar.
+  const sessionDir = React.useMemo(() => {
+    if (session?.sessionFolderPath) return session.sessionFolderPath
+    if (activeWorkspace?.rootPath) return `${activeWorkspace.rootPath}/sessions/${sessionId}`
+    return null
+  }, [session?.sessionFolderPath, activeWorkspace?.rootPath, sessionId])
   const handleWorkingDirectoryChange = React.useCallback(async (path: string) => {
     if (!session) return
     await window.electronAPI.sessionCommand(session.id, { type: 'updateWorkingDirectory', dir: path })
@@ -658,7 +668,7 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
           <div className="h-full flex flex-col">
             <PanelHeader  title={displayTitle} titleMenu={titleMenu} leadingAction={leadingAction} actions={headerActions} rightSidebarButton={rightSidebarButton} isRegeneratingTitle={isAsyncOperationOngoing} />
             <div className="px-4 py-1.5 border-b border-border/40">
-              <SessionAnchorBar sessionId={sessionId} workingDir={sessionMeta.workingDirectory} sessionDir={session?.sessionFolderPath} />
+              <SessionAnchorBar sessionId={sessionId} workingDir={sessionMeta.workingDirectory} sessionDir={sessionDir} />
             </div>
             <div className="flex-1 flex flex-col min-h-0">
               <ChatDisplay
@@ -733,7 +743,7 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
       <div className="h-full flex flex-col">
         <PanelHeader  title={displayTitle} titleMenu={titleMenu} leadingAction={leadingAction} actions={headerActions} rightSidebarButton={rightSidebarButton} isRegeneratingTitle={isAsyncOperationOngoing} />
         <div className="px-4 py-1.5 border-b border-border/40">
-          <SessionAnchorBar sessionId={sessionId} workingDir={session.workingDirectory} sessionDir={session?.sessionFolderPath} />
+          <SessionAnchorBar sessionId={sessionId} workingDir={session.workingDirectory} sessionDir={sessionDir} />
         </div>
         <div className="flex-1 flex flex-col min-h-0">
           <ChatDisplay

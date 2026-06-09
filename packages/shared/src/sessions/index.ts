@@ -143,7 +143,16 @@ export {
 export type {
   ObservationWatermark,
   ObservableMessage,
+  ObservationSignal,
 } from './observation-watermark.ts';
+
+// Observation loader (MD canonical + JSON fallback)
+export type { ObservationIdStrategy } from './observation-loader.ts';
+export {
+  loadObservationSignals,
+  loadObservationSignalsFromMarkdown,
+  loadObservationSignalsFromJson,
+} from './observation-loader.ts';
 export {
   readWatermark,
   writeWatermark,
@@ -151,5 +160,60 @@ export {
   readAllMessages,
   watermarkPath,
 } from './observation-watermark.ts';
+
+// Episodic memory (L3) — per-session/per-phase episode records
+export type {
+  Episode,
+  EpisodeAnchor,
+  EpisodePhase,
+  EpisodeArtifact,
+  EpisodeOutcome,
+  EpisodeCloseReason,
+  EpisodeIndex,
+  EpisodeIndexEntry,
+  EpisodeAnnotation,
+  ArtifactNode,
+  ArtifactEdge,
+  ArtifactGraph,
+  ArtifactConfidence,
+} from './episode.ts';
+export type {
+  ArtifactTypeDef,
+  RelationTypeDef,
+} from './rahmen-taxonomy.ts';
+export {
+  ORCHA_CLI_TYPES,
+  ORCHA_CLI_VERBS,
+  extractArtifactsFromMessages,
+  parseAnchorsInput,
+  parseOrchaCliInvocations,
+} from './episode-extractors.ts';
+export type {
+  ExtractorJsonlMessage,
+} from './episode-extractors.ts';
+export {
+  RAHMEN_TAXONOMY_VERSION,
+  ARTIFACT_TYPES,
+  RELATION_TYPES,
+  renderTaxonomyForPrompt,
+  isKnownArtifactType,
+  isKnownRelationType,
+} from './rahmen-taxonomy.ts';
+export {
+  episodesDir,
+  episodePath,
+  episodeIndexPath,
+  episodeAnnotationsPath,
+  readEpisodeIndex,
+  readEpisode,
+  listEpisodes,
+  writeEpisode,
+  appendAnnotation,
+  readAnnotations,
+} from './episode.ts';
+export {
+  maybeTriggerEpisode,
+  resetEpisodeTriggerThrottle,
+} from './episode-trigger.ts';
 
 

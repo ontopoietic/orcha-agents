@@ -58,6 +58,16 @@ pnpm-lock.yaml
 # Craft Agent local data (sessions, credentials, config)
 .craft-agent/
 
+# Orcha Agents workspace runtime data — created when the repo root is used as a
+# dev workspace (anchored to root so nested legit files are unaffected)
+/config.json
+/events.jsonl
+/views.json
+/sessions/
+/labels/
+/statuses/
+/.claude-plugin/
+
 # SSH keys and secrets
 *.pem
 *.key

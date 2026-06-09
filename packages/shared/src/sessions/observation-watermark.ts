@@ -32,6 +32,27 @@ export interface ObservationWatermark {
 }
 
 /**
+ * Shape of a single observation signal as written to data/observations.json
+ * by orcha-observe.ts. Mirrors the RawSignal layout but exposes only the
+ * fields the UI viewer needs.
+ */
+export interface ObservationSignal {
+  id: string;
+  createdAt: string;
+  source: string;
+  summary: string;
+  status: string;
+  salience?: 'pivotal' | 'question' | 'context' | string;
+  anchorRefs?: unknown[];
+  conversation?: {
+    sessionId?: string;
+    messageRange?: { from?: string; to?: string };
+    excerpt?: string;
+    actor?: 'user' | 'agent' | 'mixed' | string;
+  };
+}
+
+/**
  * Simplified message shape for observation extraction.
  * Only the fields the observer cares about.
  */

@@ -332,6 +332,14 @@ export interface SessionToolContext {
   /** List sessions in the workspace with pagination. Injected by backend. */
   listSessions?(options?: ListSessionsOptions): ListSessionsResult;
 
+  /**
+   * Cross-session observational recall (B2 resource-scoped retrieval).
+   * Injected by the backend, which owns the file-based recall engine.
+   * `mode: 'search'` finds observations by anchor/text; `mode: 'resolve'`
+   * pages the raw messages behind a hit's durable pointer.
+   */
+  recall?(args: RecallToolArgs): RecallToolResult;
+
   /** Resolve label display names to IDs against configured labels. Injected by backend. */
   resolveLabels?(labels: string[]): ResolvedLabelsResult;
 
@@ -470,6 +478,38 @@ export interface ListSessionsResult {
   total: number;
   returned: number;
   sessions: SessionListItem[];
+}
+
+/** Arguments for the cross-session `recall` tool binding. */
+export interface RecallToolArgs {
+  /** 'search' (default): find observations. 'resolve': page raw messages. */
+  mode?: 'search' | 'resolve';
+  /** search: free-text query (token-overlap scored). */
+  text?: string;
+  /** search: exact framework-anchor filter. */
+  anchorType?: 'feature' | 'befund' | 'anliegen';
+  anchorId?: string;
+  /** search: restrict to one session. resolve: the session to page (required). */
+  sessionId?: string;
+  /** resolve: the anchor message ID to page around (required). */
+  messageId?: string;
+  /** search: max hits (default 20). */
+  limit?: number;
+  /** resolve: messages of context before/after the anchor message. */
+  before?: number;
+  after?: number;
+}
+
+/**
+ * Result of a `recall` call. Shapes (hits / resolved) are intentionally loose
+ * here so the core package stays free of any dependency on the shared engine —
+ * the backend binding returns the engine's RecallHit[] / ResolvedPointer, which
+ * are structurally compatible.
+ */
+export interface RecallToolResult {
+  mode: 'search' | 'resolve';
+  hits?: unknown[];
+  resolved?: unknown | null;
 }
 
 // ============================================================

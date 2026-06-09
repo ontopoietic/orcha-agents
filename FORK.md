@@ -11,7 +11,7 @@ Dieses Repository ist ein Fork von [lukilabs/craft-agents-oss](https://github.co
 | **Zuletzt gemerged** | v0.9.1 |
 | **Upstream-Stand** | v0.9.1 (aktuell) |
 | **Aktiver Branch** | `main` |
-| **Feature-Branch** | `feature/sync-skill-indicator` (auf main rebased) |
+| **Feature-Branch** | `feature/cross-session-recall` (Observer/Reflector/Recall — größter offener Block, → main, s. §6) |
 | **Sentry** | Deaktiviert (main + renderer) — kein Reporting |
 
 ---
@@ -134,6 +134,33 @@ Zusätzliche Modelle für den ZAI-Provider.
 **Berührt Upstream-Dateien (Konflikt-Kandidaten):**
 - `packages/server-core/src/model-fetchers/index.ts` — `+GLM-5.1`, `+GLM-5V-Turbo`
 - `packages/shared/src/config/models-pi.ts` — ZAI-Modell-Konfiguration
+
+### 6. Cross-Session Memory — Observer / Reflector / Recall (GRÖSSTER Block)
+
+Eigenes Memory-System nach Mastras Modell (workspace-/resource-scoped Observations + bedeutungsbasiertes Recall), ein Monat Arbeit, ~57 neue + ~32 berührte Dateien. **Stark divergierend vom Upstream — der größte Rebase-Risikofaktor.** Architektur-Hintergrund: `sessions/260603-wide-sand/plans/HANDOFF-memory-architecture-pivot.md`.
+
+Pipeline: **Observer** (Haiku, extrahiert pro Session Observations als Markdown-Ledger + Evidence-Sidecar) → **Auto-Anchor** (Haiku, taggt Observations mit Rahmen-Anchors feature/befund/anliegen) → **Reflector** (synthetisiert) → **Recall** (cross-session Retrieval-Tool + direktiver `<relevant_memory>`-Hint). Trigger feuern token-/count-basiert per Turn + Wake-on-Session-Open. Der frühere L3-**Episoden**-Layer ist als Agent-Memory abgelöst; Episoden bleiben nur als rein-menschlicher Sidebar-Phasen-Digest (`EpisodesViewer`).
+
+**Neue Module (kein Upstream-Konflikt) — `packages/shared/src/sessions/`:**
+- `mastra-om/*` (Observer/Reflector-Prompts, Parser, anchored-bullet-Parsing)
+- `observation-{loader,trigger,watermark,markdown-parser,format.md}` — Ledger lesen/schreiben + Token-Trigger
+- `recall-engine.ts` — cross-session recall() + resolvePointer() + gatherRecallHint()/renderRecallHintBlock()
+- `reflection-trigger.ts`, `auto-anchor.ts`, `auto-anchor-trigger.ts` — Reflector- + Auto-Anchor-Trigger
+- `rahmen-taxonomy.ts`, `episode*.ts` (Episoden = menschlicher Digest), `anchors.ts`
+
+**Neue Skripte (detached, dev-mode) — `scripts/`:**
+- `orcha-observe.ts`, `orcha-reflect.ts`, `orcha-recall.ts`, `orcha-recall-anchors.ts`, `orcha-migrate-observations.ts`, `orcha-episode-emit.ts`, `orcha-extract-artifacts.ts`, `lib/llm-extractor.ts`
+
+**Berührt Upstream-Dateien (Konflikt-Kandidaten):**
+- `packages/shared/src/agent/core/prompt-builder.ts` — injiziert Observations + `<relevant_memory>`-Hint; feuert Observer/Reflector/Auto-Anchor-Trigger per Turn
+- `packages/server-core/src/sessions/SessionManager.ts` — Observer-Wake on session-open; `maybeTriggerEpisode` on session-done/anchor-change
+- `packages/shared/src/agent/session-self-management-bindings.ts` — bindet `recall` als Tool
+- `packages/session-tools-core/src/{tool-defs,context,handlers/index,index}.ts` — `recall` als kanonisches Registry-Tool
+- `packages/shared/src/agent/core/message-provider.ts`, `claude-agent.ts` — Streaming-Mode + Conversation-Tail
+- `packages/shared/src/sessions/index.ts`, `protocol/dto.ts` — neue Exports/DTOs
+- **UI:** `apps/electron/src/main/{index,observation-watcher}.ts`, `preload/bootstrap.ts`, `shared/{routes,route-parser,types}.ts`, `renderer/contexts/NavigationContext.tsx`, `renderer/components/anchors/SessionAnchorBar.tsx`, `renderer/components/app-shell/{AppShell,MainContentPanel,SessionList}.tsx`, `renderer/components/app-shell/input/FreeFormInput.tsx`, `renderer/hooks/useObservationStatus.ts` — Observations-Panel, Anchor-Bar, Episodes-Viewer, Context-%-Anzeige
+
+> **Verhältnis zum Ledger (§1):** Der Observer übernimmt künftig die konversationsbasierte Signal-Extraktion, die zuvor Hauptaufgabe des Ledger/CLI-Sync war (s. orcha-side `~/Developer/orcha`). Ledger bleibt für die git-/artefakt-getriebene Achse; Umbau ist Folgearbeit.
 
 ---
 

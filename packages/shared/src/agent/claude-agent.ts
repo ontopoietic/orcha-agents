@@ -54,6 +54,7 @@ import {
   SAFE_MODE_CONFIG,
 } from './mode-manager.ts';
 import { getSessionDataPath, getSessionPlansPath, getSessionPath } from '../sessions/storage.ts';
+import { appendContextTrace, buildPctOfCompaction } from '../sessions/context-trace.ts';
 import { getLastApiError } from '../interceptor-common.ts';
 import { extractWorkspaceSlug } from '../utils/workspace.ts';
 import {
@@ -69,6 +70,7 @@ import {
 } from './core/pre-tool-use.ts';
 import { type ThinkingLevel, THINKING_TO_EFFORT, getThinkingTokens, DEFAULT_THINKING_LEVEL } from './thinking-levels.ts';
 import { generateConversationSummary } from './conversation-summary.ts';
+import { isStreamingModeEnabled, streamingTailCoversHistory } from './core/message-provider.ts';
 import type { LoadedSource } from '../sources/types.ts';
 import { sourceNeedsAuthentication } from '../sources/credential-manager.ts';
 import type {
@@ -919,6 +921,21 @@ export class ClaudeAgent extends BaseAgent {
         ? `${model}[1m]`
         : model;
 
+      // STREAMING-REPLACEMENT gate. Streaming mode suppresses SDK resume so
+      // observations + conversation-tail REPLACE the raw history. That is only
+      // safe when the tail provably covers every message after the observation
+      // watermark — otherwise older unobserved messages would be lost. When
+      // streaming is on but coverage isn't met yet (no observations, or the
+      // observer is behind), we fall back to resume for this turn and let the
+      // observer catch up; the gate flips automatically once coverage holds.
+      const streamingReplacementActive =
+        !_isRetry &&
+        isStreamingModeEnabled() &&
+        streamingTailCoversHistory(sessionId, this.workspaceRootPath);
+      if (isStreamingModeEnabled() && !streamingReplacementActive && !_isRetry) {
+        debug('[ClaudeAgent] Streaming mode on but tail does not cover watermark — falling back to SDK resume this turn (observer behind or no observations yet)');
+      }
+
       const options: Options = {
         ...getDefaultOptions(this.config.envOverrides),
         model: effectiveModel,
@@ -986,7 +1003,7 @@ export class ClaudeAgent extends BaseAgent {
         // User hooks from automations.json are merged with internal hooks
         hooks: (() => {
           // Build user-defined hooks from automations.json using the workspace-level AutomationSystem
-          const userHooks: Partial<Record<string, SdkAutomationCallbackMatcher[]>> = this.automationSystem?.buildSdkHooks() ?? {};
+          const userHooks: Partial<Record<string, SdkAutomationCallbackMatcher[]>> = this.automationSystem?.buildSdkHooks(this.config.session?.id) ?? {};
           if (Object.keys(userHooks).length > 0) {
             debug('[CraftAgent] User SDK hooks loaded:', Object.keys(userHooks).join(', '));
           }
@@ -1277,17 +1294,26 @@ export class ClaudeAgent extends BaseAgent {
         // Continue from previous session if we have one (enables conversation history & auto compaction)
         // Skip resume on retry (after session expiry) to start fresh
         // For branched sessions: fork the parent session so the agent has full conversation context
-        ...(!_isRetry && this.sessionId
-          ? { resume: this.sessionId }
-          : !_isRetry && this.branchFromSdkSessionId
-            ? {
-                resume: this.branchFromSdkSessionId,
-                forkSession: true,
-                // Trim the forked conversation at the branch point so the model
-                // only sees messages up to where the user branched, not the full parent.
-                ...(this.branchFromSdkTurnId ? { resumeSessionAt: this.branchFromSdkTurnId } : {}),
-              }
-            : {}),
+        //
+        // STREAMING-MODE (Mastra-strict, gated by ORCHA_STREAMING_MODE=1):
+        // Suppress resume entirely AND disable SDK auto-compaction. We feed
+        // observations via system-prompt and a conversation-tail block via
+        // the user message — see message-provider.ts. The SDK starts each
+        // turn fresh, no jsonl re-load → ~5x token savings on 60k sessions.
+        // Only engaged when the tail covers the watermark (see gate above).
+        ...(streamingReplacementActive
+          ? { settings: { autoCompactEnabled: false } }
+          : !_isRetry && this.sessionId
+            ? { resume: this.sessionId }
+            : !_isRetry && this.branchFromSdkSessionId
+              ? {
+                  resume: this.branchFromSdkSessionId,
+                  forkSession: true,
+                  // Trim the forked conversation at the branch point so the model
+                  // only sees messages up to where the user branched, not the full parent.
+                  ...(this.branchFromSdkTurnId ? { resumeSessionAt: this.branchFromSdkTurnId } : {}),
+                }
+              : {}),
         mcpServers,
         // NOTE: This callback is NOT called by the SDK because we set `permissionMode: 'bypassPermissions'` above.
         // All permission logic is handled via the PreToolUse hook instead (see hooks.PreToolUse above).
@@ -1386,6 +1412,8 @@ This is a branched conversation. All prior messages in this conversation are par
       let receivedAssistantContent = false;
       let suppressedSessionExpiredError = false;
       let suppressedBranchCutoffError = false;
+      // Per-turn context-trace flag: did the SDK compact during this turn?
+      let compactedThisTurn = false;
       try {
         for await (const message of this.currentQuery) {
           // Track if we got any text content from assistant
@@ -1490,6 +1518,7 @@ This is a branched conversation. All prior messages in this conversation are par
             // Reset prerequisite state on compaction (LLM loses guide content)
             if (event.type === 'info' && event.message === 'Compacted Conversation') {
               this.resetPrerequisiteState();
+              compactedThisTurn = true;
             }
 
             // Intercept large/binary/media-rich tool results — save assets to disk,
@@ -1562,6 +1591,24 @@ This is a branched conversation. All prior messages in this conversation are par
 
             if (event.type === 'complete') {
               receivedComplete = true;
+              // Per-turn context trace: persist the live trajectory (sawtooth vs
+              // climb) + which path produced it. Best-effort, never throws.
+              const usage = (event as { usage?: { inputTokens?: number; contextWindow?: number } }).usage;
+              const inputTokens = usage?.inputTokens ?? null;
+              const contextWindow = usage?.contextWindow ?? this.usageTracker.getContextWindow() ?? null;
+              appendContextTrace(metadataSessionDir, {
+                ts: new Date().toISOString(),
+                sessionId,
+                inputTokens,
+                contextWindow,
+                pctOfCompaction: buildPctOfCompaction(inputTokens, contextWindow),
+                replacement: streamingReplacementActive,
+                sdkResume:
+                  !streamingReplacementActive &&
+                  !_isRetry &&
+                  (!!this.sessionId || !!this.branchFromSdkSessionId),
+                compacted: compactedThisTurn,
+              });
             }
             yield event;
           }

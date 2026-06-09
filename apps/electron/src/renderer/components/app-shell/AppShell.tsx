@@ -115,6 +115,7 @@ import {
   isSkillsNavigation,
   isAutomationsNavigation,
   isLedgerNavigation,
+  isObservationsNavigation,
   type NavigationState,
 } from "@/contexts/NavigationContext"
 import type { SettingsSubpage } from "../../../shared/types"
@@ -3238,11 +3239,14 @@ function AppShellContent({
                 />
               </>
             )}
-            {isLedgerNavigation(navState) && (
-              /* Ledger: Session list for quick navigation */
+            {(isLedgerNavigation(navState) || isObservationsNavigation(navState)) && (
+              /* Ledger / Observations: keep the session list visible for navigation —
+                 these views replace the chat content but the navigator should not
+                 go blank. Same render as the chat-side path, just driven by the
+                 workspace-wide session metas. */
               <>
                 <SessionList
-                  key="ledger"
+                  key={isLedgerNavigation(navState) ? 'ledger' : 'observations'}
                   items={workspaceSessionMetas}
                   onDelete={handleDeleteSession}
                   onFlag={onFlagSession}

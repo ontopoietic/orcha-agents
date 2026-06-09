@@ -20,6 +20,8 @@ export interface ObservationStatus {
   lastObservedAt: string | null
   /** Human-readable relative time (e.g., "2m ago") */
   relativeTime: string | null
+  /** True while the orcha-observe subprocess is currently running */
+  running: boolean
 }
 
 function formatRelativeTime(isoTimestamp: string | null): string | null {
@@ -40,6 +42,7 @@ const DEFAULT_STATUS: ObservationStatus = {
   lastSignalCount: 0,
   lastObservedAt: null,
   relativeTime: null,
+  running: false,
 }
 
 /**
@@ -49,13 +52,15 @@ const DEFAULT_STATUS: ObservationStatus = {
 export function useObservationStatus(sessionDir: string | null | undefined): ObservationStatus {
   const [status, setStatus] = useState<ObservationStatus>(DEFAULT_STATUS)
 
-  const handleUpdate = useCallback((wm: ObservationWatermark) => {
+  const handleUpdate = useCallback((wm: ObservationWatermark & { running?: boolean }) => {
+    const hasWatermark = !!wm.lastObservedAt
     setStatus({
-      hasObserved: true,
+      hasObserved: hasWatermark,
       observedCount: wm.observedCount ?? 0,
       lastSignalCount: wm.lastSignalCount ?? 0,
-      lastObservedAt: wm.lastObservedAt ?? null,
-      relativeTime: formatRelativeTime(wm.lastObservedAt ?? null),
+      lastObservedAt: wm.lastObservedAt || null,
+      relativeTime: formatRelativeTime(wm.lastObservedAt || null),
+      running: wm.running ?? false,
     })
   }, [])
 

@@ -72,3 +72,5 @@ export { handleGetSessionInfo } from './get-session-info.ts';
 export type { GetSessionInfoArgs } from './get-session-info.ts';
 export { handleListSessions } from './list-sessions.ts';
 export type { ListSessionsArgs } from './list-sessions.ts';
+export { handleRecall } from './recall.ts';
+export type { RecallArgs } from './recall.ts';

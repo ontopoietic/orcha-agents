@@ -38,6 +38,7 @@ import { handleSetSessionLabels } from './handlers/set-session-labels.ts';
 import { handleSetSessionAnchors } from './handlers/set-session-anchors.ts';
 import { handleSetSessionStatus } from './handlers/set-session-status.ts';
 import { handleGetSessionInfo } from './handlers/get-session-info.ts';
+import { handleRecall } from './handlers/recall.ts';
 import { handleListSessions } from './handlers/list-sessions.ts';
 import { handleSendAgentMessage } from './handlers/send-agent-message.ts';
 import { handleListMessagingChannels, handleUnbindMessagingChannel } from './handlers/messaging.ts';
@@ -211,6 +212,20 @@ export const ListSessionsSchema = z.object({
   sortBy: z.enum(['recent', 'name', 'status']).optional().describe('Sort order (default: recent)'),
   limit: z.number().optional().describe('Max sessions to return (default 20, max 100)'),
   offset: z.number().optional().describe('Skip first N results (for pagination)'),
+});
+
+export const RecallSchema = z.object({
+  mode: z.enum(['search', 'resolve']).optional().describe(
+    "'search' (default): find past observations across all sessions. 'resolve': page the raw messages behind a hit's pointer.",
+  ),
+  text: z.string().optional().describe('search: free-text query, scored by word overlap against observation summaries + source excerpts'),
+  anchorType: z.enum(['feature', 'befund', 'anliegen']).optional().describe('search: filter to observations tagged with this framework-anchor type (requires anchorId)'),
+  anchorId: z.string().optional().describe('search: the anchor artifact ID to filter by (use with anchorType)'),
+  sessionId: z.string().optional().describe('search: restrict to one session. resolve: the session to page (required in resolve mode)'),
+  messageId: z.string().optional().describe("resolve: the anchor message ID to page around, taken from a hit's messageRange.from (required in resolve mode)"),
+  limit: z.number().optional().describe('search: max hits to return (default 20)'),
+  before: z.number().optional().describe('resolve: messages of context to include before the anchor message (default 2)'),
+  after: z.number().optional().describe('resolve: messages of context to include after the anchor message (default 6)'),
 });
 
 // Inter-session messaging
@@ -494,6 +509,16 @@ Call with no arguments to introspect your own session state.`,
 Use filters (status, label, search) to narrow results instead of fetching everything. Default limit is 20 sessions.
 Use get_session_info for full details on a specific session (list-then-detail pattern).`,
 
+  recall: `Recall what happened in past conversations across ALL sessions in this workspace (cross-session memory).
+
+Use this when the compressed observations in your context aren't enough and you need to find — or read the exact wording of — something from an earlier session.
+
+Two modes:
+- mode "search" (default): find relevant past observations. Filter by framework anchor (anchorType + anchorId) for a precise, structural lookup ("everything about feature X"), and/or pass text for a word-overlap search. Each hit carries a durable pointer (messageRange.from + its sessionId).
+- mode "resolve": pass a hit's sessionId + messageId (its messageRange.from) to page the raw original messages around it, when you need exact quotes, tool output, or chronology that the summary dropped.
+
+Anchor search is precise and explainable; text search is approximate (no embeddings yet). Prefer anchors when you know the artifact.`,
+
   send_agent_message: `Send a message to another session. The message is delivered with your session ID so the target can reply back.
 
 Use this to coordinate with spawned sessions, send follow-up instructions, or relay information between sessions.
@@ -577,6 +602,7 @@ export const SESSION_TOOL_DEFS: SessionToolDef[] = [
   { name: 'set_session_status', description: TOOL_DESCRIPTIONS.set_session_status, inputSchema: SetSessionStatusSchema, executionMode: 'registry', safeMode: 'block', handler: handleSetSessionStatus },
   { name: 'get_session_info', description: TOOL_DESCRIPTIONS.get_session_info, inputSchema: GetSessionInfoSchema, executionMode: 'registry', safeMode: 'allow', readOnly: true, handler: handleGetSessionInfo },
   { name: 'list_sessions', description: TOOL_DESCRIPTIONS.list_sessions, inputSchema: ListSessionsSchema, executionMode: 'registry', safeMode: 'allow', readOnly: true, handler: handleListSessions },
+  { name: 'recall', description: TOOL_DESCRIPTIONS.recall, inputSchema: RecallSchema, executionMode: 'registry', safeMode: 'allow', readOnly: true, handler: handleRecall },
   // Inter-session messaging
   { name: 'send_agent_message', description: TOOL_DESCRIPTIONS.send_agent_message, inputSchema: SendAgentMessageSchema, executionMode: 'registry', safeMode: 'block', handler: handleSendAgentMessage },
   // Messaging gateway tools

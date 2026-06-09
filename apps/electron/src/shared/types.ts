@@ -253,8 +253,15 @@ export interface ElectronAPI {
   // Observation watcher — watch meta/observation-watermark.json in session dir
   observationWatch(sessionDir: string): Promise<void>
   observationUnwatch(): Promise<void>
-  observationRead(sessionDir: string): Promise<import('../../../packages/shared/src/sessions/observation-watermark').ObservationWatermark | null>
-  onObservationStatus(callback: (status: import('../../../packages/shared/src/sessions/observation-watermark').ObservationWatermark) => void): () => void
+  observationRead(sessionDir: string): Promise<import('@craft-agent/shared/sessions').ObservationWatermark | null>
+  observationReadList(sessionDir: string): Promise<import('@craft-agent/shared/sessions').ObservationSignal[]>
+  observationRunNow(sessionDir: string): Promise<{ ok: true; output: string } | { ok: false; error: string }>
+  observationReflectNow(sessionDir: string, options?: { force?: boolean }): Promise<{ ok: true; output: string } | { ok: false; error: string }>
+  onObservationStatus(callback: (status: import('@craft-agent/shared/sessions').ObservationWatermark) => void): () => void
+
+  // Episodic memory (L3) — per-session/per-phase episode records
+  episodeReadIndex(sessionDir: string): Promise<import('@craft-agent/shared/sessions').EpisodeIndex>
+  episodeRead(sessionDir: string, episodeId: string): Promise<import('@craft-agent/shared/sessions').Episode | null>
 
   // Orcha CLI bridge — anchor picker data source (Feature, Befund, Anliegen)
   listAnchorables(
@@ -872,6 +879,11 @@ export interface LedgerNavigationState {
   rightSidebar?: RightSidebarPanel
 }
 
+export interface ObservationsNavigationState {
+  navigator: 'observations'
+  rightSidebar?: RightSidebarPanel
+}
+
 /**
  * Unified navigation state
  */
@@ -882,6 +894,7 @@ export type NavigationState =
   | SkillsNavigationState
   | AutomationsNavigationState
   | LedgerNavigationState
+  | ObservationsNavigationState
 
 export const isSessionsNavigation = (
   state: NavigationState
@@ -906,6 +919,10 @@ export const isAutomationsNavigation = (
 export const isLedgerNavigation = (
   state: NavigationState
 ): state is LedgerNavigationState => state.navigator === 'ledger'
+
+export const isObservationsNavigation = (
+  state: NavigationState
+): state is ObservationsNavigationState => state.navigator === 'observations'
 
 export const DEFAULT_NAVIGATION_STATE: NavigationState = {
   navigator: 'sessions',
@@ -937,6 +954,9 @@ export const getNavigationStateKey = (state: NavigationState): string => {
   }
   if (state.navigator === 'ledger') {
     return 'ledger'
+  }
+  if (state.navigator === 'observations') {
+    return 'observations'
   }
   // Chats
   const f = state.filter
@@ -981,6 +1001,10 @@ export const parseNavigationStateKey = (key: string): NavigationState | null => 
     }
     return { navigator: 'automations', details: null }
   }
+
+  // Handle ledger / observations (workspace- / session-wide views with no key params)
+  if (key === 'ledger') return { navigator: 'ledger' }
+  if (key === 'observations') return { navigator: 'observations' }
 
   // Handle settings
   if (key === 'settings') return { navigator: 'settings', subpage: 'app' }

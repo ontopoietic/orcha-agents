@@ -123,6 +123,9 @@ export const focusedSessionIdAtom = atom((get) => {
 /** Persists the working directory when navigating to the ledger detail view */
 export const ledgerWorkingDirAtom = atom<string | null>(null)
 
+/** Persists the session directory when navigating to the observations detail view */
+export const observationsSessionDirAtom = atom<string | null>(null)
+
 export const pushPanelAtom = atom(
   null,
   (get, set, { route, afterIndex }: {

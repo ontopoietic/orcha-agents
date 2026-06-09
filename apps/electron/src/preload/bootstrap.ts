@@ -443,9 +443,19 @@ client.onConnectionStateChanged((state) => {
   ipcRenderer.invoke('observation:unwatch')
 ;(api as ElectronAPI).observationRead = (sessionDir: string) =>
   ipcRenderer.invoke('observation:read', sessionDir)
+;(api as ElectronAPI).observationReadList = (sessionDir: string) =>
+  ipcRenderer.invoke('observation:read-observations', sessionDir)
+;(api as ElectronAPI).observationRunNow = (sessionDir: string) =>
+  ipcRenderer.invoke('observation:run-now', sessionDir)
+;(api as ElectronAPI).observationReflectNow = (sessionDir: string, options?: { force?: boolean }) =>
+  ipcRenderer.invoke('observation:reflect-now', sessionDir, options ?? {})
+;(api as ElectronAPI).episodeReadIndex = (sessionDir: string) =>
+  ipcRenderer.invoke('episode:read-index', sessionDir)
+;(api as ElectronAPI).episodeRead = (sessionDir: string, episodeId: string) =>
+  ipcRenderer.invoke('episode:read', sessionDir, episodeId)
 ;(api as ElectronAPI).onObservationStatus = (callback) => {
   const handler = (_event: Electron.IpcRendererEvent, status: unknown) =>
-    callback(status as import('../../packages/shared/src/sessions/observation-watermark').ObservationWatermark)
+    callback(status as import('@craft-agent/shared/sessions').ObservationWatermark)
   ipcRenderer.on('observation:status', handler)
   return () => ipcRenderer.removeListener('observation:status', handler)
 }
