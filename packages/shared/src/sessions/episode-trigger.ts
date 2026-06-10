@@ -19,6 +19,7 @@ import { spawn } from 'node:child_process';
 import { join } from 'node:path';
 import type { EpisodeCloseReason } from './episode.ts';
 import { createLogger } from '../utils/debug.ts';
+import { resolveOrchaScript } from './observer-runtime.ts';
 
 const log = createLogger('episode-trigger');
 
@@ -53,9 +54,9 @@ export function maybeTriggerEpisode(
     log.debug('CRAFT_APP_ROOT not set — cannot spawn episode emitter');
     return { triggered: false, reason: 'CRAFT_APP_ROOT not set' };
   }
-  const scriptPath = join(appRoot, 'scripts', 'orcha-episode-emit.ts');
-  if (!existsSync(scriptPath)) {
-    log.debug(`Episode emitter script not found at ${scriptPath}`);
+  const inv = resolveOrchaScript(appRoot, 'orcha-episode-emit', [sessionDir, closeReason]);
+  if (!inv) {
+    log.debug(`Episode emitter script not found (neither dist/observer-scripts/orcha-episode-emit.cjs nor scripts/orcha-episode-emit.ts under ${appRoot})`);
     return { triggered: false, reason: 'emit script not found' };
   }
 
@@ -71,9 +72,9 @@ export function maybeTriggerEpisode(
   state.inFlight = true;
   throttle.set(sessionId, state);
 
-  const child = spawn('npx', ['tsx', scriptPath, sessionDir, closeReason], {
+  const child = spawn(inv.command, inv.args, {
     cwd: appRoot,
-    env: { ...process.env },
+    env: { ...process.env, ...inv.env },
     stdio: ['ignore', 'pipe', 'pipe'],
     detached: false,
   });

@@ -33,6 +33,7 @@ import { spawn } from 'node:child_process';
 import { join } from 'node:path';
 import { createLogger } from '../utils/debug.ts';
 import { parseAnchoredBullets } from './mastra-om/parse-anchored-bullets.ts';
+import { resolveOrchaScript } from './observer-runtime.ts';
 
 const log = createLogger('reflection-trigger');
 
@@ -126,16 +127,16 @@ function spawnReflector(
     log.debug('CRAFT_APP_ROOT not set — cannot spawn reflector');
     return;
   }
-  const scriptPath = join(appRoot, 'scripts', 'orcha-reflect.ts');
-  if (!existsSync(scriptPath)) {
-    log.debug(`Reflector script not found at ${scriptPath}`);
+  const inv = resolveOrchaScript(appRoot, 'orcha-reflect', [sessionDir]);
+  if (!inv) {
+    log.debug(`Reflector script not found (neither dist/observer-scripts/orcha-reflect.cjs nor scripts/orcha-reflect.ts under ${appRoot})`);
     return;
   }
 
   const state = throttle.get(sessionId)!;
   state.inFlight = true;
 
-  const child = spawn('npx', ['tsx', scriptPath, sessionDir], {
+  const child = spawn(inv.command, inv.args, {
     cwd: appRoot,
     env: {
       ...process.env,
@@ -143,6 +144,7 @@ function spawnReflector(
       // Auth/env injection for callers (e.g. the electron wake-trigger) whose
       // process.env may lack a fresh OAuth token. Applied last so it wins.
       ...(envOverride ?? {}),
+      ...inv.env,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
     detached: false,

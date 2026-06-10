@@ -39,6 +39,7 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
 import { createLogger } from '../utils/debug.ts';
+import { resolveOrchaScript } from './observer-runtime.ts';
 
 const log = createLogger('observation-trigger');
 
@@ -158,20 +159,21 @@ function spawnObserver(sessionDir: string, sessionId: string): void {
     log.debug('CRAFT_APP_ROOT not set — cannot spawn observer');
     return;
   }
-  const scriptPath = join(appRoot, 'scripts', 'orcha-observe.ts');
-  if (!existsSync(scriptPath)) {
-    log.debug(`Observer script not found at ${scriptPath}`);
+  const inv = resolveOrchaScript(appRoot, 'orcha-observe', [sessionDir]);
+  if (!inv) {
+    log.debug(`Observer script not found (neither dist/observer-scripts/orcha-observe.cjs nor scripts/orcha-observe.ts under ${appRoot})`);
     return;
   }
 
   const state = throttle.get(sessionId)!;
   state.inFlight = true;
 
-  const child = spawn('npx', ['tsx', scriptPath, sessionDir], {
+  const child = spawn(inv.command, inv.args, {
     cwd: appRoot,
     env: {
       ...process.env,
       CRAFT_WORKSPACE_ROOT: process.env.CRAFT_WORKSPACE_ROOT ?? '',
+      ...inv.env,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
     detached: false,

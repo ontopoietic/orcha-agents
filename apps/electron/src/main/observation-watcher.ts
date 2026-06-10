@@ -20,6 +20,7 @@ import { parseMastraLedger } from '@craft-agent/shared/sessions/mastra-om/parse-
 import { estimateBacklogTokens, getObserverThresholdTokens } from '@craft-agent/shared/sessions/observation-trigger'
 import { maybeTriggerReflector } from '@craft-agent/shared/sessions/reflection-trigger'
 import { maybeTriggerAutoAnchor } from '@craft-agent/shared/sessions/auto-anchor-trigger'
+import { resolveOrchaScript } from '@craft-agent/shared/sessions/observer-runtime'
 import { getLlmConnections } from '@craft-agent/shared/config/storage'
 import { getValidClaudeOAuthToken } from '@craft-agent/shared/auth/state'
 import log from 'electron-log/main'
@@ -312,11 +313,11 @@ export async function runObserverNow(sessionDir: string): Promise<string> {
   // Source-repo root (dev) or app bundle root (packaged) — set in main/index.ts
   const appRoot = process.env.CRAFT_APP_ROOT
   if (!appRoot) {
-    throw new Error('CRAFT_APP_ROOT not set — cannot locate orcha-observe.ts')
+    throw new Error('CRAFT_APP_ROOT not set — cannot locate orcha-observe')
   }
-  const scriptPath = join(appRoot, 'scripts', 'orcha-observe.ts')
-  if (!existsSync(scriptPath)) {
-    throw new Error(`Observer script not found at ${scriptPath}. In packaged builds the script must be bundled as extraResource.`)
+  const inv = resolveOrchaScript(appRoot, 'orcha-observe', [sessionDir])
+  if (!inv) {
+    throw new Error(`Observer script not found (neither dist/observer-scripts/orcha-observe.cjs nor scripts/orcha-observe.ts under ${appRoot}).`)
   }
 
   // The session under observation lives in the workspace, not the source repo.
@@ -326,12 +327,15 @@ export async function runObserverNow(sessionDir: string): Promise<string> {
   const authEnv = await resolveObserverAuthEnv()
 
   return new Promise((resolveOut, rejectOut) => {
-    const child = spawn('npx', ['tsx', scriptPath, sessionDir], {
-      cwd: appRoot, // run from source repo so node_modules/tsx resolves
+    const child = spawn(inv.command, inv.args, {
+      // Packaged: process.execPath (Electron-as-Node) runs the bundled CJS.
+      // Dev: npx tsx resolves tsx from the source-repo node_modules.
+      cwd: appRoot,
       env: {
         ...process.env,
         ...authEnv,
         CRAFT_WORKSPACE_ROOT: workspaceRoot,
+        ...inv.env,
       },
       stdio: ['pipe', 'pipe', 'pipe'],
     })
@@ -408,23 +412,24 @@ export async function runReflectorNow(
 
   const appRoot = process.env.CRAFT_APP_ROOT
   if (!appRoot) {
-    throw new Error('CRAFT_APP_ROOT not set — cannot locate orcha-reflect.ts')
+    throw new Error('CRAFT_APP_ROOT not set — cannot locate orcha-reflect')
   }
-  const scriptPath = join(appRoot, 'scripts', 'orcha-reflect.ts')
-  if (!existsSync(scriptPath)) {
-    throw new Error(`Reflector script not found at ${scriptPath}.`)
+  const inv = resolveOrchaScript(appRoot, 'orcha-reflect', [sessionDir])
+  if (!inv) {
+    throw new Error(`Reflector script not found (neither dist/observer-scripts/orcha-reflect.cjs nor scripts/orcha-reflect.ts under ${appRoot}).`)
   }
   const workspaceRoot = resolve(sessionDir, '..', '..')
   const authEnv = await resolveObserverAuthEnv()
 
   return new Promise((resolveOut, rejectOut) => {
-    const child = spawn('npx', ['tsx', scriptPath, sessionDir], {
+    const child = spawn(inv.command, inv.args, {
       cwd: appRoot,
       env: {
         ...process.env,
         ...authEnv,
         CRAFT_WORKSPACE_ROOT: workspaceRoot,
         ...(options.force ? { ORCHA_REFLECT_FORCE: '1' } : {}),
+        ...inv.env,
       },
       stdio: ['pipe', 'pipe', 'pipe'],
     })

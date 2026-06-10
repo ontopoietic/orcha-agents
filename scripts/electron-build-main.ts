@@ -20,6 +20,17 @@ const PI_AGENT_SERVER_OUTPUT = join(PI_AGENT_SERVER_DIR, "dist/index.js");
 const WA_WORKER_DIR = join(ROOT_DIR, "packages/messaging-whatsapp-worker");
 const WA_WORKER_SOURCE = join(WA_WORKER_DIR, "src/worker.ts");
 const WA_WORKER_OUTPUT = join(WA_WORKER_DIR, "dist/worker.cjs");
+// Memory subsystem helper scripts (Observer / Reflector / Episode-emitter /
+// Recall-anchors). Spawned as detached child processes from the main process.
+// In packaged builds they run as bundled CJS via Electron-as-Node — see
+// packages/shared/src/sessions/observer-runtime.ts.
+const OBSERVER_SCRIPT_BASES = [
+  "orcha-observe",
+  "orcha-reflect",
+  "orcha-episode-emit",
+  "orcha-recall-anchors",
+];
+const OBSERVER_OUTPUT_DIR = join(DIST_DIR, "observer-scripts");
 
 // Load .env file if it exists
 function loadEnvFile(): void {
@@ -310,6 +321,54 @@ async function buildWhatsAppWorker(): Promise<void> {
   console.log("✅ WhatsApp worker built successfully");
 }
 
+// Build the memory-subsystem helper scripts into self-contained CJS bundles.
+// Without this, packaged builds ship no runnable Observer/Reflector/etc. and
+// the observation watermark freezes (the UI shows no new observations).
+async function buildObserverScripts(): Promise<void> {
+  console.log("🧠 Building memory observer scripts...");
+
+  const entries = OBSERVER_SCRIPT_BASES.map((b) => join(ROOT_DIR, "scripts", `${b}.ts`));
+  for (const e of entries) {
+    if (!existsSync(e)) {
+      console.error("❌ Observer script source not found at", e);
+      process.exit(1);
+    }
+  }
+
+  const proc = spawn({
+    cmd: [
+      "bun", "run", "esbuild",
+      ...entries,
+      "--bundle",
+      "--platform=node",
+      "--format=cjs",
+      "--target=node20",
+      `--outdir=${OBSERVER_OUTPUT_DIR}`,
+      "--out-extension:.js=.cjs",
+      "--external:electron",
+    ],
+    cwd: ROOT_DIR,
+    stdout: "inherit",
+    stderr: "inherit",
+  });
+
+  const exitCode = await proc.exited;
+  if (exitCode !== 0) {
+    console.error("❌ Observer scripts build failed with exit code", exitCode);
+    process.exit(exitCode);
+  }
+
+  for (const b of OBSERVER_SCRIPT_BASES) {
+    const out = join(OBSERVER_OUTPUT_DIR, `${b}.cjs`);
+    if (!existsSync(out)) {
+      console.error("❌ Observer script output not found at", out);
+      process.exit(1);
+    }
+  }
+
+  console.log("✅ Observer scripts built successfully");
+}
+
 async function main(): Promise<void> {
   loadEnvFile();
 
@@ -333,6 +392,9 @@ async function main(): Promise<void> {
 
   // Build WhatsApp worker (Baileys subprocess — optional package)
   await buildWhatsAppWorker();
+
+  // Build memory observer scripts (Observer/Reflector/Episode/Recall-anchors)
+  await buildObserverScripts();
 
   const buildDefines = getBuildDefines();
 

@@ -916,7 +916,10 @@ async function callClaudeCLI(cliPath: string, model: string, system: string, use
       '--exclude-dynamic-system-prompt-sections',
       user,
     ], {
-      env: process.env,
+      // Strip ELECTRON_RUN_AS_NODE: in packaged builds this script runs via
+      // the Electron binary in Node mode, but the `claude` CLI is a separate
+      // standalone binary that must NOT inherit that flag.
+      env: (() => { const e = { ...process.env }; delete e.ELECTRON_RUN_AS_NODE; return e; })(),
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let stdout = '';
