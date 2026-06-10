@@ -71,6 +71,7 @@
   "dependencies": {
     "@craft-agent/core": "workspace:*",
     "@craft-agent/session-tools-core": "workspace:*",
+    "@huggingface/transformers": "^3.4.0",
     "@isaacs/ttlcache": "^2.1.4",
     "@leeoniya/ufuzzy": "^1.0.19",
     "@mariozechner/pi-agent-core": "0.72.1",

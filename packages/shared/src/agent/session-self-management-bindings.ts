@@ -20,7 +20,7 @@
 
 import type { SessionToolContext, RecallToolArgs, RecallToolResult } from '@craft-agent/session-tools-core';
 import { getSessionScopedToolCallbacks } from './session-scoped-tool-callback-registry.ts';
-import { recall, resolvePointer } from '../sessions/recall-engine.ts';
+import { recall, recallSemantic, resolvePointer } from '../sessions/recall-engine.ts';
 
 /**
  * Attach session self-management bindings to a SessionToolContext.
@@ -77,7 +77,7 @@ export function attachSessionSelfManagementBindings(
     get() {
       const workspaceRootPath = context.workspacePath;
       if (!workspaceRootPath) return undefined;
-      return (args: RecallToolArgs): RecallToolResult => {
+      return (args: RecallToolArgs): RecallToolResult | Promise<RecallToolResult> => {
         const mode = args.mode ?? 'search';
         if (mode === 'resolve') {
           const resolved = resolvePointer(
@@ -88,7 +88,7 @@ export function attachSessionSelfManagementBindings(
           );
           return { mode, resolved };
         }
-        const hits = recall(workspaceRootPath, {
+        const query = {
           text: args.text,
           anchor:
             args.anchorType && args.anchorId
@@ -96,8 +96,13 @@ export function attachSessionSelfManagementBindings(
               : undefined,
           sessionId: args.sessionId,
           limit: args.limit,
-        });
-        return { mode, hits };
+        };
+        // Semantic scoring is the default for text queries; it degrades to the
+        // sync engine on its own when no embedder is available.
+        if (args.text && args.semantic !== false) {
+          return recallSemantic(workspaceRootPath, query).then((hits) => ({ mode, hits }));
+        }
+        return { mode, hits: recall(workspaceRootPath, query) };
       };
     },
     configurable: true,

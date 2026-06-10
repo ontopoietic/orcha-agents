@@ -25,6 +25,8 @@ import { loadObservationSignals } from './observation-loader.ts';
 import { readAllMessages, type ObservableMessage } from './observation-watermark.ts';
 import { getWorkspaceSessionsPath } from '../workspaces/storage.ts';
 import { getSessionPath, getSessionFilePath } from './storage.ts';
+import { cosineSimilarity, resolveEmbedder, type Embedder } from './embedder.ts';
+import { ensureEmbeddings } from './vector-sidecar.ts';
 
 // ============================================================================
 // Types
@@ -53,7 +55,7 @@ export interface RecallHit {
   /** Composite relevance score (higher = better). */
   score: number;
   /** Which signals contributed to the match (for explainability/UI). */
-  matched: Array<'anchor' | 'text' | 'recency'>;
+  matched: Array<'anchor' | 'text' | 'semantic' | 'recency'>;
 }
 
 export interface ResolvedPointer {
@@ -184,6 +186,128 @@ export function recall(
           score += overlap;
           matched.push('text');
         }
+      }
+
+      const rb = recencyBoost(sig.createdAt, now);
+      score += rb;
+      if (matched.length === 0) matched.push('recency');
+
+      hits.push({
+        sessionId,
+        summary: sig.summary,
+        excerpt: sig.conversation?.excerpt ?? '',
+        createdAt: sig.createdAt,
+        salience: sig.salience,
+        anchorRefs,
+        messageRange: {
+          from: sig.conversation?.messageRange?.from ?? '',
+          to: sig.conversation?.messageRange?.to ?? sig.conversation?.messageRange?.from ?? '',
+        },
+        score,
+        matched,
+      });
+    }
+  }
+
+  hits.sort((a, b) => b.score - a.score || Date.parse(b.createdAt) - Date.parse(a.createdAt));
+  return hits.slice(0, limit);
+}
+
+// ============================================================================
+// Public: recallSemantic (vector-scored variant)
+// ============================================================================
+
+export interface SemanticRecallOptions {
+  /** Inject a provider (tests); defaults to `resolveEmbedder()`. */
+  embedder?: Embedder | null;
+  /** Optional cosine floor (0..1), like Mastra's `semanticRecall.threshold`.
+   *  Default 0 = pure ranking, exactly Mastra's default behaviour. */
+  minSimilarity?: number;
+}
+
+/**
+ * Semantic recall — `recall()` with the text axis upgraded from token overlap
+ * to embedding similarity. Everything else is identical by construction:
+ * anchors stay a hard filter, the durable pointer is untouched, and the
+ * scoring model keeps its shape:
+ *
+ *   anchor match → +1.0   |   meaning → +max(textOverlap, cosineSim)   |   recency tiebreak
+ *
+ * `max(text, sem)` rather than vector-only: exact word hits (IDs, file names,
+ * error strings) are something embeddings are *worse* at than grep — the two
+ * signals cover each other's blind spots.
+ *
+ * Degrades to plain `recall()` whenever semantics can't contribute: no query
+ * text, embedder unavailable/disabled, or query embedding fails. Per-session
+ * embedding failures degrade only that session to text scoring. Callers can
+ * therefore use this unconditionally.
+ */
+export async function recallSemantic(
+  workspaceRootPath: string,
+  query: RecallQuery,
+  opts: SemanticRecallOptions = {},
+  clock: () => number = () => Date.now(),
+): Promise<RecallHit[]> {
+  if (!query.text) return recall(workspaceRootPath, query, clock);
+
+  const embedder = opts.embedder !== undefined ? opts.embedder : await resolveEmbedder();
+  if (!embedder) return recall(workspaceRootPath, query, clock);
+
+  let queryVector: Float32Array | undefined;
+  try {
+    queryVector = (await embedder.embed([query.text], 'query'))[0];
+  } catch {
+    queryVector = undefined;
+  }
+  if (!queryVector) return recall(workspaceRootPath, query, clock);
+
+  const limit = query.limit ?? 20;
+  const minSimilarity = opts.minSimilarity ?? 0;
+  const now = clock();
+  const queryTokens = tokenize(query.text);
+  const wantAnchorKey = query.anchor ? `${query.anchor.type}:${query.anchor.id}` : undefined;
+
+  const sessionIds = query.sessionId ? [query.sessionId] : listSessionIds(workspaceRootPath);
+  const hits: RecallHit[] = [];
+
+  for (const sessionId of sessionIds) {
+    const sessionDir = getSessionPath(workspaceRootPath, sessionId);
+    let signals;
+    try {
+      signals = loadObservationSignals(sessionDir);
+    } catch {
+      continue; // one bad session never sinks the whole recall
+    }
+
+    let vectors: Map<string, Float32Array>;
+    try {
+      vectors = await ensureEmbeddings(sessionDir, signals, embedder);
+    } catch {
+      vectors = new Map(); // this session degrades to text scoring
+    }
+
+    for (const sig of signals) {
+      const anchorRefs = toAnchorRefs(sig.anchorRefs);
+      const matched: RecallHit['matched'] = [];
+      let score = 0;
+
+      if (wantAnchorKey) {
+        const has = anchorRefs.some((a) => anchorKey(a) === wantAnchorKey);
+        if (!has) continue; // anchor is a hard filter when present
+        score += 1.0;
+        matched.push('anchor');
+      }
+
+      const haystack = `${sig.summary}\n${sig.conversation?.excerpt ?? ''}`;
+      const overlap = textScore(queryTokens, haystack);
+      const vector = vectors.get(sig.id);
+      const sim = vector ? Math.max(0, cosineSimilarity(queryVector, vector)) : 0;
+      const meaning = Math.max(overlap, sim >= minSimilarity ? sim : 0);
+
+      if (meaning === 0 && !wantAnchorKey) continue; // nothing relevant → drop
+      if (meaning > 0) {
+        score += meaning;
+        matched.push(sim > overlap && sim >= minSimilarity ? 'semantic' : 'text');
       }
 
       const rb = recencyBoost(sig.createdAt, now);
