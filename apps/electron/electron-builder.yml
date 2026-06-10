@@ -123,6 +123,12 @@ mac:
     # WhatsApp worker subprocess (self-contained; Baileys bundled in).
     - from: ../../packages/messaging-whatsapp-worker/dist/worker.cjs
       to: messaging-whatsapp-worker/worker.cjs
+    # Local embedder runtime for semantic recall (@huggingface/transformers +
+    # onnxruntime-node + jinja + sharp stub). Staged by build:copy into
+    # vendor/embedder/node_modules; merged into app/node_modules so the runtime
+    # dynamic import resolves from dist/main.cjs. macOS only (darwin binaries).
+    - from: vendor/embedder/node_modules
+      to: app/node_modules
   # Exclude binaries for other platforms
   files:
     - "!**/vendor/codex/linux-*/**"

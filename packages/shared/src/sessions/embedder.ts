@@ -19,10 +19,14 @@
  * resolver returns null and recall stays text-based.
  *
  * Env:
- *   ORCHA_EMBED_DISABLE=1  — force-disable semantic recall
- *   ORCHA_EMBED_MODEL      — HF model id (default Xenova/multilingual-e5-small)
- *   ORCHA_EMBED_DIM        — embedding dimension (default 384)
+ *   ORCHA_EMBED_DISABLE=1   — force-disable semantic recall
+ *   ORCHA_EMBED_MODEL       — HF model id (default Xenova/multilingual-e5-small)
+ *   ORCHA_EMBED_DIM         — embedding dimension (default 384)
+ *   ORCHA_EMBED_CACHE_DIR   — on-disk model cache (default ~/.orcha-agents/models)
  */
+
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 
 export type EmbedKind = 'query' | 'passage';
 
@@ -37,6 +41,15 @@ export interface Embedder {
 
 export const DEFAULT_EMBED_MODEL = 'Xenova/multilingual-e5-small';
 export const DEFAULT_EMBED_DIM = 384;
+
+/**
+ * Canonical on-disk model cache. Shared by dev and the packaged app (both
+ * resolve `~/.orcha-agents`), so a model downloaded once — or pre-seeded by
+ * `scripts/orcha-embed-observations.ts` — is reused everywhere, offline.
+ */
+export function embedCacheDir(): string {
+  return process.env.ORCHA_EMBED_CACHE_DIR ?? join(homedir(), '.orcha-agents', 'models');
+}
 
 /** E5-family models are trained with these prefixes; others ignore them. */
 function prefixFor(model: string, kind: EmbedKind): string {
@@ -78,7 +91,13 @@ async function doResolve(): Promise<Embedder | null> {
     const specifier = '@huggingface/transformers';
     const mod = (await import(specifier)) as {
       pipeline: (task: string, model: string, opts?: Record<string, unknown>) => Promise<unknown>;
+      env?: { cacheDir?: string; allowRemoteModels?: boolean };
     };
+    // Pin the on-disk cache so dev and the packaged app share one warm copy.
+    if (mod.env) {
+      mod.env.cacheDir = embedCacheDir();
+      mod.env.allowRemoteModels = true; // download once if the cache is cold
+    }
     extractor = (await mod.pipeline('feature-extraction', model, {
       dtype: 'q8',
     })) as unknown as FeatureExtractor;
