@@ -94,6 +94,18 @@ interface AnthropicMessagesResponse {
   error?: { message?: string };
 }
 
+/**
+ * Environment for spawning the standalone `claude` CLI binary. In packaged
+ * builds the orcha scripts themselves run via the Electron binary in Node
+ * mode (ELECTRON_RUN_AS_NODE=1) — the CLI is a separate native binary that
+ * must NOT inherit that flag, or it boots as a Node REPL instead of claude.
+ */
+export function buildCliSpawnEnv(): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  delete env.ELECTRON_RUN_AS_NODE;
+  return env;
+}
+
 async function callClaudeCLI(
   cliPath: string,
   model: string,
@@ -114,7 +126,7 @@ async function callClaudeCLI(
         '--exclude-dynamic-system-prompt-sections',
         user,
       ],
-      { env: process.env, stdio: ['ignore', 'pipe', 'pipe'] },
+      { env: buildCliSpawnEnv(), stdio: ['ignore', 'pipe', 'pipe'] },
     );
     let stdout = '';
     let stderr = '';
@@ -149,11 +161,13 @@ async function callAnthropicAPI(
   system: string,
   user: string,
   logPrefix: string,
+  maxTokens: number,
+  temperature: number,
 ): Promise<string | null> {
   const body = {
     model,
-    max_tokens: 8192,
-    temperature: 0.4,
+    max_tokens: maxTokens,
+    temperature,
     system,
     messages: [{ role: 'user', content: user }],
   };
@@ -187,10 +201,14 @@ export async function callExtractor(
   mode: ExtractorMode,
   system: string,
   user: string,
-  opts: { logPrefix?: string; timeoutMs?: number } = {},
+  opts: { logPrefix?: string; timeoutMs?: number; maxTokens?: number; temperature?: number } = {},
 ): Promise<string | null> {
   const logPrefix = opts.logPrefix ?? 'Extractor';
   const timeoutMs = opts.timeoutMs ?? 90_000;
   if (mode.kind === 'cli') return callClaudeCLI(mode.cliPath, mode.model, system, user, logPrefix, timeoutMs);
-  return callAnthropicAPI(mode.apiKey, mode.model, mode.endpoint, mode.apiVersion, system, user, logPrefix);
+  return callAnthropicAPI(
+    mode.apiKey, mode.model, mode.endpoint, mode.apiVersion, system, user, logPrefix,
+    opts.maxTokens ?? 8192,
+    opts.temperature ?? 0.4,
+  );
 }
