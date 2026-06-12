@@ -187,6 +187,47 @@ const OBSERVER_MAX_TOKENS_PER_BATCH = (() => {
 })();
 
 /**
+ * Backlog (backfill) handling: when the Observer has been down for a while,
+ * the un-observed slice is far larger than a normal live trigger (~24k-token
+ * cadence). Feeding such a backlog through 10k chunks forces the LLM to
+ * over-compress — decisions survive only as one-liners, their rationale is
+ * lost. Empirically (session 260607, same prompt + model) 2.5k chunks kept
+ * the substance that 10k chunks dropped (83 vs 24 bullets, rationale and
+ * rejected alternatives intact).
+ *
+ * So: slices above OBSERVER_BACKLOG_THRESHOLD_TOKENS are treated as backlog
+ * and chunked at OBSERVER_BACKFILL_TOKENS_PER_BATCH. Normal live slices keep
+ * the Mastra-parity 10k. An explicit ORCHA_OBSERVER_MAX_TOKENS_PER_BATCH
+ * override always wins over the adaptive choice.
+ */
+const OBSERVER_BACKFILL_TOKENS_PER_BATCH = (() => {
+  const v = parseInt(process.env.ORCHA_OBSERVER_BACKFILL_TOKENS_PER_BATCH ?? '', 10);
+  return Number.isFinite(v) && v > 0 ? v : 2_500;
+})();
+
+/**
+ * Above this slice size we assume a backlog. The live trigger fires at
+ * ORCHA_OBSERVER_THRESHOLD_TOKENS (24k, see observation-trigger.ts), so a
+ * normal live slice is ~24–30k; 2× the trigger means the Observer missed at
+ * least one full cycle.
+ */
+const OBSERVER_BACKLOG_THRESHOLD_TOKENS = 48_000;
+
+/** Pick the per-chunk token budget for this run (see backlog comment above). */
+function resolveChunkTokens(slice: ObservableMessage[]): number {
+  const explicit = parseInt(process.env.ORCHA_OBSERVER_MAX_TOKENS_PER_BATCH ?? '', 10);
+  if (Number.isFinite(explicit) && explicit > 0) return explicit;
+  const sliceTokens = Math.ceil(slice.reduce((n, m) => n + m.content.length, 0) / 4);
+  if (sliceTokens > OBSERVER_BACKLOG_THRESHOLD_TOKENS) {
+    console.log(
+      `Observer: backlog slice (~${sliceTokens} tokens > ${OBSERVER_BACKLOG_THRESHOLD_TOKENS}) — using fine chunks (${OBSERVER_BACKFILL_TOKENS_PER_BATCH} tokens/batch).`,
+    );
+    return OBSERVER_BACKFILL_TOKENS_PER_BATCH;
+  }
+  return OBSERVER_MAX_TOKENS_PER_BATCH;
+}
+
+/**
  * Split a message slice into chunks whose cumulative content length stays
  * under `maxTokens` (chars/4 heuristic). Splits at message boundaries — a
  * single oversized message becomes its own chunk rather than being dropped.
@@ -262,12 +303,12 @@ async function runMastraObservation(expandedDir: string, jsonlPath: string): Pro
     return;
   }
 
-  // 3. Chunk the slice so each LLM call sees ≤OBSERVER_MAX_TOKENS_PER_BATCH of
-  // NEW content. Mastra's analogue: `maxTokensPerBatch: 10_000`. Chunking
-  // happens BEFORE dialogue filtering so the watermark advances by a
-  // contiguous message range each iteration (incl. tool calls that sit
-  // between user+assistant turns).
-  const chunks = chunkMessagesByTokens(slice, OBSERVER_MAX_TOKENS_PER_BATCH);
+  // 3. Chunk the slice so each LLM call sees a bounded amount of NEW content.
+  // Mastra's analogue: `maxTokensPerBatch: 10_000`; backlog slices use finer
+  // chunks (see resolveChunkTokens). Chunking happens BEFORE dialogue
+  // filtering so the watermark advances by a contiguous message range each
+  // iteration (incl. tool calls that sit between user+assistant turns).
+  const chunks = chunkMessagesByTokens(slice, resolveChunkTokens(slice));
   const mastraLedgerPath = findMastraLedgerPath(expandedDir);
   // Anchor candidates: bullets may refer to messages BEFORE the watermark
   // (e.g. when consolidating across runs). Resolve against ALL dialogue.
@@ -587,11 +628,11 @@ async function runObservation(expandedDir: string, jsonlPath: string): Promise<v
   const sessionId = header?.id || 'unknown';
   const anchors = header?.anchors || [];
 
-  // Chunk the slice (Mastra `maxTokensPerBatch` analogue). Each chunk feeds
-  // ≤OBSERVER_MAX_TOKENS_PER_BATCH of NEW content into one LLM call. Between
-  // chunks we re-load the prior narrative because each chunk just wrote to
-  // the ledger.
-  const chunks = chunkMessagesByTokens(slice, OBSERVER_MAX_TOKENS_PER_BATCH);
+  // Chunk the slice (Mastra `maxTokensPerBatch` analogue; backlog slices use
+  // finer chunks — see resolveChunkTokens). Each chunk feeds bounded NEW
+  // content into one LLM call. Between chunks we re-load the prior narrative
+  // because each chunk just wrote to the ledger.
+  const chunks = chunkMessagesByTokens(slice, resolveChunkTokens(slice));
 
   let runningWatermark: ObservationWatermark | null = initialWatermark;
   let totalSignals = 0;
