@@ -12,6 +12,7 @@
     "electron-winstaller",
     "esbuild",
     "koffi",
+    "onnxruntime-node",
     "protobufjs",
     "sharp"
   ],

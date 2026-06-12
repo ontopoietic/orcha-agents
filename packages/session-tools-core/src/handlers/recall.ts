@@ -27,7 +27,7 @@ export async function handleRecall(
   }
 
   try {
-    const result = ctx.recall({ ...args, mode });
+    const result = await ctx.recall({ ...args, mode });
     return successResponse(JSON.stringify(result, null, 2));
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';

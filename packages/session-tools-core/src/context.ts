@@ -338,7 +338,7 @@ export interface SessionToolContext {
    * `mode: 'search'` finds observations by anchor/text; `mode: 'resolve'`
    * pages the raw messages behind a hit's durable pointer.
    */
-  recall?(args: RecallToolArgs): RecallToolResult;
+  recall?(args: RecallToolArgs): RecallToolResult | Promise<RecallToolResult>;
 
   /** Resolve label display names to IDs against configured labels. Injected by backend. */
   resolveLabels?(labels: string[]): ResolvedLabelsResult;
@@ -495,6 +495,9 @@ export interface RecallToolArgs {
   messageId?: string;
   /** search: max hits (default 20). */
   limit?: number;
+  /** search: use embedding similarity for text scoring when available
+   *  (default true; falls back to word overlap automatically). */
+  semantic?: boolean;
   /** resolve: messages of context before/after the anchor message. */
   before?: number;
   after?: number;
