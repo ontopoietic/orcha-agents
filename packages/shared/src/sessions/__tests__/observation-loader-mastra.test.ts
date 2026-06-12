@@ -62,7 +62,9 @@ describe('loadObservationSignalsFromMastraMarkdown', () => {
     expect(first.conversation!.messageRange!.from).toBe('msg-1779114000000-abc123');
     expect(first.conversation?.excerpt).toBe('I want feature-branch only');
     expect(first.conversation?.actor).toBe('user');
-    expect(first.createdAt).toBe('2026-05-21T14:30:00.000Z');
+    // The epoch embedded in fullMessageId (real conversation time) wins over
+    // the observer run-time in the sidecar's createdAt.
+    expect(first.createdAt).toBe(new Date(1779114000000).toISOString());
   });
 
   it('falls back to empty messageRange when sidecar entry is missing for an anchor', () => {

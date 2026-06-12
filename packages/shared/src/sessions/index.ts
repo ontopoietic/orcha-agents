@@ -152,6 +152,8 @@ export {
   loadObservationSignals,
   loadObservationSignalsFromMarkdown,
   loadObservationSignalsFromJson,
+  stableObservationCreatedAt,
+  epochFromMessageId,
 } from './observation-loader.ts';
 export {
   readWatermark,

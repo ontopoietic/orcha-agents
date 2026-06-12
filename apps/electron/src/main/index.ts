@@ -950,8 +950,8 @@ app.whenReady().then(async () => {
       })
 
       ipcMain.handle('observation:read-observations', (_event, sessionDir: string) => {
-        const { readObservationsList } = require('./observation-watcher') as typeof import('./observation-watcher')
-        return readObservationsList(sessionDir)
+        const { loadObservationSignals } = require('@craft-agent/shared/sessions') as typeof import('@craft-agent/shared/sessions')
+        return loadObservationSignals(sessionDir)
       })
 
       ipcMain.handle('episode:read-index', (_event, sessionDir: string) => {
