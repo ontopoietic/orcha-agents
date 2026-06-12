@@ -139,26 +139,28 @@ Zusätzliche Modelle für den ZAI-Provider.
 
 Eigenes Memory-System nach Mastras Modell (workspace-/resource-scoped Observations + bedeutungsbasiertes Recall), ein Monat Arbeit, ~57 neue + ~32 berührte Dateien. **Stark divergierend vom Upstream — der größte Rebase-Risikofaktor.** Architektur-Hintergrund: `sessions/260603-wide-sand/plans/HANDOFF-memory-architecture-pivot.md`.
 
-Pipeline: **Observer** (Haiku, extrahiert pro Session Observations als Markdown-Ledger + Evidence-Sidecar) → **Auto-Anchor** (Haiku, taggt Observations mit Rahmen-Anchors feature/befund/anliegen) → **Reflector** (synthetisiert) → **Recall** (cross-session Retrieval-Tool + direktiver `<relevant_memory>`-Hint). Trigger feuern token-/count-basiert per Turn + Wake-on-Session-Open. Der frühere L3-**Episoden**-Layer ist als Agent-Memory abgelöst; Episoden bleiben nur als rein-menschlicher Sidebar-Phasen-Digest (`EpisodesViewer`).
+Pipeline: **Observer** (Haiku, extrahiert pro Session Observations als Markdown-Ledger + Evidence-Sidecar) → **Auto-Anchor** (Haiku, taggt Observations mit Rahmen-Anchors feature/befund/anliegen) → **Reflector** (synthetisiert) → **Recall** (cross-session Retrieval-Tool + direktiver `<relevant_memory>`-Hint). Trigger feuern token-/count-basiert per Turn + Wake-on-Session-Open. Der frühere L3-**Episoden**-Layer ist komplett entfernt (Juni 2026); Cross-Session-Sicht für Menschen ist der Workspace-Scope-Toggle im Observations-Panel.
 
 **Neue Module (kein Upstream-Konflikt) — `packages/shared/src/sessions/`:**
 - `mastra-om/*` (Observer/Reflector-Prompts, Parser, anchored-bullet-Parsing)
 - `observation-{loader,trigger,watermark,markdown-parser,format.md}` — Ledger lesen/schreiben + Token-Trigger
 - `recall-engine.ts` — cross-session recall() + resolvePointer() + gatherRecallHint()/renderRecallHintBlock()
 - `reflection-trigger.ts`, `auto-anchor.ts`, `auto-anchor-trigger.ts` — Reflector- + Auto-Anchor-Trigger
-- `rahmen-taxonomy.ts`, `episode*.ts` (Episoden = menschlicher Digest), `anchors.ts`
+- `anchors.ts`
 
 **Neue Skripte (detached, dev-mode) — `scripts/`:**
-- `orcha-observe.ts`, `orcha-reflect.ts`, `orcha-recall.ts`, `orcha-recall-anchors.ts`, `orcha-migrate-observations.ts`, `orcha-episode-emit.ts`, `orcha-extract-artifacts.ts`, `lib/llm-extractor.ts`
+- `orcha-observe.ts`, `orcha-reflect.ts`, `orcha-recall.ts`, `orcha-recall-anchors.ts`, `orcha-migrate-observations.ts`, `lib/llm-extractor.ts`
+- `lib/llm-extractor.ts` ist der EINZIGE LLM-Auth/Call-Pfad aller Skripte (OAuth → claude CLI, sonst API-Key). Der Legacy-Observer-Pfad (eigene Prompts, eigenes Auth-Plumbing, Pattern-Fallback, `ORCHA_OBSERVER_USE_MASTRA`-Switch) wurde Juni 2026 entfernt — `observations.md` ist seitdem read-only-Historie, geschrieben wird nur noch `observations.mastra.md`.
+- Startup-Validierung: `validateOrchaScriptRuntime()` (`observer-runtime.ts`) prüft beim App-Start, dass alle vier spawnbaren Skripte auflösbar sind (paketiert: `dist/observer-scripts/*.cjs`); kaputte Builds zeigen einen Launch-Dialog statt still einzufrieren. Die Skriptliste (`ORCHA_SCRIPT_BASES`) ist Single Source of Truth für Build (`electron-build-main.ts`) und Spawn-Sites.
 
 **Berührt Upstream-Dateien (Konflikt-Kandidaten):**
 - `packages/shared/src/agent/core/prompt-builder.ts` — injiziert Observations + `<relevant_memory>`-Hint; feuert Observer/Reflector/Auto-Anchor-Trigger per Turn
-- `packages/server-core/src/sessions/SessionManager.ts` — Observer-Wake on session-open; `maybeTriggerEpisode` on session-done/anchor-change
+- `packages/server-core/src/sessions/SessionManager.ts` — Observer-Wake on session-open
 - `packages/shared/src/agent/session-self-management-bindings.ts` — bindet `recall` als Tool
 - `packages/session-tools-core/src/{tool-defs,context,handlers/index,index}.ts` — `recall` als kanonisches Registry-Tool
 - `packages/shared/src/agent/core/message-provider.ts`, `claude-agent.ts` — Streaming-Mode + Conversation-Tail
 - `packages/shared/src/sessions/index.ts`, `protocol/dto.ts` — neue Exports/DTOs
-- **UI:** `apps/electron/src/main/{index,observation-watcher}.ts`, `preload/bootstrap.ts`, `shared/{routes,route-parser,types}.ts`, `renderer/contexts/NavigationContext.tsx`, `renderer/components/anchors/SessionAnchorBar.tsx`, `renderer/components/app-shell/{AppShell,MainContentPanel,SessionList}.tsx`, `renderer/components/app-shell/input/FreeFormInput.tsx`, `renderer/hooks/useObservationStatus.ts` — Observations-Panel, Anchor-Bar, Episodes-Viewer, Context-%-Anzeige
+- **UI:** `apps/electron/src/main/{index,observation-watcher}.ts`, `preload/bootstrap.ts`, `shared/{routes,route-parser,types}.ts`, `renderer/contexts/NavigationContext.tsx`, `renderer/components/anchors/SessionAnchorBar.tsx`, `renderer/components/app-shell/{AppShell,MainContentPanel,SessionList}.tsx`, `renderer/components/app-shell/input/FreeFormInput.tsx`, `renderer/hooks/useObservationStatus.ts` — Observations-Panel (Session-/Workspace-Scope), Anchor-Bar, Context-%-Anzeige
 
 **Semantic Recall (Vektor-Schicht, Juni 2026):** Die Text-Achse von `recall()` nutzt Embedding-Similarity statt nur Token-Overlap. Lokaler Embedder via `@huggingface/transformers` (`Xenova/multilingual-e5-small`, 384 dim, on-device, kein API-Key); per-Session-Cache `data/observations-embeddings.json` neben dem Evidence-Sidecar. Neue Module: `sessions/{embedder,vector-sidecar}.ts`, `recallSemantic()` in `recall-engine.ts`, Backfill `scripts/orcha-embed-observations.ts`. Bewusst KEINE Vektor-DB (Mastras libSQL/F32_BLOB-Pfad): bei Observation-Skala (~10²–10³ Vektoren) reicht Brute-Force-Cosine, null neue native DB-Dependency. Degradiert ohne Embedder automatisch auf Token-Overlap (`ORCHA_EMBED_DISABLE=1`). Modell-Cache: `~/.orcha-agents/models` (dev + paketiert geteilt, offline nach erstem Download). **Packaging (macOS):** `build:copy` (`apps/electron/scripts/copy-assets.ts`) staged ein minimales Embedder-Runtime nach `vendor/embedder/node_modules` (transformers + jinja + onnxruntime-node/-common, sharp-Stub statt nativem libvips, ONNX auf darwin getrimmt, WASM/Maps gepruned → ~79 MB); `electron-builder.yml` `mac.extraResources` merged es nach `app/node_modules`, erreichbar von `dist/main.cjs`. Hardened-Runtime lädt die unsignierte `.node` dank `disable-library-validation` (bereits gesetzt). **Offen:** Win/Linux-Packaging (dort Fallback auf Text-Scoring) und Pi-Subprozess-Backend (Recall im Pi-Bun-Prozess braucht analoges Staging; in-process Claude-Pfad ist abgedeckt).
 

@@ -17,6 +17,18 @@ import type { AnchorRef } from '@craft-agent/shared/sessions/anchors'
 import { anchorKey, anchorsEqual } from '@craft-agent/shared/sessions/anchors'
 import { sessionMetaMapAtom } from '../atoms/sessions'
 
+/** Pure helper: returns the new anchor list after adding `candidate`, deduping by (type,id). */
+export function addAnchor(current: AnchorRef[], candidate: AnchorRef): AnchorRef[] {
+  if (current.some((a) => anchorsEqual(a, candidate))) return current
+  return [...current, candidate]
+}
+
+/** Pure helper: returns the new anchor list after removing `target` by canonical key. */
+export function removeAnchor(current: AnchorRef[], target: Pick<AnchorRef, 'type' | 'id'>): AnchorRef[] {
+  const key = `${target.type}:${target.id}`
+  return current.filter((a) => anchorKey(a) !== key)
+}
+
 export interface UseSessionAnchorsResult {
   anchors: AnchorRef[]
   /** Add an anchor; no-op if (type,id) already present */
@@ -41,16 +53,16 @@ export function useSessionAnchors(sessionId: string | null | undefined): UseSess
 
   const add = useCallback(
     async (anchor: AnchorRef) => {
-      if (anchors.some((a) => anchorsEqual(a, anchor))) return
-      await send([...anchors, anchor])
+      const next = addAnchor(anchors, anchor)
+      if (next === anchors) return
+      await send(next)
     },
     [anchors, send],
   )
 
   const remove = useCallback(
     async (target: Pick<AnchorRef, 'type' | 'id'>) => {
-      const key = `${target.type}:${target.id}`
-      const next = anchors.filter((a) => anchorKey(a) !== key)
+      const next = removeAnchor(anchors, target)
       if (next.length === anchors.length) return
       await send(next)
     },

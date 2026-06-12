@@ -24,7 +24,7 @@ export interface ObservationStatus {
   running: boolean
 }
 
-function formatRelativeTime(isoTimestamp: string | null): string | null {
+export function formatRelativeTime(isoTimestamp: string | null): string | null {
   if (!isoTimestamp) return null
   const ms = Date.now() - new Date(isoTimestamp).getTime()
   const seconds = Math.floor(ms / 1000)

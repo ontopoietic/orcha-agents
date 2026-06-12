@@ -6,6 +6,7 @@
 import { spawn } from "bun";
 import { existsSync, readFileSync, statSync, mkdirSync } from "fs";
 import { join } from "path";
+import { ORCHA_SCRIPT_BASES } from "../packages/shared/src/sessions/observer-runtime.ts";
 
 const ROOT_DIR = join(import.meta.dir, "..");
 const DIST_DIR = join(ROOT_DIR, "apps/electron/dist");
@@ -20,16 +21,12 @@ const PI_AGENT_SERVER_OUTPUT = join(PI_AGENT_SERVER_DIR, "dist/index.js");
 const WA_WORKER_DIR = join(ROOT_DIR, "packages/messaging-whatsapp-worker");
 const WA_WORKER_SOURCE = join(WA_WORKER_DIR, "src/worker.ts");
 const WA_WORKER_OUTPUT = join(WA_WORKER_DIR, "dist/worker.cjs");
-// Memory subsystem helper scripts (Observer / Reflector / Episode-emitter /
-// Recall-anchors). Spawned as detached child processes from the main process.
+// Memory subsystem helper scripts (Observer / Reflector / Recall-anchors).
+// Spawned as detached child processes from the main process.
 // In packaged builds they run as bundled CJS via Electron-as-Node — see
-// packages/shared/src/sessions/observer-runtime.ts.
-const OBSERVER_SCRIPT_BASES = [
-  "orcha-observe",
-  "orcha-reflect",
-  "orcha-episode-emit",
-  "orcha-recall-anchors",
-];
+// packages/shared/src/sessions/observer-runtime.ts, which owns the canonical
+// list (ORCHA_SCRIPT_BASES) so the build can never drift from the spawn sites.
+const OBSERVER_SCRIPT_BASES = ORCHA_SCRIPT_BASES;
 const OBSERVER_OUTPUT_DIR = join(DIST_DIR, "observer-scripts");
 
 // Load .env file if it exists
@@ -393,7 +390,7 @@ async function main(): Promise<void> {
   // Build WhatsApp worker (Baileys subprocess — optional package)
   await buildWhatsAppWorker();
 
-  // Build memory observer scripts (Observer/Reflector/Episode/Recall-anchors)
+  // Build memory observer scripts (Observer/Reflector/Recall-anchors)
   await buildObserverScripts();
 
   const buildDefines = getBuildDefines();

@@ -21,10 +21,11 @@ export interface UseObservationsResult {
 
 export function useObservations(
   sessionDir: string | null | undefined,
-  options?: { autoWatch?: boolean },
+  options?: { autoWatch?: boolean; scope?: 'session' | 'workspace' },
 ): UseObservationsResult {
   const [observations, setObservations] = useState<ObservationSignal[]>([])
   const [loading, setLoading] = useState(false)
+  const scope = options?.scope ?? 'session'
 
   const refresh = useCallback(async () => {
     if (!sessionDir) {
@@ -33,14 +34,16 @@ export function useObservations(
     }
     setLoading(true)
     try {
-      const list = await window.electronAPI.observationReadList(sessionDir)
+      const list = scope === 'workspace'
+        ? await window.electronAPI.observationReadWorkspaceList(sessionDir)
+        : await window.electronAPI.observationReadList(sessionDir)
       setObservations(list ?? [])
     } catch {
       setObservations([])
     } finally {
       setLoading(false)
     }
-  }, [sessionDir])
+  }, [sessionDir, scope])
 
   useEffect(() => {
     if (!sessionDir) {

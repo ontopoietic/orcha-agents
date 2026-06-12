@@ -1,7 +1,7 @@
 /**
  * Observation loader — materialize bullets from `observations.md` +
  * `observations-evidence.json` into the canonical `ObservationSignal` shape
- * used by the UI, the reflector, and Orcha side-tools (episode-emit,
+ * used by the UI, the reflector, and Orcha side-tools (recall-anchors,
  * artifact-extractor).
  *
  * Source-of-truth post Plan A/C: the canonical store is the Markdown ledger
@@ -16,7 +16,7 @@
  *     prompt handles (reflector talks about bullets by position).
  */
 
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { parseObservationsMarkdown, type ParsedBullet } from './observation-markdown-parser.ts';
 import { parseMastraLedger, type MastraParsedBullet } from './mastra-om/parse-ledger.ts';
@@ -46,14 +46,57 @@ interface EvidenceEntry {
 
 export type ObservationIdStrategy = 'anchor-stable' | 'bullet-index';
 
-/** Compose an ISO timestamp from a bullet's date + time, else "now". */
-function deriveCreatedAt(bullet: ParsedBullet): string {
-  if (bullet.date && bullet.time) {
-    const iso = `${bullet.date}T${bullet.time}:00`;
-    const d = new Date(iso);
+/** Parse the epoch (ms) embedded in a message id `msg-<epochMs>-<short>`. */
+export function epochFromMessageId(id: string | undefined | null): number | null {
+  if (!id) return null;
+  const m = /(?:^|-)(\d{12,})(?:-|$)/.exec(id);
+  if (!m) return null;
+  const n = Number(m[1]);
+  return Number.isFinite(n) ? n : null;
+}
+
+/** Zero-pad a `H:MM` time to `HH:MM`; returns '' if unparseable. */
+function normalizeTime(t: string | undefined): string {
+  if (!t) return '';
+  const m = /^(\d{1,2}):(\d{2})$/.exec(t.trim());
+  if (!m) return '';
+  const h = Math.min(23, parseInt(m[1]!, 10));
+  return `${String(h).padStart(2, '0')}:${m[2]}`;
+}
+
+/**
+ * Stable, deterministic createdAt for an observation bullet.
+ *
+ * CRUCIAL: this must NEVER return `new Date()`. A now-fallback makes the
+ * timestamp change on every read, so old bullets perpetually re-stamp to the
+ * present and float to the top of the newest-first UI — exactly the "same
+ * observations, new timestamps, old content" symptom. Every branch here is
+ * deterministic given the on-disk data.
+ *
+ * Priority (most → least accurate, all stable):
+ *   1. The cited message's actual time — epoch embedded in the evidence
+ *      `fullMessageId` (real conversation time, fixes "old content looks new").
+ *   2. The observer run-time (`evidence.createdAt`).
+ *   3. The bullet's ledger date + (zero-padded) time.
+ *   4. The bullet's ledger date alone (midnight).
+ *   5. Empty string — unknown time sorts deterministically to the bottom,
+ *      never to the top.
+ */
+export function stableObservationCreatedAt(
+  bullet: { date: string | null; time: string },
+  evidence?: { fullMessageId?: string; createdAt?: string },
+): string {
+  const epoch = epochFromMessageId(evidence?.fullMessageId);
+  if (epoch != null) return new Date(epoch).toISOString();
+  if (evidence?.createdAt) return evidence.createdAt;
+  if (bullet.date) {
+    const hhmm = normalizeTime(bullet.time) || '00:00';
+    const d = new Date(`${bullet.date}T${hhmm}:00`);
     if (!Number.isNaN(d.getTime())) return d.toISOString();
+    const dateOnly = new Date(`${bullet.date}T00:00:00`);
+    if (!Number.isNaN(dateOnly.getTime())) return dateOnly.toISOString();
   }
-  return new Date().toISOString();
+  return '';
 }
 
 function loadEvidenceSidecar(sessionDir: string): Record<string, EvidenceEntry> {
@@ -95,7 +138,7 @@ export function loadObservationSignalsFromMarkdown(
   for (let i = 0; i < bullets.length; i++) {
     const bullet = bullets[i]!;
     const evidence = bullet.anchorShortId ? sidecar[bullet.anchorShortId] : undefined;
-    const createdAt = evidence?.createdAt ?? deriveCreatedAt(bullet);
+    const createdAt = stableObservationCreatedAt(bullet, evidence);
 
     let id: string;
     if (idStrategy === 'bullet-index') {
@@ -187,14 +230,7 @@ export function loadObservationSignalsFromMastraMarkdown(
   for (let i = 0; i < bullets.length; i++) {
     const bullet = bullets[i]!;
     const evidence = bullet.anchorShortId ? sidecar[bullet.anchorShortId] : undefined;
-    const createdAt = evidence?.createdAt
-      ? evidence.createdAt
-      : bullet.date && bullet.time
-        ? (() => {
-            const d = new Date(`${bullet.date}T${bullet.time}:00`);
-            return Number.isNaN(d.getTime()) ? new Date().toISOString() : d.toISOString();
-          })()
-        : new Date().toISOString();
+    const createdAt = stableObservationCreatedAt(bullet, evidence);
 
     let id: string;
     if (idStrategy === 'bullet-index') {
@@ -276,4 +312,36 @@ export function mergeObservationSignals(
   }
   out.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   return out;
+}
+
+/**
+ * Read observations across EVERY session of a workspace — the human-facing
+ * cross-session view (the replacement for the removed episode digest).
+ *
+ * Per-session dedup/merge is handled by `loadObservationSignals`; across
+ * sessions there is deliberately NO dedup — signal IDs are only unique
+ * within one session (`obs-<shortId>`), so consumers must key on
+ * `(conversation.sessionId, id)`. Unreadable session dirs are skipped:
+ * one corrupt session must not blank the whole workspace view.
+ */
+export function loadWorkspaceObservationSignals(workspaceRootPath: string): ObservationSignal[] {
+  const sessionsDir = join(workspaceRootPath, 'sessions');
+  if (!existsSync(sessionsDir)) return [];
+  let entries: import('node:fs').Dirent[];
+  try {
+    entries = readdirSync(sessionsDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const all: ObservationSignal[] = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    try {
+      all.push(...loadObservationSignals(join(sessionsDir, entry.name)));
+    } catch {
+      // Skip unreadable sessions — best-effort view.
+    }
+  }
+  all.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  return all;
 }
