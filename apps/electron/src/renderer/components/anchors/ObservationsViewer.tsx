@@ -19,6 +19,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { useObservations } from '@/hooks/useObservations'
+import { useNavigation } from '@/contexts/NavigationContext'
 import type { ObservationSignal } from '@craft-agent/shared/sessions'
 import { cn } from '@/lib/utils'
 import { PanelHeaderCenterButton } from '@/components/ui/PanelHeaderCenterButton'
@@ -68,12 +69,17 @@ function stripPrefix(summary: string): string {
 const SUMMARY_CLAMP_CHARS = 120
 const EXCERPT_CLAMP_CHARS = 160
 
-function ObservationCard({ obs }: { obs: ObservationSignal }) {
+function ObservationCard({ obs, onSessionClick }: {
+  obs: ObservationSignal
+  /** When set, a session badge is rendered (workspace scope) and clicking it navigates there. */
+  onSessionClick?: (sessionId: string) => void
+}) {
   const salience = normalizeSalience(obs.salience)
   const meta = SALIENCE_META[salience]
   const actor = obs.conversation?.actor
   const range = obs.conversation?.messageRange
   const excerpt = obs.conversation?.excerpt
+  const sessionId = obs.conversation?.sessionId
 
   const [expanded, setExpanded] = React.useState(false)
 
@@ -132,6 +138,19 @@ function ObservationCard({ obs }: { obs: ObservationSignal }) {
         <div className="flex-1 min-w-0">
           <div className="text-sm text-foreground leading-snug whitespace-pre-wrap break-words">{summaryShown}</div>
           <div className="flex items-center gap-2 mt-1 text-[11px] text-foreground/60 flex-wrap">
+            {onSessionClick && sessionId && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => onSessionClick(sessionId)}
+                  className="font-mono text-foreground/70 hover:text-foreground hover:underline transition-colors"
+                  title="Go to source session"
+                >
+                  {sessionId}
+                </button>
+                <span>·</span>
+              </>
+            )}
             {actor && <span className="capitalize">{actor}</span>}
             {actor && <span>·</span>}
             <span>{formatTime(obs.createdAt)}</span>
@@ -179,8 +198,13 @@ function ObservationCard({ obs }: { obs: ObservationSignal }) {
  * split-view variant. Pulled out so ObservationsDetailPage can mount the
  * same UI without the Dialog chrome.
  */
-export function ObservationsContent({ sessionDir }: { sessionDir: string | null | undefined }) {
-  const { observations, loading, refresh } = useObservations(sessionDir)
+export function ObservationsContent({ sessionDir, onNavigateToSession }: {
+  sessionDir: string | null | undefined
+  /** Navigate to a source session (workspace scope). Provided by the mounting context. */
+  onNavigateToSession?: (sessionId: string) => void
+}) {
+  const [scope, setScope] = React.useState<'session' | 'workspace'>('session')
+  const { observations, loading, refresh } = useObservations(sessionDir, { scope })
   const shellContext = useOptionalAppShellContext()
   const closeButton = shellContext?.rightSidebarButton
 
@@ -226,6 +250,28 @@ export function ObservationsContent({ sessionDir }: { sessionDir: string | null 
           </span>
         </div>
         <div className="flex items-center gap-1.5">
+          <div className="flex items-center rounded-md border border-border text-xs overflow-hidden">
+            <button
+              type="button"
+              onClick={() => setScope('session')}
+              className={cn(
+                'px-2 py-1 transition-colors',
+                scope === 'session' ? 'bg-foreground/10 text-foreground' : 'text-foreground/60 hover:text-foreground',
+              )}
+            >
+              This session
+            </button>
+            <button
+              type="button"
+              onClick={() => setScope('workspace')}
+              className={cn(
+                'px-2 py-1 transition-colors border-l border-border',
+                scope === 'workspace' ? 'bg-foreground/10 text-foreground' : 'text-foreground/60 hover:text-foreground',
+              )}
+            >
+              All sessions
+            </button>
+          </div>
           <PanelHeaderCenterButton
             icon={<RefreshCw className={cn('h-4 w-4', isSpinning && 'animate-spin')} />}
             onClick={handleRefresh}
@@ -260,7 +306,13 @@ export function ObservationsContent({ sessionDir }: { sessionDir: string | null 
               </h3>
               <div className="space-y-2">
                 {items.map((obs) => (
-                  <ObservationCard key={obs.id} obs={obs} />
+                  <ObservationCard
+                    // IDs are only unique within one session — qualify with the
+                    // source sessionId so workspace scope can't collide keys.
+                    key={`${obs.conversation?.sessionId ?? ''}:${obs.id}`}
+                    obs={obs}
+                    onSessionClick={scope === 'workspace' ? onNavigateToSession : undefined}
+                  />
                 ))}
               </div>
             </section>
@@ -278,13 +330,21 @@ export function ObservationsContent({ sessionDir }: { sessionDir: string | null 
 }
 
 export function ObservationsViewer({ open, onOpenChange, sessionDir }: ObservationsViewerProps) {
+  const { navigateToSession } = useNavigation()
+  const handleNavigate = React.useCallback(
+    (sessionId: string) => {
+      onOpenChange(false)
+      navigateToSession(sessionId)
+    },
+    [onOpenChange, navigateToSession],
+  )
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl max-h-[80vh] flex flex-col p-0 overflow-hidden">
         <DialogHeader className="sr-only">
           <DialogTitle>Observations</DialogTitle>
         </DialogHeader>
-        <ObservationsContent sessionDir={sessionDir} />
+        <ObservationsContent sessionDir={sessionDir} onNavigateToSession={handleNavigate} />
       </DialogContent>
     </Dialog>
   )

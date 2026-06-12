@@ -48,8 +48,7 @@ type ApiToChannelMapKeys =
   | 'observationRunNow' // direct IPC — manual observer trigger
   | 'observationReflectNow' // direct IPC — manual L2 reflector trigger
   | 'onObservationStatus' // direct IPC listener — observation watermark events
-  | 'episodeReadIndex' // direct IPC — episodic memory index reader
-  | 'episodeRead' // direct IPC — episode JSON reader
+  | 'observationReadWorkspaceList' // direct IPC — workspace-scope observation reader
 >
 type ChannelMapKeys = keyof typeof CHANNEL_MAP & string
 

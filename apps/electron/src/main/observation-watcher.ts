@@ -464,5 +464,5 @@ export async function runReflectorNow(
 
 // Ledger→signal synthesis (parsing, evidence sidecars, stable IDs, merge)
 // lives in @craft-agent/shared/sessions/observation-loader (the same seam the
-// reflector / episode-emit / recall scripts use) — the IPC handler in
+// reflector / recall scripts use) — the IPC handler in
 // main/index.ts calls loadObservationSignals from there directly.

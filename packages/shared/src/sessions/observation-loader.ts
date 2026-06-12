@@ -1,7 +1,7 @@
 /**
  * Observation loader — materialize bullets from `observations.md` +
  * `observations-evidence.json` into the canonical `ObservationSignal` shape
- * used by the UI, the reflector, and Orcha side-tools (episode-emit,
+ * used by the UI, the reflector, and Orcha side-tools (recall-anchors,
  * artifact-extractor).
  *
  * Source-of-truth post Plan A/C: the canonical store is the Markdown ledger
@@ -16,7 +16,7 @@
  *     prompt handles (reflector talks about bullets by position).
  */
 
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { parseObservationsMarkdown, type ParsedBullet } from './observation-markdown-parser.ts';
 import { parseMastraLedger, type MastraParsedBullet } from './mastra-om/parse-ledger.ts';
@@ -312,4 +312,36 @@ export function mergeObservationSignals(
   }
   out.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   return out;
+}
+
+/**
+ * Read observations across EVERY session of a workspace — the human-facing
+ * cross-session view (the replacement for the removed episode digest).
+ *
+ * Per-session dedup/merge is handled by `loadObservationSignals`; across
+ * sessions there is deliberately NO dedup — signal IDs are only unique
+ * within one session (`obs-<shortId>`), so consumers must key on
+ * `(conversation.sessionId, id)`. Unreadable session dirs are skipped:
+ * one corrupt session must not blank the whole workspace view.
+ */
+export function loadWorkspaceObservationSignals(workspaceRootPath: string): ObservationSignal[] {
+  const sessionsDir = join(workspaceRootPath, 'sessions');
+  if (!existsSync(sessionsDir)) return [];
+  let entries: import('node:fs').Dirent[];
+  try {
+    entries = readdirSync(sessionsDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const all: ObservationSignal[] = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    try {
+      all.push(...loadObservationSignals(join(sessionsDir, entry.name)));
+    } catch {
+      // Skip unreadable sessions — best-effort view.
+    }
+  }
+  all.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  return all;
 }

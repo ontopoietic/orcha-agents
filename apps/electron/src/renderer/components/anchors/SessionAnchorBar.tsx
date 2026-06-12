@@ -20,7 +20,6 @@ import { Eye, Plus, Pin } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { AnchorChip } from './AnchorChip'
 import { AnchorPicker } from './AnchorPicker'
-import { EpisodesViewer } from './EpisodesViewer'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { useSessionAnchors } from '@/hooks/useSessionAnchors'
 import { useObservationStatus } from '@/hooks/useObservationStatus'
@@ -42,7 +41,6 @@ export function SessionAnchorBar({ sessionId, workingDir, sessionDir, addLabelKe
   const { t } = useTranslation()
   const [pickerOpen, setPickerOpen] = React.useState(false)
   const [observerOpen, setObserverOpen] = React.useState(false)
-  const [episodesOpen, setEpisodesOpen] = React.useState(false)
   const pushPanel = useSetAtom(pushPanelAtom)
   const setObservationsSessionDir = useSetAtom(observationsSessionDirAtom)
   const [runningObserver, setRunningObserver] = React.useState(false)
@@ -245,18 +243,6 @@ export function SessionAnchorBar({ sessionId, workingDir, sessionDir, addLabelKe
                     View observations →
                   </button>
 
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setObserverOpen(false)
-                      setEpisodesOpen(true)
-                    }}
-                    className="w-full text-left text-xs text-foreground hover:text-foreground/80 hover:bg-foreground/5 rounded px-2 py-1.5 transition-colors"
-                    title="Closed phases of this session — auto-emitted on session-done or anchor change"
-                  >
-                    View episodes →
-                  </button>
-
                   {runResult && (
                     <div
                       className={cn(
@@ -285,12 +271,6 @@ export function SessionAnchorBar({ sessionId, workingDir, sessionDir, addLabelKe
         workingDir={workingDir}
         existing={anchors}
         onSelect={(anchor) => void add(anchor)}
-      />
-
-      <EpisodesViewer
-        open={episodesOpen}
-        onOpenChange={setEpisodesOpen}
-        sessionDir={sessionDir}
       />
     </>
   )

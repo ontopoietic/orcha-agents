@@ -14,8 +14,10 @@ import * as React from 'react'
 import { useAtomValue } from 'jotai'
 import { observationsSessionDirAtom } from '@/atoms/panel-stack'
 import { ObservationsContent } from '@/components/anchors/ObservationsViewer'
+import { useNavigation } from '@/contexts/NavigationContext'
 
 export default function ObservationsDetailPage() {
   const sessionDir = useAtomValue(observationsSessionDirAtom)
-  return <ObservationsContent sessionDir={sessionDir} />
+  const { navigateToSession } = useNavigation()
+  return <ObservationsContent sessionDir={sessionDir} onNavigateToSession={navigateToSession} />
 }

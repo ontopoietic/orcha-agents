@@ -182,7 +182,7 @@ if (isDebugMode) {
 }
 
 // Memory-script runtime check: in packaged builds the Observer/Reflector/
-// Episode/Recall scripts must ship as dist/observer-scripts/*.cjs. A missing
+// Recall scripts must ship as dist/observer-scripts/*.cjs. A missing
 // bundle is otherwise SILENT — every trigger no-ops, the watermark freezes,
 // and observations stop being written. Fail loudly instead.
 {
@@ -954,14 +954,12 @@ app.whenReady().then(async () => {
         return loadObservationSignals(sessionDir)
       })
 
-      ipcMain.handle('episode:read-index', (_event, sessionDir: string) => {
-        const { readEpisodeIndex } = require('@craft-agent/shared/sessions') as typeof import('@craft-agent/shared/sessions')
-        return readEpisodeIndex(sessionDir)
-      })
-
-      ipcMain.handle('episode:read', (_event, sessionDir: string, episodeId: string) => {
-        const { readEpisode } = require('@craft-agent/shared/sessions') as typeof import('@craft-agent/shared/sessions')
-        return readEpisode(sessionDir, episodeId)
+      // Workspace scope — observations across all sessions of the workspace
+      // the given session belongs to (sessionDir = <workspaceRoot>/sessions/<id>).
+      ipcMain.handle('observation:read-observations-workspace', (_event, sessionDir: string) => {
+        const { loadWorkspaceObservationSignals } = require('@craft-agent/shared/sessions') as typeof import('@craft-agent/shared/sessions')
+        const { resolve } = require('node:path') as typeof import('node:path')
+        return loadWorkspaceObservationSignals(resolve(sessionDir, '..', '..'))
       })
 
       ipcMain.handle('observation:run-now', async (_event, sessionDir: string) => {
