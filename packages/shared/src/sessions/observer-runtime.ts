@@ -32,6 +32,14 @@ export type OrchaScriptBase =
   | 'orcha-episode-emit'
   | 'orcha-recall-anchors';
 
+/** Every spawnable script — keep in sync with OrchaScriptBase. */
+export const ORCHA_SCRIPT_BASES: readonly OrchaScriptBase[] = [
+  'orcha-observe',
+  'orcha-reflect',
+  'orcha-episode-emit',
+  'orcha-recall-anchors',
+];
+
 export interface ResolvedScriptInvocation {
   /** Executable to spawn (process.execPath for packaged, 'npx' for dev). */
   command: string;
@@ -79,4 +87,31 @@ export function resolveOrchaScript(
     };
   }
   return null;
+}
+
+export interface OrchaScriptRuntimeReport {
+  /** True iff every script in ORCHA_SCRIPT_BASES is spawnable. */
+  ok: boolean;
+  /** Runtime the resolvable scripts use; 'missing' when none resolve. */
+  mode: 'packaged-cjs' | 'dev-tsx' | 'missing';
+  /** Scripts that resolve to neither a bundled CJS nor a TS source. */
+  missing: OrchaScriptBase[];
+}
+
+/**
+ * Startup check for the whole memory-script runtime. A missing bundle in a
+ * packaged build is otherwise SILENT: every trigger no-ops, the watermark
+ * freezes, and no observations are written (this shipped once — see the
+ * module doc above). Call this once at app startup and surface a loud error
+ * when `ok` is false instead of waiting for users to notice stale memory.
+ */
+export function validateOrchaScriptRuntime(appRoot: string): OrchaScriptRuntimeReport {
+  const missing: OrchaScriptBase[] = [];
+  let mode: OrchaScriptRuntimeReport['mode'] = 'missing';
+  for (const base of ORCHA_SCRIPT_BASES) {
+    const inv = resolveOrchaScript(appRoot, base, []);
+    if (!inv) missing.push(base);
+    else if (mode === 'missing') mode = inv.mode;
+  }
+  return { ok: missing.length === 0, mode, missing };
 }

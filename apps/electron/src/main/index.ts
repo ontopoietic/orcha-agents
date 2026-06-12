@@ -82,6 +82,7 @@ import { getDefaultWorkspacesDir } from '@craft-agent/shared/workspaces'
 import { initializeDocs } from '@craft-agent/shared/docs'
 import { initializeReleaseNotes } from '@craft-agent/shared/release-notes'
 import { ensureDefaultPermissions } from '@craft-agent/shared/agent/permissions-config'
+import { validateOrchaScriptRuntime } from '@craft-agent/shared/sessions/observer-runtime'
 import { ensureToolIcons, ensurePresetThemes } from '@craft-agent/shared/config'
 import { setBundledAssetsRoot } from '@craft-agent/shared/utils'
 import { initializeBackendHostRuntime } from '@craft-agent/shared/agent/backend'
@@ -177,6 +178,29 @@ if (isDebugMode) {
 
   if (isDebugMode) {
     mainLog.info('CLI tools configured:', { uvBinary: process.env.CRAFT_UV, binDir, scriptsDir, bundledUvExists })
+  }
+}
+
+// Memory-script runtime check: in packaged builds the Observer/Reflector/
+// Episode/Recall scripts must ship as dist/observer-scripts/*.cjs. A missing
+// bundle is otherwise SILENT — every trigger no-ops, the watermark freezes,
+// and observations stop being written. Fail loudly instead.
+{
+  const report = validateOrchaScriptRuntime(process.env.CRAFT_APP_ROOT!)
+  if (!report.ok) {
+    const message =
+      `Memory scripts not spawnable (mode=${report.mode}): missing ${report.missing.join(', ')}. ` +
+      `Observer/Reflector will not run; observations and recall will go stale.`
+    mainLog.error(message, { appRoot: process.env.CRAFT_APP_ROOT, ...report })
+    if (app.isPackaged) {
+      // Broken build artifact — surface it at launch rather than letting
+      // memory silently rot. Non-fatal: the rest of the app still works.
+      app.whenReady().then(() => {
+        dialog.showErrorBox('Orcha Agents — broken build', message)
+      })
+    }
+  } else if (isDebugMode) {
+    mainLog.info('Memory-script runtime validated', { mode: report.mode })
   }
 }
 
