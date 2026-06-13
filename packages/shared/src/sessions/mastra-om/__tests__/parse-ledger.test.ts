@@ -16,9 +16,8 @@ describe('parseMastraLedger', () => {
 * 🟢 (14:32) Low thing
 * ✅ (14:33) Completed thing`;
     const out = parseMastraLedger(md)!;
-    // 🟡 Medium maps to 'context' (contextual facts, not questions) — see
-    // the EMOJI_TO_SALIENCE rationale in parse-ledger.ts.
-    expect(out.map((b) => b.salience)).toEqual(['pivotal', 'context', 'context', 'pivotal']);
+    // 1:1 Mastra taxonomy — ✅ keeps 'high' salience plus the completed flag.
+    expect(out.map((b) => b.salience)).toEqual(['high', 'medium', 'low', 'high']);
     expect(out.map((b) => b.completed)).toEqual([false, false, false, true]);
     expect(out.map((b) => b.time)).toEqual(['14:30', '14:31', '14:32', '14:33']);
   });
@@ -28,7 +27,7 @@ describe('parseMastraLedger', () => {
 * ✅ Auth flow refactor completed`;
     const out = parseMastraLedger(md)!;
     expect(out).toHaveLength(1);
-    expect(out[0]).toMatchObject({ salience: 'pivotal', completed: true, time: '' });
+    expect(out[0]).toMatchObject({ salience: 'high', completed: true, time: '' });
     expect(out[0]?.summary).toBe('Auth flow refactor completed');
   });
 

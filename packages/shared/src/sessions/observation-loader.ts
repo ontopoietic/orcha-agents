@@ -18,7 +18,7 @@
 
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { basename, join } from 'node:path';
-import { parseObservationsMarkdown, type ParsedBullet } from './observation-markdown-parser.ts';
+import { parseObservationsMarkdown, normalizeLegacySalience, type ParsedBullet } from './observation-markdown-parser.ts';
 import { parseMastraLedger, type MastraParsedBullet } from './mastra-om/parse-ledger.ts';
 import type { ObservationSignal } from './observation-watermark.ts';
 
@@ -174,7 +174,8 @@ export function loadObservationSignalsFromMarkdown(
 
 /**
  * Last-resort JSON fallback. Read `observations.json` as plain ObservationSignal[]
- * for legacy sessions that haven't been migrated.
+ * for legacy sessions that haven't been migrated. Legacy salience values
+ * ('pivotal'/'question'/'context') are normalized to the Mastra taxonomy.
  */
 export function loadObservationSignalsFromJson(sessionDir: string): ObservationSignal[] {
   const jsonPath = join(sessionDir, 'data', 'observations.json');
@@ -182,7 +183,11 @@ export function loadObservationSignalsFromJson(sessionDir: string): ObservationS
   try {
     const raw = JSON.parse(readFileSync(jsonPath, 'utf-8'));
     const arr = Array.isArray(raw) ? raw : raw.signals;
-    return Array.isArray(arr) ? (arr as ObservationSignal[]) : [];
+    if (!Array.isArray(arr)) return [];
+    return (arr as ObservationSignal[]).map((sig) => ({
+      ...sig,
+      salience: normalizeLegacySalience(sig.salience),
+    }));
   } catch {
     return [];
   }
@@ -251,6 +256,7 @@ export function loadObservationSignalsFromMastraMarkdown(
       summary: bullet.summary,
       status: 'raw',
       salience: bullet.salience,
+      completed: bullet.completed || undefined,
       anchorRefs: evidence?.anchorRefs as ObservationSignal['anchorRefs'],
       conversation: {
         sessionId,

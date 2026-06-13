@@ -48,6 +48,7 @@ import {
 } from './lib/llm-extractor.ts';
 import {
   parseObservationsMarkdown,
+  normalizeLegacySalience,
   type ParsedBullet,
   type Salience,
 } from '../packages/shared/src/sessions/observation-markdown-parser.ts';
@@ -69,7 +70,7 @@ interface ObservationSignal {
   source: string;
   summary: string;
   status: string;
-  salience?: 'pivotal' | 'question' | 'context' | string;
+  salience?: 'high' | 'medium' | 'low' | string;
   anchorRefs?: unknown[];
   conversation?: {
     sessionId?: string;
@@ -114,9 +115,9 @@ interface ReflectionWatermark {
 // ============================================================================
 
 const SALIENCE_TO_EMOJI: Record<Salience, string> = {
-  pivotal: '🔴',
-  question: '🟡',
-  context: '🟢',
+  high: '🔴',
+  medium: '🟡',
+  low: '🟢',
 };
 
 function shortIdFromMsgId(id: string | undefined): string {
@@ -201,10 +202,7 @@ function renderBulletLine(b: ParsedBullet): string {
 }
 
 function renderSignalAsBullet(s: ObservationSignal): string {
-  const salience = (s.salience === 'pivotal' || s.salience === 'question' || s.salience === 'context')
-    ? s.salience
-    : 'context';
-  const emoji = SALIENCE_TO_EMOJI[salience];
+  const emoji = SALIENCE_TO_EMOJI[normalizeLegacySalience(s.salience)];
   const { time } = localDateAndTime(s.createdAt);
   const anchorId = shortIdFromMsgId(s.conversation?.messageRange?.from);
   const anchor = anchorId ? ` {${anchorId}}` : '';
@@ -327,16 +325,16 @@ Discipline (MUST follow):
 1. Group related observations into a single denser observation.
 2. State changes OVERRIDE prior states. If observation B supersedes A (e.g., user switched from option X to Y), drop A and keep B — or merge them as "user moved from X to Y".
 3. Drop pure noise: chitchat, completed transient steps, redundant restatements.
-4. Preserve all "pivotal" observations unless explicitly superseded — they encode decisions and constraints.
-5. Preserve open "question" observations until they are resolved (an answering "pivotal" lets you drop the question).
+4. Preserve all "high" observations unless explicitly superseded — they encode decisions and constraints.
+5. Preserve open questions (usually "medium") until they are resolved (an answering "high" observation lets you drop the question).
 6. NEVER invent facts. Only condense what is in the input.
 7. Keep summaries SHORT (≤ 140 chars) and in third-person fact form, like the originals.
 8. Each output observation MUST list the IDs of input observations it replaces in "replacedIds".
 
-Salience taxonomy (heuristic — "Can a future agent re-derive this from current artifacts?"):
-  - "pivotal" 🔴: NO — stances, decisions, semantic shifts, user constraints, rationales. Things future work must NOT contradict.
-  - "question" 🟡: open questions awaiting answers; drop once a "pivotal" answer exists.
-  - "context" 🟢: YES — re-derivable from code/DB/files. Migrations applied, tests green, files edited, branches created.
+Salience taxonomy (Mastra priority levels; heuristic — "Can a future agent re-derive this from current artifacts?"):
+  - "high" 🔴: NO — explicit user facts, preferences, decisions, unresolved goals, constraints, rationales. Things future work must NOT contradict.
+  - "medium" 🟡: project details, learned information, tool results, open questions awaiting answers.
+  - "low" 🟢: YES — minor details, uncertain observations, re-derivable from code/DB/files (migrations applied, tests green, files edited).
   No quotas. A condensed bullet inherits the salience that best describes the consolidated fact, not a forced default.
 
 Output schema — return ONLY this JSON, nothing else:
@@ -345,7 +343,7 @@ Output schema — return ONLY this JSON, nothing else:
   "condensed": [
     {
       "summary": string,                       // ≤ 140 chars
-      "salience": "pivotal" | "question" | "context",
+      "salience": "high" | "medium" | "low",
       "actor": "user" | "agent",
       "anchorRefs": string[],                  // anchor IDs if any (titles or UUIDs ok)
       "replacedIds": string[],                 // input observation IDs being collapsed
@@ -359,12 +357,12 @@ Any input ID NOT mentioned in either "replacedIds" or "drop" is implicitly KEPT 
 
 Examples of good restructuring:
   Inputs:
-    [obs-1] (context) "user inspecting layout bug in swimlane"
-    [obs-2] (context) "tried fix A — didn't work"
-    [obs-3] (pivotal) "user decided fix B is correct approach"
-    [obs-4] (context) "fix B applied"
+    [obs-1] (low) "user inspecting layout bug in swimlane"
+    [obs-2] (low) "tried fix A — didn't work"
+    [obs-3] (high) "user decided fix B is correct approach"
+    [obs-4] (low) "fix B applied"
   Output:
-    condensed: [{ summary: "Fix B chosen for swimlane layout bug after fix A failed; applied", salience: "pivotal", replacedIds: [obs-1, obs-2, obs-3, obs-4], ... }]
+    condensed: [{ summary: "Fix B chosen for swimlane layout bug after fix A failed; applied", salience: "high", replacedIds: [obs-1, obs-2, obs-3, obs-4], ... }]
 
 Return ONLY valid JSON.`;
 }
@@ -382,7 +380,7 @@ function buildReflectorUserPrompt(items: ObservationSignal[]): string {
             .filter(Boolean)
             .join(',')}]`
         : '';
-    const sal = s.salience ?? 'context';
+    const sal = normalizeLegacySalience(s.salience);
     const summary = s.summary.replace(/\s+/g, ' ').trim().slice(0, 280);
     return `[${s.id}] (${sal})${anchors} ${summary}`;
   });
@@ -417,7 +415,7 @@ function callExtractor(mode: ExtractorMode, system: string, user: string): Promi
 interface ReflectorOutput {
   condensed: Array<{
     summary: string;
-    salience: 'pivotal' | 'question' | 'context';
+    salience: 'high' | 'medium' | 'low';
     actor: 'user' | 'agent';
     anchorRefs?: string[];
     replacedIds: string[];
@@ -440,9 +438,12 @@ function parseReflectorJson(raw: string): ReflectorOutput | null {
       if (!entry || typeof entry !== 'object') continue;
       const o = entry as Record<string, unknown>;
       const summary = typeof o.summary === 'string' ? o.summary : null;
+      // Accept both the Mastra taxonomy and legacy values (the model may echo
+      // legacy salience strings seen in old ledger content) — normalize.
       const salience =
-        o.salience === 'pivotal' || o.salience === 'question' || o.salience === 'context'
-          ? o.salience
+        typeof o.salience === 'string' &&
+        ['high', 'medium', 'low', 'pivotal', 'question', 'context'].includes(o.salience)
+          ? normalizeLegacySalience(o.salience)
           : null;
       const actor = o.actor === 'user' || o.actor === 'agent' ? o.actor : 'agent';
       const replacedIds = Array.isArray(o.replacedIds)
@@ -506,12 +507,12 @@ function bridgeToOrchaLedger(
     return { bridged: 0, reason: 'no orcha project dir found (set ORCHA_LEDGER_PROJECT_DIR)' };
   }
 
-  // Bridge only pivotal + question (skip pure context — Mastra-aligned signal/noise)
+  // Bridge only high + medium (skip low — Mastra-aligned signal/noise)
   const bridgeable = condensed.filter(
-    (c) => c.salience === 'pivotal' || c.salience === 'question',
+    (c) => c.salience === 'high' || c.salience === 'medium',
   );
   if (bridgeable.length === 0) {
-    return { bridged: 0, reason: 'no pivotal/question items to bridge' };
+    return { bridged: 0, reason: 'no high/medium items to bridge' };
   }
 
   const dataDir = join(sessionDir, 'data');

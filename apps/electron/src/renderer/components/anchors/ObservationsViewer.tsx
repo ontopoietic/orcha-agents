@@ -6,9 +6,9 @@
  * start trusting it as a replacement for SDK compaction.
  *
  * Renders observations as a single chronological list (newest first) — the
- * salience (🔴 pivotal / 🟡 question / 🟢 context) is shown per-card as a
- * colored dot, not as section grouping. Each entry shows summary, actor,
- * message-range, excerpt, and timestamp.
+ * Mastra priority (🔴 high / 🟡 medium / 🟢 low, ✅ completed) is shown
+ * per-card as a colored dot, not as section grouping. Each entry shows
+ * summary, actor, message-range, excerpt, and timestamp.
  */
 
 import * as React from 'react'
@@ -32,17 +32,19 @@ export interface ObservationsViewerProps {
   sessionDir: string | null | undefined
 }
 
-type Salience = 'pivotal' | 'question' | 'context'
+type Salience = 'high' | 'medium' | 'low'
 
 const SALIENCE_META: Record<Salience, { label: string; dot: string; emoji: string }> = {
-  pivotal: { label: 'Pivotal', dot: 'bg-red-500', emoji: '🔴' },
-  question: { label: 'Questions', dot: 'bg-yellow-500', emoji: '🟡' },
-  context: { label: 'Context', dot: 'bg-green-500', emoji: '🟢' },
+  high: { label: 'High', dot: 'bg-red-500', emoji: '🔴' },
+  medium: { label: 'Medium', dot: 'bg-yellow-500', emoji: '🟡' },
+  low: { label: 'Low', dot: 'bg-green-500', emoji: '🟢' },
 }
 
+/** Accept Mastra values plus legacy ('pivotal'/'question'/'context') ones. */
 function normalizeSalience(s: string | undefined): Salience {
-  if (s === 'pivotal' || s === 'question' || s === 'context') return s
-  return 'context'
+  if (s === 'high' || s === 'pivotal') return 'high'
+  if (s === 'medium' || s === 'question') return 'medium'
+  return 'low'
 }
 
 function formatTime(iso: string): string {
@@ -150,6 +152,12 @@ function ObservationCard({ obs, onSessionClick }: {
                 <span>·</span>
               </>
             )}
+            {obs.completed && (
+              <>
+                <span title="Marked completed by the observer (✅)">✅</span>
+                <span>·</span>
+              </>
+            )}
             {actor && <span className="capitalize">{actor}</span>}
             {actor && <span>·</span>}
             <span>{formatTime(obs.createdAt)}</span>
@@ -224,7 +232,7 @@ export function ObservationsContent({ sessionDir, onNavigateToSession }: {
   )
 
   const totals = React.useMemo(() => {
-    const t = { pivotal: 0, question: 0, context: 0, all: observations.length }
+    const t = { high: 0, medium: 0, low: 0, all: observations.length }
     for (const obs of observations) t[normalizeSalience(obs.salience)]++
     return t
   }, [observations])
@@ -236,7 +244,7 @@ export function ObservationsContent({ sessionDir, onNavigateToSession }: {
           <Eye className="h-4 w-4" />
           <span className="font-semibold">Observations</span>
           <span className="text-xs font-normal text-foreground/70 ml-2">
-            {totals.all} total · 🔴 {totals.pivotal} · 🟡 {totals.question} · 🟢 {totals.context}
+            {totals.all} total · 🔴 {totals.high} · 🟡 {totals.medium} · 🟢 {totals.low}
           </span>
         </div>
         <div className="flex items-center gap-1.5">

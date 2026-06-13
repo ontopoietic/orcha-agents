@@ -190,15 +190,15 @@ export function SessionAnchorBar({ sessionId, workingDir, sessionDir, addLabelKe
                     <div className="border-t border-border pt-2 mt-2 space-y-1">
                       <div className="flex items-center gap-2 text-foreground/85">
                         <span className="inline-block w-2 h-2 rounded-full bg-red-500" />
-                        <span>Pivotal assertions</span>
+                        <span>High — user facts, decisions, goals</span>
                       </div>
                       <div className="flex items-center gap-2 text-foreground/85">
                         <span className="inline-block w-2 h-2 rounded-full bg-yellow-500" />
-                        <span>Open questions</span>
+                        <span>Medium — project details, learnings</span>
                       </div>
                       <div className="flex items-center gap-2 text-foreground/85">
                         <span className="inline-block w-2 h-2 rounded-full bg-green-500" />
-                        <span>Context observations</span>
+                        <span>Low — minor or uncertain details</span>
                       </div>
                     </div>
                   </>
@@ -234,7 +234,7 @@ export function SessionAnchorBar({ sessionId, workingDir, sessionDir, addLabelKe
                       'text-foreground hover:bg-foreground/5',
                       'disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent',
                     )}
-                    title="L2 condensation: combine related observations, drop superseded ones, bridge pivotal/question to Orcha-Ledger"
+                    title="L2 condensation: combine related observations, drop superseded ones, bridge high/medium to Orcha-Ledger"
                   >
                     Reflect & condense (L2)
                   </button>

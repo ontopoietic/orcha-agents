@@ -57,7 +57,7 @@ describe('loadObservationSignalsFromMastraMarkdown', () => {
 
     const first = signals![0]!;
     expect(first.id).toBe('obs-abc123');
-    expect(first.salience).toBe('pivotal');
+    expect(first.salience).toBe('high');
     expect(first.summary).toBe('User chose feature-branch workflow');
     expect(first.conversation!.messageRange!.from).toBe('msg-1779114000000-abc123');
     expect(first.conversation?.excerpt).toBe('I want feature-branch only');
@@ -113,7 +113,7 @@ describe('mergeObservationSignals', () => {
     source: 'conversation',
     summary: id,
     status: 'raw',
-    salience: 'context',
+    salience: 'low',
   });
 
   it('preferred wins on ID collision; both contribute the rest', () => {

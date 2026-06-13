@@ -19,7 +19,7 @@
  * `anchorShortId: null` so the caller can decide whether to drop them.
  */
 
-export type AnchoredSalience = 'pivotal' | 'question' | 'context' | 'completion';
+export type AnchoredSalience = 'high' | 'medium' | 'low' | 'completed';
 
 export interface AnchoredBullet {
   /** Original line, verbatim (without trailing newline). */
@@ -38,14 +38,12 @@ export interface AnchoredBullet {
   dateHeader: string | null;
 }
 
-// 🟡 Medium maps to 'context', mirroring parse-ledger.ts: the Mastra prompt's
-// Medium class is "project details, learned information, tool results" —
-// contextual facts, not questions. 'question' remains a legacy-ledger salience.
+// 1:1 with Mastra's priority taxonomy (see parse-ledger.ts).
 const SALIENCE_FROM_EMOJI: Record<string, AnchoredSalience> = {
-  '🔴': 'pivotal',
-  '🟡': 'context',
-  '🟢': 'context',
-  '✅': 'completion',
+  '🔴': 'high',
+  '🟡': 'medium',
+  '🟢': 'low',
+  '✅': 'completed',
 };
 
 const SALIENCE_EMOJI_PATTERN = /^[\s]*[*-][\s]+(🔴|🟡|🟢|✅)/u;
@@ -88,7 +86,7 @@ export function parseAnchoredBullets(observationBlock: string): AnchoredBullet[]
 
       const emojiMatch = SALIENCE_EMOJI_PATTERN.exec(line);
       const emoji = emojiMatch?.[1] ?? '';
-      const salience = SALIENCE_FROM_EMOJI[emoji] ?? 'context';
+      const salience = SALIENCE_FROM_EMOJI[emoji] ?? 'low';
 
       // Body = line with leading "* 🔴 " stripped.
       let body = line.replace(SALIENCE_EMOJI_PATTERN, '').trimStart();

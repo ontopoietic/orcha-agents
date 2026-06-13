@@ -655,9 +655,9 @@ Please continue the conversation naturally from where we left off.
 }
 
 const SALIENCE_TO_EMOJI: Record<Salience, string> = {
-  pivotal: '🔴',
-  question: '🟡',
-  context: '🟢',
+  high: '🔴',
+  medium: '🟡',
+  low: '🟢',
 };
 
 /**
