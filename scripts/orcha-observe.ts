@@ -332,7 +332,7 @@ async function runMastraObservation(expandedDir: string, jsonlPath: string): Pro
       (m) => (m.type === 'user' || m.type === 'assistant') && m.content.trim().length >= 10,
     );
     if (dialogue.length === 0) {
-      runningWatermark = advanceMastraWatermark(expandedDir, jsonlPath, chunk, runningWatermark, 0);
+      runningWatermark = advanceMastraWatermark(expandedDir, jsonlPath, chunk, runningWatermark, totalBullets);
       console.log(`Observer[mastra]: ${chunkLabel} no dialogue — watermark advanced (0 signals).`);
       continue;
     }
@@ -390,7 +390,7 @@ async function runMastraObservation(expandedDir: string, jsonlPath: string): Pro
       );
       const placeholder = buildCoveragePlaceholder(dialogue);
       appendToMastraLedger(mastraLedgerPath, priorObservations, placeholder);
-      runningWatermark = advanceMastraWatermark(expandedDir, jsonlPath, chunk, runningWatermark, 0);
+      runningWatermark = advanceMastraWatermark(expandedDir, jsonlPath, chunk, runningWatermark, totalBullets);
       continue;
     }
 
@@ -428,7 +428,10 @@ async function runMastraObservation(expandedDir: string, jsonlPath: string): Pro
 
     const bulletCount = anchored.length || (newObservations.match(/^\s*[*\-]\s/gm) ?? []).length;
     totalBullets += bulletCount;
-    runningWatermark = advanceMastraWatermark(expandedDir, jsonlPath, chunk, runningWatermark, bulletCount);
+    // lastSignalCount carries the RUN-cumulative total, not this chunk's
+    // count — otherwise a trailing no-dialogue chunk overwrites it with 0
+    // and the UI badge reports "none extracted" for a productive run.
+    runningWatermark = advanceMastraWatermark(expandedDir, jsonlPath, chunk, runningWatermark, totalBullets);
     console.log(
       `Observer[mastra]: ${chunkLabel} appended ${bulletCount} bullets (${resolvedAnchors} anchored, ${unresolvedAnchors} unanchored).`,
     );

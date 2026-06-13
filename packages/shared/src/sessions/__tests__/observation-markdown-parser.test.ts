@@ -20,14 +20,14 @@ describe('parseObservationsMarkdown', () => {
     const bullets = parseStrict(md);
     expect(bullets).toHaveLength(3);
     expect(bullets[0]).toMatchObject({
-      salience: 'pivotal',
+      salience: 'high',
       time: '14:49',
       summary: 'User chose Rahmen-Graph as next work item',
       anchorShortId: 'u5luxw',
       date: '2026-05-09',
     });
-    expect(bullets[1]?.salience).toBe('question');
-    expect(bullets[2]?.salience).toBe('context');
+    expect(bullets[1]?.salience).toBe('medium');
+    expect(bullets[2]?.salience).toBe('low');
   });
 
   it('returns null when input contains no bullets', () => {

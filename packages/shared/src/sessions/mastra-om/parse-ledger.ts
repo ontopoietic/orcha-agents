@@ -25,12 +25,12 @@
  *     * -> viewed src/auth.ts — found token validation
  *     * ✅ Tests passing
  *
- * Salience mapping to our existing 3-way taxonomy (until UI gains a
- * dedicated 'completed' state):
- *   🔴 High      → 'pivotal'
- *   🟡 Medium    → 'question'   (best fit; Mastra has no question class)
- *   🟢 Low       → 'context'
- *   ✅ Completed → 'pivotal'    (preserves visibility; closure is load-bearing)
+ * Salience mapping is 1:1 with Mastra's taxonomy:
+ *   🔴 High      → 'high'
+ *   🟡 Medium    → 'medium'
+ *   🟢 Low       → 'low'
+ *   ✅ Completed → 'high' + completed:true (closure is load-bearing; the
+ *                  completed flag carries the ✅ state to the UI)
  */
 
 import type { Salience } from '../observation-markdown-parser.ts';
@@ -65,10 +65,10 @@ const SUB_BULLET_RE = /^\s{2,}[*-]\s+(.+?)\s*$/;
 const TRAILING_ANCHOR_RE = /\s*\{([A-Za-z0-9_-]{3,40})\}\s*$/;
 
 const EMOJI_TO_SALIENCE: Record<string, { salience: Salience; completed: boolean }> = {
-  '🔴': { salience: 'pivotal', completed: false },
-  '🟡': { salience: 'question', completed: false },
-  '🟢': { salience: 'context', completed: false },
-  '✅': { salience: 'pivotal', completed: true },
+  '🔴': { salience: 'high', completed: false },
+  '🟡': { salience: 'medium', completed: false },
+  '🟢': { salience: 'low', completed: false },
+  '✅': { salience: 'high', completed: true },
 };
 
 function parseDateHeader(raw: string): string | null {

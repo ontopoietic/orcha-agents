@@ -42,7 +42,14 @@ export interface ObservationSignal {
   source: string;
   summary: string;
   status: string;
-  salience?: 'pivotal' | 'question' | 'context' | string;
+  /**
+   * Mastra priority taxonomy: 'high' | 'medium' | 'low'. Legacy persisted
+   * files may carry 'pivotal' | 'question' | 'context' — normalize with
+   * `normalizeLegacySalience` from observation-markdown-parser.
+   */
+  salience?: 'high' | 'medium' | 'low' | string;
+  /** True when the source bullet was a ✅ Completed observation. */
+  completed?: boolean;
   anchorRefs?: unknown[];
   conversation?: {
     sessionId?: string;

@@ -12,7 +12,35 @@
  * the observer run.
  */
 
-export type Salience = 'pivotal' | 'question' | 'context';
+/**
+ * Canonical salience taxonomy — Mastra's priority levels, verbatim:
+ *   high   🔴 — explicit user facts, preferences, decisions, critical context
+ *   medium 🟡 — project details, learned information, tool results
+ *   low    🟢 — minor details, uncertain observations
+ * Completion (✅) is a separate boolean flag, not a salience level.
+ *
+ * Legacy values ('pivotal' | 'question' | 'context') may still appear in
+ * old persisted observations.json files — normalize via
+ * `normalizeLegacySalience` at read boundaries.
+ */
+export type Salience = 'high' | 'medium' | 'low';
+
+/** Map legacy salience values onto the Mastra taxonomy. */
+export function normalizeLegacySalience(s: string | undefined): Salience {
+  switch (s) {
+    case 'high':
+    case 'pivotal':
+      return 'high';
+    case 'medium':
+    case 'question':
+      return 'medium';
+    case 'low':
+    case 'context':
+      return 'low';
+    default:
+      return 'low';
+  }
+}
 
 export interface ParsedBullet {
   /** Salience derived from emoji prefix. */
@@ -36,9 +64,9 @@ const SUB_BULLET_RE = /^ {2}- (.+?)\s*$/;
 const DATE_HEADER_RE = /^# (\d{4}-\d{2}-\d{2})\s*$/;
 
 const EMOJI_TO_SALIENCE: Record<string, Salience> = {
-  '🔴': 'pivotal',
-  '🟡': 'question',
-  '🟢': 'context',
+  '🔴': 'high',
+  '🟡': 'medium',
+  '🟢': 'low',
 };
 
 /**

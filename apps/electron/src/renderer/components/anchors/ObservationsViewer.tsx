@@ -5,9 +5,10 @@
  * session's conversation. Lets the user audit Observer output before we
  * start trusting it as a replacement for SDK compaction.
  *
- * Renders observations grouped by salience (🔴 pivotal / 🟡 question /
- * 🟢 context), newest first within each group. Each entry shows summary,
- * actor, message-range, excerpt, and timestamp.
+ * Renders observations as a single chronological list (newest first) — the
+ * Mastra priority (🔴 high / 🟡 medium / 🟢 low, ✅ completed) is shown
+ * per-card as a colored dot, not as section grouping. Each entry shows
+ * summary, actor, message-range, excerpt, and timestamp.
  */
 
 import * as React from 'react'
@@ -31,19 +32,19 @@ export interface ObservationsViewerProps {
   sessionDir: string | null | undefined
 }
 
-type Salience = 'pivotal' | 'question' | 'context'
-
-const SALIENCE_ORDER: Salience[] = ['pivotal', 'question', 'context']
+type Salience = 'high' | 'medium' | 'low'
 
 const SALIENCE_META: Record<Salience, { label: string; dot: string; emoji: string }> = {
-  pivotal: { label: 'Pivotal', dot: 'bg-red-500', emoji: '🔴' },
-  question: { label: 'Questions', dot: 'bg-yellow-500', emoji: '🟡' },
-  context: { label: 'Context', dot: 'bg-green-500', emoji: '🟢' },
+  high: { label: 'High', dot: 'bg-red-500', emoji: '🔴' },
+  medium: { label: 'Medium', dot: 'bg-yellow-500', emoji: '🟡' },
+  low: { label: 'Low', dot: 'bg-green-500', emoji: '🟢' },
 }
 
+/** Accept Mastra values plus legacy ('pivotal'/'question'/'context') ones. */
 function normalizeSalience(s: string | undefined): Salience {
-  if (s === 'pivotal' || s === 'question' || s === 'context') return s
-  return 'context'
+  if (s === 'high' || s === 'pivotal') return 'high'
+  if (s === 'medium' || s === 'question') return 'medium'
+  return 'low'
 }
 
 function formatTime(iso: string): string {
@@ -151,6 +152,12 @@ function ObservationCard({ obs, onSessionClick }: {
                 <span>·</span>
               </>
             )}
+            {obs.completed && (
+              <>
+                <span title="Marked completed by the observer (✅)">✅</span>
+                <span>·</span>
+              </>
+            )}
             {actor && <span className="capitalize">{actor}</span>}
             {actor && <span>·</span>}
             <span>{formatTime(obs.createdAt)}</span>
@@ -216,28 +223,19 @@ export function ObservationsContent({ sessionDir, onNavigateToSession }: {
   }, [refresh])
   const isSpinning = spinning || loading
 
-  const grouped = React.useMemo(() => {
-    const buckets: Record<Salience, ObservationSignal[]> = {
-      pivotal: [],
-      question: [],
-      context: [],
-    }
-    for (const obs of observations) {
-      const s = normalizeSalience(obs.salience)
-      buckets[s].push(obs)
-    }
-    for (const s of SALIENCE_ORDER) {
-      buckets[s].sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? ''))
-    }
-    return buckets
-  }, [observations])
+  // Single chronological list, newest first. Salience is shown per-card as a
+  // colored dot — chronology beats type-segmentation for auditing what the
+  // observer extracted when.
+  const sorted = React.useMemo(
+    () => [...observations].sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? '')),
+    [observations],
+  )
 
-  const totals = {
-    pivotal: grouped.pivotal.length,
-    question: grouped.question.length,
-    context: grouped.context.length,
-    all: observations.length,
-  }
+  const totals = React.useMemo(() => {
+    const t = { high: 0, medium: 0, low: 0, all: observations.length }
+    for (const obs of observations) t[normalizeSalience(obs.salience)]++
+    return t
+  }, [observations])
 
   return (
     <div className="h-full flex flex-col">
@@ -246,7 +244,7 @@ export function ObservationsContent({ sessionDir, onNavigateToSession }: {
           <Eye className="h-4 w-4" />
           <span className="font-semibold">Observations</span>
           <span className="text-xs font-normal text-foreground/70 ml-2">
-            {totals.all} total · 🔴 {totals.pivotal} · 🟡 {totals.question} · 🟢 {totals.context}
+            {totals.all} total · 🔴 {totals.high} · 🟡 {totals.medium} · 🟢 {totals.low}
           </span>
         </div>
         <div className="flex items-center gap-1.5">
@@ -294,30 +292,17 @@ export function ObservationsContent({ sessionDir, onNavigateToSession }: {
           </div>
         )}
 
-        {SALIENCE_ORDER.map((salience) => {
-          const items = grouped[salience]
-          if (items.length === 0) return null
-          const meta = SALIENCE_META[salience]
-          return (
-            <section key={salience} className="space-y-2">
-              <h3 className="text-xs font-semibold uppercase tracking-wide text-foreground/75 flex items-center gap-2">
-                <span className={cn('inline-block w-2 h-2 rounded-full', meta.dot)} />
-                {meta.label} ({items.length})
-              </h3>
-              <div className="space-y-2">
-                {items.map((obs) => (
-                  <ObservationCard
-                    // IDs are only unique within one session — qualify with the
-                    // source sessionId so workspace scope can't collide keys.
-                    key={`${obs.conversation?.sessionId ?? ''}:${obs.id}`}
-                    obs={obs}
-                    onSessionClick={scope === 'workspace' ? onNavigateToSession : undefined}
-                  />
-                ))}
-              </div>
-            </section>
-          )
-        })}
+        <div className="space-y-2">
+          {sorted.map((obs) => (
+            <ObservationCard
+              // IDs are only unique within one session — qualify with the
+              // source sessionId so workspace scope can't collide keys.
+              key={`${obs.conversation?.sessionId ?? ''}:${obs.id}`}
+              obs={obs}
+              onSessionClick={scope === 'workspace' ? onNavigateToSession : undefined}
+            />
+          ))}
+        </div>
       </div>
 
       <footer className="px-6 py-2 border-t border-border text-xs text-foreground/65 shrink-0">

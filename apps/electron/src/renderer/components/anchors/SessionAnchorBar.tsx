@@ -23,6 +23,7 @@ import { AnchorPicker } from './AnchorPicker'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { useSessionAnchors } from '@/hooks/useSessionAnchors'
 import { useObservationStatus } from '@/hooks/useObservationStatus'
+import { useObservations } from '@/hooks/useObservations'
 import { useSetAtom } from 'jotai'
 import { pushPanelAtom, observationsSessionDirAtom } from '@/atoms/panel-stack'
 import { routes } from '@/contexts/NavigationContext'
@@ -47,6 +48,12 @@ export function SessionAnchorBar({ sessionId, workingDir, sessionDir, addLabelKe
   const [runResult, setRunResult] = React.useState<{ ok: boolean; message: string } | null>(null)
   const { anchors, add, remove } = useSessionAnchors(sessionId)
   const observation = useObservationStatus(sessionDir ?? null)
+  // Live observation TOTAL for the badge. The watermark's lastSignalCount is
+  // per-run (and was a poor badge value); the ledger length is what the user
+  // sees in the viewer, so the badge tracks it. useObservationStatus above
+  // starts the watch; this hook piggybacks on its status stream to re-read.
+  const { observations } = useObservations(sessionDir ?? null)
+  const observationTotal = observations.length
 
   const handleRunObserver = React.useCallback(async () => {
     if (!sessionDir || runningObserver) return
@@ -139,10 +146,10 @@ export function SessionAnchorBar({ sessionId, workingDir, sessionDir, addLabelKe
                 <span>
                   {observation.running
                     ? 'observing…'
-                    : observation.hasObserved
+                    : observation.hasObserved || observationTotal > 0
                       ? observation.relativeTime
-                        ? `${observation.lastSignalCount} · ${observation.relativeTime}`
-                        : `${observation.lastSignalCount} observed`
+                        ? `${observationTotal} · ${observation.relativeTime}`
+                        : `${observationTotal} observed`
                       : 'not yet'}
                 </span>
               </button>
@@ -162,6 +169,8 @@ export function SessionAnchorBar({ sessionId, workingDir, sessionDir, addLabelKe
                 {observation.hasObserved ? (
                   <>
                     <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+                      <span className="text-foreground/55">Observations</span>
+                      <span className="text-foreground">{observationTotal} total</span>
                       <span className="text-foreground/55">Last run</span>
                       <span className="text-foreground">{observation.relativeTime ?? 'just now'}</span>
                       <span className="text-foreground/55">Messages</span>
@@ -181,15 +190,15 @@ export function SessionAnchorBar({ sessionId, workingDir, sessionDir, addLabelKe
                     <div className="border-t border-border pt-2 mt-2 space-y-1">
                       <div className="flex items-center gap-2 text-foreground/85">
                         <span className="inline-block w-2 h-2 rounded-full bg-red-500" />
-                        <span>Pivotal assertions</span>
+                        <span>High — user facts, decisions, goals</span>
                       </div>
                       <div className="flex items-center gap-2 text-foreground/85">
                         <span className="inline-block w-2 h-2 rounded-full bg-yellow-500" />
-                        <span>Open questions</span>
+                        <span>Medium — project details, learnings</span>
                       </div>
                       <div className="flex items-center gap-2 text-foreground/85">
                         <span className="inline-block w-2 h-2 rounded-full bg-green-500" />
-                        <span>Context observations</span>
+                        <span>Low — minor or uncertain details</span>
                       </div>
                     </div>
                   </>
@@ -225,7 +234,7 @@ export function SessionAnchorBar({ sessionId, workingDir, sessionDir, addLabelKe
                       'text-foreground hover:bg-foreground/5',
                       'disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent',
                     )}
-                    title="L2 condensation: combine related observations, drop superseded ones, bridge pivotal/question to Orcha-Ledger"
+                    title="L2 condensation: combine related observations, drop superseded ones, bridge high/medium to Orcha-Ledger"
                   >
                     Reflect & condense (L2)
                   </button>

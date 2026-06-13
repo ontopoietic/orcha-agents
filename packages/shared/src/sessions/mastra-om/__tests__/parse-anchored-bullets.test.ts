@@ -12,7 +12,7 @@ describe('parseAnchoredBullets', () => {
     const bullets = parseAnchoredBullets(input);
     expect(bullets).toHaveLength(1);
     const first = bullets[0]!;
-    expect(first.salience).toBe('pivotal');
+    expect(first.salience).toBe('high');
     expect(first.time).toBe('14:30');
     expect(first.summary).toBe('User chose feature-branch workflow');
     expect(first.anchorShortId).toBe('abc123');
@@ -31,16 +31,17 @@ describe('parseAnchoredBullets', () => {
   });
 
   it('handles all four salience emojis', () => {
-    const input = `* 🔴 (10:00) pivotal {a11111}
-* 🟡 (10:01) question {b22222}
-* 🟢 (10:02) context {c33333}
-* ✅ (10:03) completion {d44444}`;
+    const input = `* 🔴 (10:00) high {a11111}
+* 🟡 (10:01) medium {b22222}
+* 🟢 (10:02) low {c33333}
+* ✅ (10:03) completed {d44444}`;
     const bullets = parseAnchoredBullets(input);
+    // 1:1 Mastra taxonomy — see SALIENCE_FROM_EMOJI in parse-anchored-bullets.ts.
     expect(bullets.map((b) => b.salience)).toEqual([
-      'pivotal',
-      'question',
-      'context',
-      'completion',
+      'high',
+      'medium',
+      'low',
+      'completed',
     ]);
     expect(bullets.map((b) => b.anchorShortId)).toEqual([
       'a11111',
