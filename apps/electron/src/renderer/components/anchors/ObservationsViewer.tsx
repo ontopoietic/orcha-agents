@@ -5,9 +5,10 @@
  * session's conversation. Lets the user audit Observer output before we
  * start trusting it as a replacement for SDK compaction.
  *
- * Renders observations grouped by salience (🔴 pivotal / 🟡 question /
- * 🟢 context), newest first within each group. Each entry shows summary,
- * actor, message-range, excerpt, and timestamp.
+ * Renders observations as a single chronological list (newest first) — the
+ * salience (🔴 pivotal / 🟡 question / 🟢 context) is shown per-card as a
+ * colored dot, not as section grouping. Each entry shows summary, actor,
+ * message-range, excerpt, and timestamp.
  */
 
 import * as React from 'react'
@@ -32,8 +33,6 @@ export interface ObservationsViewerProps {
 }
 
 type Salience = 'pivotal' | 'question' | 'context'
-
-const SALIENCE_ORDER: Salience[] = ['pivotal', 'question', 'context']
 
 const SALIENCE_META: Record<Salience, { label: string; dot: string; emoji: string }> = {
   pivotal: { label: 'Pivotal', dot: 'bg-red-500', emoji: '🔴' },
@@ -216,28 +215,19 @@ export function ObservationsContent({ sessionDir, onNavigateToSession }: {
   }, [refresh])
   const isSpinning = spinning || loading
 
-  const grouped = React.useMemo(() => {
-    const buckets: Record<Salience, ObservationSignal[]> = {
-      pivotal: [],
-      question: [],
-      context: [],
-    }
-    for (const obs of observations) {
-      const s = normalizeSalience(obs.salience)
-      buckets[s].push(obs)
-    }
-    for (const s of SALIENCE_ORDER) {
-      buckets[s].sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? ''))
-    }
-    return buckets
-  }, [observations])
+  // Single chronological list, newest first. Salience is shown per-card as a
+  // colored dot — chronology beats type-segmentation for auditing what the
+  // observer extracted when.
+  const sorted = React.useMemo(
+    () => [...observations].sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? '')),
+    [observations],
+  )
 
-  const totals = {
-    pivotal: grouped.pivotal.length,
-    question: grouped.question.length,
-    context: grouped.context.length,
-    all: observations.length,
-  }
+  const totals = React.useMemo(() => {
+    const t = { pivotal: 0, question: 0, context: 0, all: observations.length }
+    for (const obs of observations) t[normalizeSalience(obs.salience)]++
+    return t
+  }, [observations])
 
   return (
     <div className="h-full flex flex-col">
@@ -294,30 +284,17 @@ export function ObservationsContent({ sessionDir, onNavigateToSession }: {
           </div>
         )}
 
-        {SALIENCE_ORDER.map((salience) => {
-          const items = grouped[salience]
-          if (items.length === 0) return null
-          const meta = SALIENCE_META[salience]
-          return (
-            <section key={salience} className="space-y-2">
-              <h3 className="text-xs font-semibold uppercase tracking-wide text-foreground/75 flex items-center gap-2">
-                <span className={cn('inline-block w-2 h-2 rounded-full', meta.dot)} />
-                {meta.label} ({items.length})
-              </h3>
-              <div className="space-y-2">
-                {items.map((obs) => (
-                  <ObservationCard
-                    // IDs are only unique within one session — qualify with the
-                    // source sessionId so workspace scope can't collide keys.
-                    key={`${obs.conversation?.sessionId ?? ''}:${obs.id}`}
-                    obs={obs}
-                    onSessionClick={scope === 'workspace' ? onNavigateToSession : undefined}
-                  />
-                ))}
-              </div>
-            </section>
-          )
-        })}
+        <div className="space-y-2">
+          {sorted.map((obs) => (
+            <ObservationCard
+              // IDs are only unique within one session — qualify with the
+              // source sessionId so workspace scope can't collide keys.
+              key={`${obs.conversation?.sessionId ?? ''}:${obs.id}`}
+              obs={obs}
+              onSessionClick={scope === 'workspace' ? onNavigateToSession : undefined}
+            />
+          ))}
+        </div>
       </div>
 
       <footer className="px-6 py-2 border-t border-border text-xs text-foreground/65 shrink-0">

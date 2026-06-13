@@ -36,9 +36,11 @@ describe('parseAnchoredBullets', () => {
 * 🟢 (10:02) context {c33333}
 * ✅ (10:03) completion {d44444}`;
     const bullets = parseAnchoredBullets(input);
+    // 🟡 Medium maps to 'context' (contextual facts, not questions) — see
+    // SALIENCE_FROM_EMOJI rationale in parse-anchored-bullets.ts.
     expect(bullets.map((b) => b.salience)).toEqual([
       'pivotal',
-      'question',
+      'context',
       'context',
       'completion',
     ]);

@@ -162,16 +162,31 @@ export function startObservationWatch(
   }
 
   // Watch the meta directory (may not exist yet)
+  const watchMetaDir = () => {
+    watcher = watch(metaDir, (_eventType, filename) => {
+      if (filename === WATERMARK_FILE || filename === RUNNING_MARKER) scheduleCheck()
+    })
+  }
   try {
     if (!existsSync(metaDir)) {
-      // If meta/ doesn't exist yet, watch the session dir for meta/ creation
+      // meta/ doesn't exist yet — watch the session dir for its creation,
+      // then RE-ATTACH to meta/ itself. Without the re-attach, fs.watch on
+      // the (non-recursive) session dir never sees writes INSIDE meta/, so
+      // the badge would freeze after the first observer run of a fresh
+      // session.
       watcher = watch(sessionDir, (_eventType, filename) => {
-        if (filename === 'meta') scheduleCheck()
+        if (filename === 'meta' && existsSync(metaDir)) {
+          watcher?.close()
+          try {
+            watchMetaDir()
+          } catch {
+            watcher = null
+          }
+          scheduleCheck()
+        }
       })
     } else {
-      watcher = watch(metaDir, (_eventType, filename) => {
-        if (filename === WATERMARK_FILE || filename === RUNNING_MARKER) scheduleCheck()
-      })
+      watchMetaDir()
     }
   } catch {
     // Silently ignore if directory doesn't exist

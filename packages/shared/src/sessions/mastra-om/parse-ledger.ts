@@ -28,7 +28,9 @@
  * Salience mapping to our existing 3-way taxonomy (until UI gains a
  * dedicated 'completed' state):
  *   🔴 High      → 'pivotal'
- *   🟡 Medium    → 'question'   (best fit; Mastra has no question class)
+ *   🟡 Medium    → 'context'    (project details, learned info, tool results —
+ *                               contextual facts, NOT questions; Mastra has no
+ *                               question class, so 'question' is legacy-only)
  *   🟢 Low       → 'context'
  *   ✅ Completed → 'pivotal'    (preserves visibility; closure is load-bearing)
  */
@@ -66,7 +68,7 @@ const TRAILING_ANCHOR_RE = /\s*\{([A-Za-z0-9_-]{3,40})\}\s*$/;
 
 const EMOJI_TO_SALIENCE: Record<string, { salience: Salience; completed: boolean }> = {
   '🔴': { salience: 'pivotal', completed: false },
-  '🟡': { salience: 'question', completed: false },
+  '🟡': { salience: 'context', completed: false },
   '🟢': { salience: 'context', completed: false },
   '✅': { salience: 'pivotal', completed: true },
 };

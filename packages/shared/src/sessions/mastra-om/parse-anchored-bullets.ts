@@ -38,9 +38,12 @@ export interface AnchoredBullet {
   dateHeader: string | null;
 }
 
+// 🟡 Medium maps to 'context', mirroring parse-ledger.ts: the Mastra prompt's
+// Medium class is "project details, learned information, tool results" —
+// contextual facts, not questions. 'question' remains a legacy-ledger salience.
 const SALIENCE_FROM_EMOJI: Record<string, AnchoredSalience> = {
   '🔴': 'pivotal',
-  '🟡': 'question',
+  '🟡': 'context',
   '🟢': 'context',
   '✅': 'completion',
 };
