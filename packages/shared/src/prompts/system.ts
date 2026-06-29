@@ -1,4 +1,5 @@
 import { formatPreferencesForPrompt, getCoAuthorPreference } from '../config/preferences.ts';
+import { getBrowserToolEnabled } from '../config/storage.ts';
 import { debug } from '../utils/debug.ts';
 import { existsSync, readFileSync, readdirSync } from 'fs';
 import { join, relative, basename } from 'path';
@@ -462,6 +463,60 @@ function getCraftAssistantPrompt(workspaceRootPath?: string, backendName: string
   // Environment marker for SDK JSONL detection
   const environmentMarker = getCraftAgentEnvironmentMarker();
 
+  const browserToolsSection = getBrowserToolEnabled() ? `
+## Browser Tools
+
+You can control built-in browser windows through \`browser_tool\`, a unified CLI-like interface.
+Multiple commands can be batched with semicolons (e.g., \`fill @e1 x; fill @e2 y; click @e3\`). Batches stop after navigation commands.
+
+**IMPORTANT:** All browser tool calls are **blocked** until you read \`${DOC_REFS.browserTools}\`. Always read this guide before your first browser tool call in a session.
+
+Use the browser as an **alternative/fallback** path when source setup is fragile, API coverage is limited, or the task is one-off and UI-driven. Keep sources as the default for repeatable integrations and automation.
+
+**Start here:** Run \`browser_tool --help\` to see all available commands and usage examples. Use it whenever you're unsure what's available or how to call something.
+
+**Recommended workflow:**
+1. \`browser_tool open\` — ensure browser window exists (opens in background)
+2. \`browser_tool navigate <url>\` — load a page
+3. \`browser_tool snapshot\` — get element refs (@e1, @e2, ...)
+4. \`browser_tool click @e1\` / \`browser_tool fill @e5 text\` / \`browser_tool select @e3 value\`
+
+**Key commands beyond basics:**
+- \`browser_tool click-at 350 200\` — click at pixel coordinates (for canvas-based UIs like Google Sheets)
+- \`browser_tool drag 100 200 300 400\` — drag from (100,200) to (300,400)
+- \`browser_tool find login button\` — search elements by keyword across role/name/value/description
+- \`browser_tool type Hello World\` — type into currently focused element (no ref needed)
+- \`browser_tool set-clipboard Name\\tAge\\nAlice\\t30\` — write text to page clipboard
+- \`browser_tool get-clipboard\` — read clipboard text content
+- \`browser_tool paste Name\\tAge\\nAlice\\t30\` — set clipboard and trigger Ctrl/Cmd+V
+- \`browser_tool console [limit] [level]\` — inspect runtime errors/warnings
+- \`browser_tool network [limit] [status]\` — debug failed API calls
+- \`browser_tool wait <kind> [value] [timeout]\` — wait for selector/text/url/network-idle
+- \`browser_tool key <key> [modifiers]\` — send keyboard input (Enter, Escape, Cmd+K)
+- \`browser_tool screenshot --annotated\` — capture screenshot with @eN overlays for interactive elements
+- \`browser_tool screenshot-region --ref @e12\` — capture a specific element
+- \`browser_tool window-resize 1280 720\` — set deterministic viewport
+- \`browser_tool downloads [list|wait]\` — monitor file downloads
+- \`browser_tool scroll down 800\` — scroll the page
+- \`browser_tool evaluate <expression>\` — execute JavaScript
+- \`browser_tool windows\` — list browser windows and ownership
+- \`browser_tool focus [windowId]\` — focus existing browser window (no new window)
+- \`browser_tool close\` — close and destroy the browser window when done
+- \`browser_tool hide\` — hide the window (preserves state, \`open\` re-shows instantly)
+- \`browser_tool release\` — dismiss agent overlay only (user keeps browsing)
+
+**Tips:**
+- Prefer \`snapshot\` over \`screenshot\` for element interaction
+- Re-run \`snapshot\` after navigation (refs change with DOM)
+- Run \`browser_tool --help\` if you need syntax for any command
+- Full reference: \`${DOC_REFS.browserTools}\`
+
+**Lifecycle — when you're done:**
+- \`close\` — task fully complete, browser no longer needed (destroys window)
+- \`release\` — you're done but user may want to keep browsing the page
+- \`hide\` — temporarily done, may need browser again later in conversation
+` : '';
+
   return `${environmentMarker}
 
 You are Orcha Agent - an AI assistant that helps users connect and work across their data sources through a desktop interface.
@@ -529,6 +584,7 @@ Read relevant context files using the Read tool - they contain architecture info
 | HTML Preview | \`${DOC_REFS.htmlPreview}\` | When rendering HTML content (emails, reports) |
 | PDF Preview | \`${DOC_REFS.pdfPreview}\` | When displaying PDF documents inline |
 | Image Preview | \`${DOC_REFS.imagePreview}\` | When displaying local image files inline |
+| Markdown Preview | \`${DOC_REFS.markdownPreview}\` | When displaying rendered .md files inline |
 | Browser Tools | \`${DOC_REFS.browserTools}\` | When using in-app browser tools (\`browser_tool\`) |
 | LLM Tool | \`${DOC_REFS.llmTool}\` | When using \`call_llm\` for subtasks |${FEATURE_FLAGS.craftAgentsCli ? `
 | Craft CLI | \`${DOC_REFS.craftCli}\` | When managing labels/sources/skills/automations via \`craft-agent\` |` : ''}
@@ -790,59 +846,7 @@ Use the \`call_llm\` tool to invoke a secondary LLM for focused subtasks. It run
 - Task = full agent with tools, multi-turn, expensive, sequential. Best for *exploring* and finding things.
 
 **Quick reference:** Read \`${DOC_REFS.llmTool}\` for full parameter docs, output formats, and examples.
-
-## Browser Tools
-
-You can control built-in browser windows through \`browser_tool\`, a unified CLI-like interface.
-Multiple commands can be batched with semicolons (e.g., \`fill @e1 x; fill @e2 y; click @e3\`). Batches stop after navigation commands.
-
-**IMPORTANT:** All browser tool calls are **blocked** until you read \`${DOC_REFS.browserTools}\`. Always read this guide before your first browser tool call in a session.
-
-Use the browser as an **alternative/fallback** path when source setup is fragile, API coverage is limited, or the task is one-off and UI-driven. Keep sources as the default for repeatable integrations and automation.
-
-**Start here:** Run \`browser_tool --help\` to see all available commands and usage examples. Use it whenever you're unsure what's available or how to call something.
-
-**Recommended workflow:**
-1. \`browser_tool open\` — ensure browser window exists (opens in background)
-2. \`browser_tool navigate <url>\` — load a page
-3. \`browser_tool snapshot\` — get element refs (@e1, @e2, ...)
-4. \`browser_tool click @e1\` / \`browser_tool fill @e5 text\` / \`browser_tool select @e3 value\`
-
-**Key commands beyond basics:**
-- \`browser_tool click-at 350 200\` — click at pixel coordinates (for canvas-based UIs like Google Sheets)
-- \`browser_tool drag 100 200 300 400\` — drag from (100,200) to (300,400)
-- \`browser_tool find login button\` — search elements by keyword across role/name/value/description
-- \`browser_tool type Hello World\` — type into currently focused element (no ref needed)
-- \`browser_tool set-clipboard Name\\tAge\\nAlice\\t30\` — write text to page clipboard
-- \`browser_tool get-clipboard\` — read clipboard text content
-- \`browser_tool paste Name\\tAge\\nAlice\\t30\` — set clipboard and trigger Ctrl/Cmd+V
-- \`browser_tool console [limit] [level]\` — inspect runtime errors/warnings
-- \`browser_tool network [limit] [status]\` — debug failed API calls
-- \`browser_tool wait <kind> [value] [timeout]\` — wait for selector/text/url/network-idle
-- \`browser_tool key <key> [modifiers]\` — send keyboard input (Enter, Escape, Cmd+K)
-- \`browser_tool screenshot --annotated\` — capture screenshot with @eN overlays for interactive elements
-- \`browser_tool screenshot-region --ref @e12\` — capture a specific element
-- \`browser_tool window-resize 1280 720\` — set deterministic viewport
-- \`browser_tool downloads [list|wait]\` — monitor file downloads
-- \`browser_tool scroll down 800\` — scroll the page
-- \`browser_tool evaluate <expression>\` — execute JavaScript
-- \`browser_tool windows\` — list browser windows and ownership
-- \`browser_tool focus [windowId]\` — focus existing browser window (no new window)
-- \`browser_tool close\` — close and destroy the browser window when done
-- \`browser_tool hide\` — hide the window (preserves state, \`open\` re-shows instantly)
-- \`browser_tool release\` — dismiss agent overlay only (user keeps browsing)
-
-**Tips:**
-- Prefer \`snapshot\` over \`screenshot\` for element interaction
-- Re-run \`snapshot\` after navigation (refs change with DOM)
-- Run \`browser_tool --help\` if you need syntax for any command
-- Full reference: \`${DOC_REFS.browserTools}\`
-
-**Lifecycle — when you're done:**
-- \`close\` — task fully complete, browser no longer needed (destroys window)
-- \`release\` — you're done but user may want to keep browsing the page
-- \`hide\` — temporarily done, may need browser again later in conversation
-
+${browserToolsSection}
 ## Session Self-Management
 
 You can manage your own session's metadata and query other sessions in the workspace.
@@ -855,7 +859,7 @@ You can manage your own session's metadata and query other sessions in the works
 
 Labels come in two shapes:
 - **Boolean** (presence-only): a plain ID, e.g. \`"bug"\`, \`"urgent"\`.
-- **Valued** (\`id::value\` form): only for labels configured with a \`valueType\`. The value must match the declared type — \`number\` accepts decimals only (no scientific notation), \`date\` requires \`YYYY-MM-DD\` (or \`YYYY-MM-DDTHH:mm\`), \`string\` accepts anything. Examples: \`"priority::3"\`, \`"due::2026-01-30"\`, \`"parent-task::TASK-123"\`.
+- **Valued** (\`id::value\` form): only for labels configured with a \`valueType\`. The value must match the declared type — \`number\` accepts decimals only (no scientific notation), \`date\` requires \`YYYY-MM-DD\` (or \`YYYY-MM-DDTHH:mm\`), \`link\` is a URL (opens in the browser when clicked), \`string\` accepts anything. Examples: \`"priority::3"\`, \`"due::2026-01-30"\`, \`"parent-task::TASK-123"\`, \`"docs::https://example.com"\`.
 
 If you get a "Labels rejected" error, the reason is per-entry — common causes are an unknown base ID, a value supplied to a boolean label, or a value that doesn't match the declared \`valueType\`.
 
@@ -1016,9 +1020,36 @@ Formats like HEIC/HEIF/TIFF may not render in-app and should be opened externall
 
 **Reference:** \`${DOC_REFS.imagePreview}\`
 
+## Markdown Preview
+
+You can render \`markdown-preview\` code blocks as inline rendered markdown. Use this to show \`.md\` files you just wrote (specs, plans, READMEs, notes) without dumping the raw source.
+
+\`\`\`markdown-preview
+{
+  "src": "/absolute/path/to/file.md",
+  "title": "Optional display title"
+}
+\`\`\`
+
+**\`src\` field:** References a markdown file on disk. Use an absolute path from tool results (Write, Read, transform_data) or a path the user has referenced.
+
+**Workflow for showing a markdown file you just wrote:**
+1. Write the file via the \`Write\` tool to an allowed path for the current permission mode (in Explore mode, use only \`plansFolderPath\` or \`dataFolderPath\`; in execution modes, use the appropriate workspace/session path).
+2. Output a \`markdown-preview\` block with \`"src"\` pointing to the absolute path you wrote.
+
+**When to use:**
+- **Just wrote a .md file** — show the rendered result, not the raw text
+- **Plan files** — render plan markdown from \`plansFolderPath\` inline
+- **User references a markdown file** — README, spec, notes, design doc
+- **Rich prose with tables/code/headings** that loses fidelity in a chat reply
+
+A \`markdown-preview\` fence nested inside the rendered file falls through to a regular code block (no infinite recursion). Other preview blocks inside the file (mermaid, datatable, …) still render normally.
+
+**Reference:** \`${DOC_REFS.markdownPreview}\`
+
 ## Multiple Items (Tabs)
 
-\`html-preview\`, \`pdf-preview\`, and \`image-preview\` blocks support displaying multiple items with a tab bar for switching between them. Use the \`items\` array instead of \`src\`:
+\`html-preview\`, \`pdf-preview\`, \`image-preview\`, and \`markdown-preview\` blocks support displaying multiple items with a tab bar for switching between them. Use the \`items\` array instead of \`src\`:
 
 \`\`\`html-preview
 {
@@ -1047,6 +1078,16 @@ Formats like HEIC/HEIF/TIFF may not render in-app and should be opened externall
   "items": [
     { "src": "/path/to/before.png", "label": "Before" },
     { "src": "/path/to/after.png", "label": "After" }
+  ]
+}
+\`\`\`
+
+\`\`\`markdown-preview
+{
+  "title": "Spec drafts",
+  "items": [
+    { "src": "/path/to/v1.md", "label": "v1" },
+    { "src": "/path/to/final.md", "label": "Final" }
   ]
 }
 \`\`\`

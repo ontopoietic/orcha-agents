@@ -22,6 +22,8 @@ type ActivateResult = Awaited<
 interface CtxOverrides {
   activateSourceInSession?: (slug: string) => Promise<ActivateResult>;
   validateStdioMcpConnection?: SessionToolContext['validateStdioMcpConnection'];
+  validateMcpConnection?: SessionToolContext['validateMcpConnection'];
+  credentialManager?: SessionToolContext['credentialManager'];
 }
 
 function createCtx(workspacePath: string, overrides: CtxOverrides = {}): SessionToolContext {
@@ -64,6 +66,8 @@ function createCtx(workspacePath: string, overrides: CtxOverrides = {}): Session
     },
     // Stub the MCP validator so connection tests don't hit the network.
     validateStdioMcpConnection: overrides.validateStdioMcpConnection,
+    validateMcpConnection: overrides.validateMcpConnection,
+    credentialManager: overrides.credentialManager,
     activateSourceInSession: overrides.activateSourceInSession,
   } as unknown as SessionToolContext;
   // Expose saved for assertions (test-only — not on real ctx).
@@ -492,3 +496,288 @@ function ctx_for(workspacePath: string) {
     activateSourceInSession: async () => ({ ok: true }),
   });
 }
+
+// ============================================================
+// HTTP MCP probe — credential resolution (regression for #720)
+// ============================================================
+//
+// The probe must forward the same auth token the live runtime would resolve:
+// - cached token first
+// - refresh fallback only on miss
+// - works for `oauth` AND `bearer` whose token lives in the credential store
+// - existing `headerNames` flow still merges credential headers, accessToken
+//   stays undefined (regression guard).
+
+type ValidateMcpCall = Parameters<NonNullable<SessionToolContext['validateMcpConnection']>>[0];
+
+function writeHttpMcpSource(
+  workspacePath: string,
+  slug: string,
+  overrides: Partial<SourceConfig> = {}
+): void {
+  const sourcePath = join(workspacePath, 'sources', slug);
+  mkdirSync(sourcePath, { recursive: true });
+  const config: SourceConfig = {
+    id: slug,
+    slug,
+    name: slug,
+    enabled: true,
+    provider: 'test',
+    type: 'mcp',
+    tagline: 'A test HTTP MCP source',
+    icon: '🧪',
+    mcp: {
+      transport: 'http',
+      url: 'https://mcp.example.test',
+      authType: 'oauth',
+    },
+    ...overrides,
+  } as SourceConfig;
+  writeFileSync(join(sourcePath, 'config.json'), JSON.stringify(config, null, 2));
+  writeFileSync(
+    join(sourcePath, 'guide.md'),
+    '# Guide\n\nThis is a longer guide with more than fifty words so the validator does not warn about the guide being too short for the readability criteria the tool enforces when evaluating source completeness for this test suite which is only here to exercise the probe credential resolution behavior.'
+  );
+}
+
+interface CredManagerStub {
+  manager: NonNullable<SessionToolContext['credentialManager']>;
+  getTokenCalls: number;
+  refreshCalls: number;
+}
+
+function makeCredentialManager({
+  cachedToken,
+  refreshedToken,
+}: {
+  cachedToken?: string | null;
+  refreshedToken?: string | null;
+}): CredManagerStub {
+  const stub: CredManagerStub = {
+    manager: {
+      hasValidCredentials: async () => Boolean(cachedToken),
+      getToken: async () => {
+        stub.getTokenCalls += 1;
+        return cachedToken ?? null;
+      },
+      refresh: async () => {
+        stub.refreshCalls += 1;
+        return refreshedToken ?? null;
+      },
+    },
+    getTokenCalls: 0,
+    refreshCalls: 0,
+  };
+  return stub;
+}
+
+describe('source_test HTTP MCP probe credential forwarding (regression for #720)', () => {
+  let tempDir: string;
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), 'source-test-mcp-cred-'));
+  });
+
+  afterEach(() => {
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it('OAuth MCP with cached token forwards accessToken to the probe (no refresh)', async () => {
+    writeHttpMcpSource(tempDir, 'oauth-cached', {
+      mcp: {
+        transport: 'http',
+        url: 'https://mcp.example.test',
+        authType: 'oauth',
+      },
+    } as Partial<SourceConfig>);
+
+    const cred = makeCredentialManager({ cachedToken: 'cached-tok' });
+    const calls: ValidateMcpCall[] = [];
+    const ctx = createCtx(tempDir, {
+      credentialManager: cred.manager,
+      validateMcpConnection: async (config) => {
+        calls.push(config);
+        return { success: true, toolCount: 2 };
+      },
+    });
+
+    const result = await handleSourceTest(ctx, { sourceSlug: 'oauth-cached', autoEnable: false });
+
+    expect(result.isError).toBeFalsy();
+    expect(calls.length).toBe(1);
+    expect(calls[0]?.accessToken).toBe('cached-tok');
+    expect(cred.getTokenCalls).toBe(1);
+    expect(cred.refreshCalls).toBe(0);
+
+    const persisted = JSON.parse(
+      readFileSync(join(tempDir, 'sources', 'oauth-cached', 'config.json'), 'utf-8')
+    ) as SourceConfig;
+    expect(persisted.connectionStatus).toBe('connected');
+  });
+
+  it('OAuth MCP without cached token falls back to refresh and forwards the fresh token', async () => {
+    writeHttpMcpSource(tempDir, 'oauth-refresh', {
+      mcp: {
+        transport: 'http',
+        url: 'https://mcp.example.test',
+        authType: 'oauth',
+      },
+    } as Partial<SourceConfig>);
+
+    const cred = makeCredentialManager({ cachedToken: null, refreshedToken: 'fresh-tok' });
+    const calls: ValidateMcpCall[] = [];
+    const ctx = createCtx(tempDir, {
+      credentialManager: cred.manager,
+      validateMcpConnection: async (config) => {
+        calls.push(config);
+        return { success: true };
+      },
+    });
+
+    await handleSourceTest(ctx, { sourceSlug: 'oauth-refresh', autoEnable: false });
+
+    expect(calls.length).toBe(1);
+    expect(calls[0]?.accessToken).toBe('fresh-tok');
+    expect(cred.getTokenCalls).toBe(1);
+    expect(cred.refreshCalls).toBe(1);
+  });
+
+  it('Bearer MCP without headerNames forwards accessToken (defense-in-depth)', async () => {
+    writeHttpMcpSource(tempDir, 'bearer-cached', {
+      mcp: {
+        transport: 'http',
+        url: 'https://mcp.example.test',
+        authType: 'bearer',
+      },
+    } as Partial<SourceConfig>);
+
+    const cred = makeCredentialManager({ cachedToken: 'bearer-tok' });
+    const calls: ValidateMcpCall[] = [];
+    const ctx = createCtx(tempDir, {
+      credentialManager: cred.manager,
+      validateMcpConnection: async (config) => {
+        calls.push(config);
+        return { success: true };
+      },
+    });
+
+    await handleSourceTest(ctx, { sourceSlug: 'bearer-cached', autoEnable: false });
+
+    expect(calls.length).toBe(1);
+    expect(calls[0]?.accessToken).toBe('bearer-tok');
+    expect(cred.getTokenCalls).toBe(1);
+    expect(cred.refreshCalls).toBe(0);
+  });
+
+  it('headerNames flow still merges credential headers, accessToken stays undefined', async () => {
+    // Multi-header credential — credential value is a JSON object keyed by header name.
+    writeHttpMcpSource(tempDir, 'header-style', {
+      mcp: {
+        transport: 'http',
+        url: 'https://mcp.example.test',
+        headerNames: ['X-Api-Key'],
+      },
+    } as Partial<SourceConfig>);
+
+    const cred = makeCredentialManager({ cachedToken: JSON.stringify({ 'X-Api-Key': 'k1' }) });
+    const calls: ValidateMcpCall[] = [];
+    const ctx = createCtx(tempDir, {
+      credentialManager: cred.manager,
+      validateMcpConnection: async (config) => {
+        calls.push(config);
+        return { success: true };
+      },
+    });
+
+    await handleSourceTest(ctx, { sourceSlug: 'header-style', autoEnable: false });
+
+    expect(calls.length).toBe(1);
+    expect(calls[0]?.headers).toEqual({ 'X-Api-Key': 'k1' });
+    expect(calls[0]?.accessToken).toBeUndefined();
+    expect(cred.refreshCalls).toBe(0);
+  });
+});
+
+describe('source_test basic-auth header (regression for #824)', () => {
+  let tempDir: string;
+  const origFetch = globalThis.fetch;
+  let captured: { url: string; init: RequestInit } | null = null;
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), 'source-test-basic-'));
+    captured = null;
+    globalThis.fetch = (async (url: string, init: RequestInit) => {
+      captured = { url, init };
+      return new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as typeof fetch;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = origFetch;
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  function writeBasicAuthSource(slug: string): void {
+    const sourcePath = join(tempDir, 'sources', slug);
+    mkdirSync(sourcePath, { recursive: true });
+    const config = {
+      id: slug,
+      slug,
+      name: `Test ${slug}`,
+      enabled: true,
+      provider: 'test',
+      type: 'api',
+      tagline: 'Basic auth API source',
+      icon: '🧪',
+      isAuthenticated: true,
+      api: {
+        baseUrl: 'https://api.example.test',
+        authType: 'basic',
+        testEndpoint: { method: 'GET', path: '/ping' },
+      },
+    } as unknown as SourceConfig;
+    writeFileSync(join(sourcePath, 'config.json'), JSON.stringify(config, null, 2));
+    writeFileSync(
+      join(sourcePath, 'guide.md'),
+      '# Guide\n\nThis is a longer guide with more than fifty words so the validator does not warn about the guide being too short for the readability criteria the tool enforces when evaluating source completeness for this test suite which is only here to exercise the basic-auth header path and not the completeness check.'
+    );
+  }
+
+  function authHeader(): string | undefined {
+    const h = captured?.init.headers as Record<string, string> | undefined;
+    return h?.['Authorization'];
+  }
+
+  it('JSON {username,password} token → base64-encoded header', async () => {
+    writeBasicAuthSource('json-basic');
+    const cred = makeCredentialManager({
+      cachedToken: JSON.stringify({ username: 'u', password: 'p' }),
+    });
+    const ctx = createCtx(tempDir, { credentialManager: cred.manager });
+
+    await handleSourceTest(ctx, { sourceSlug: 'json-basic', autoEnable: false });
+
+    expect(authHeader()).toBe(`Basic ${Buffer.from('u:p').toString('base64')}`);
+  });
+
+  it('already-base64 token → passed through unchanged', async () => {
+    writeBasicAuthSource('legacy-basic');
+    const encoded = Buffer.from('u:p').toString('base64');
+    const cred = makeCredentialManager({ cachedToken: encoded });
+    const ctx = createCtx(tempDir, { credentialManager: cred.manager });
+
+    await handleSourceTest(ctx, { sourceSlug: 'legacy-basic', autoEnable: false });
+
+    expect(authHeader()).toBe(`Basic ${encoded}`);
+  });
+
+  it('non-JSON, non-base64 token → passed through unchanged (no throw)', async () => {
+    writeBasicAuthSource('garbage-basic');
+    const cred = makeCredentialManager({ cachedToken: 'not-json' });
+    const ctx = createCtx(tempDir, { credentialManager: cred.manager });
+
+    await handleSourceTest(ctx, { sourceSlug: 'garbage-basic', autoEnable: false });
+
+    expect(authHeader()).toBe('Basic not-json');
+  });
+});

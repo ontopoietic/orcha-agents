@@ -15,11 +15,11 @@
  */
 
 import { autoUpdater } from 'electron-updater'
-import { app } from 'electron'
+import { app, BrowserWindow } from 'electron'
 import { platform } from 'os'
 import * as path from 'path'
 import * as fs from 'fs'
-import { mainLog } from './logger'
+import { mainLog, autoUpdateLog } from './logger'
 import { getAppVersion } from '@craft-agent/shared/version'
 import {
   getDismissedUpdateVersion,
@@ -66,6 +66,19 @@ let eventSink: EventSink | null = null
 
 // Flag to indicate update is in progress — used to prevent force exit during quitAndInstall
 let __isUpdating = false
+
+// Hook fired immediately before quitAndInstall, while BrowserWindows still exist.
+// electron-updater destroys windows between quitAndInstall and before-quit firing,
+// so the regular before-quit save site would see an empty array.
+let beforeUpdateQuitHook: (() => void) | null = null
+
+/**
+ * Register a callback to run inside installUpdate() before quitAndInstall.
+ * Used by index.ts to snapshot multi-window state while windows are still alive.
+ */
+export function setBeforeUpdateQuitHook(fn: () => void): void {
+  beforeUpdateQuitHook = fn
+}
 
 /**
  * Check if an update installation is in progress.
@@ -136,7 +149,7 @@ autoUpdater.on('checking-for-update', () => {
 })
 
 autoUpdater.on('update-available', (info) => {
-  mainLog.info(`[auto-update] Update available: ${updateInfo.currentVersion} → ${info.version}`)
+  autoUpdateLog.info(`Update available: ${updateInfo.currentVersion} → ${info.version}`)
 
   // First, check electron-updater's internal state (most reliable)
   const internalState = checkElectronUpdaterState()
@@ -197,7 +210,7 @@ autoUpdater.on('download-progress', (progress) => {
 })
 
 autoUpdater.on('update-downloaded', async (info) => {
-  mainLog.info(`[auto-update] Update downloaded: v${info.version}`)
+  autoUpdateLog.info(`Update downloaded: v${info.version}`)
 
   updateInfo = {
     ...updateInfo,
@@ -214,7 +227,7 @@ autoUpdater.on('update-downloaded', async (info) => {
 })
 
 autoUpdater.on('error', (error) => {
-  mainLog.error('[auto-update] Error:', error.message)
+  autoUpdateLog.error('electron-updater error', error)
 
   updateInfo = {
     ...updateInfo,
@@ -350,7 +363,7 @@ export async function checkForUpdates(options: CheckOptions = {}): Promise<Updat
       }
     }
   } catch (error) {
-    mainLog.error('[auto-update] Check failed:', error)
+    autoUpdateLog.error('Update check failed', error)
     updateInfo = {
       ...updateInfo,
       downloadState: 'error',
@@ -377,7 +390,7 @@ export async function installUpdate(): Promise<void> {
     throw new Error('No update ready to install')
   }
 
-  mainLog.info('[auto-update] Installing update and restarting...')
+  autoUpdateLog.info('Installing update and restarting...')
 
   updateInfo = { ...updateInfo, downloadState: 'installing' }
   broadcastUpdateInfo()
@@ -388,13 +401,31 @@ export async function installUpdate(): Promise<void> {
   // Set flag to prevent force exit from breaking electron-updater's shutdown sequence
   __isUpdating = true
 
+  // Diagnostic correlation with before-quit's [update-flow] log. If these
+  // window counts diverge, electron-updater is destroying windows between
+  // here and before-quit firing — confirms the multi-window restore bug.
+  autoUpdateLog.info('installUpdate pre-quit', {
+    electronWindowCount: BrowserWindow.getAllWindows().length,
+    downloadState: updateInfo.downloadState,
+    latestVersion: updateInfo.latestVersion,
+  })
+
+  // Snapshot window state BEFORE quitAndInstall — electron-updater destroys
+  // BrowserWindows between this call and before-quit firing, so the regular
+  // before-quit save would clobber window-state.json with an empty array.
+  try {
+    beforeUpdateQuitHook?.()
+  } catch (err) {
+    autoUpdateLog.error('beforeUpdateQuit hook failed', err)
+  }
+
   try {
     // isSilent=false shows the installer UI on Windows if needed (fallback)
     // isForceRunAfter=true ensures the app relaunches after install
     autoUpdater.quitAndInstall(false, true)
   } catch (error) {
     __isUpdating = false
-    mainLog.error('[auto-update] quitAndInstall failed:', error)
+    autoUpdateLog.error('quitAndInstall failed', error)
     updateInfo = { ...updateInfo, downloadState: 'error' }
     broadcastUpdateInfo()
     throw error
@@ -418,11 +449,11 @@ export interface UpdateOnLaunchResult {
  */
 export async function checkForUpdatesOnLaunch(): Promise<UpdateOnLaunchResult> {
   if (FORK_AUTO_UPDATE_DISABLED) {
-    mainLog.info('[auto-update] Auto-update disabled in fork — skipping launch check')
+    autoUpdateLog.info('Auto-update disabled in fork — skipping launch check')
     return { action: 'none' }
   }
 
-  mainLog.info('[auto-update] Checking for updates on launch...')
+  autoUpdateLog.info('Checking for updates on launch...')
 
   const info = await checkForUpdates({ autoDownload: true })
 

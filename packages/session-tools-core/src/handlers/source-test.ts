@@ -152,7 +152,7 @@ export async function handleSourceTest(
   if (ctx.saveSourceConfig) {
     const updatedSource: SourceConfig = {
       ...source,
-      lastTestedAt: new Date().toISOString(),
+      lastTestedAt: Date.now(),
       connectionStatus,
       connectionError,
       // Fold enabled flip into the same save — one write, not two.
@@ -520,10 +520,24 @@ async function testApiConnectionWithAuth(
       // Generic OAuth tokens are sent as Bearer tokens
       headers['Authorization'] = `Bearer ${token}`;
       break;
-    case 'basic':
-      // Token for basic auth is already base64 encoded (user:pass)
+    case 'basic': {
+      // Vault value for source_basic is JSON `{"username","password"}` (written by
+      // source_credential_prompt / WebUI). Parse and base64-encode to match what
+      // api-tools.ts buildHeaders does at runtime. Fall through if the token is
+      // already a non-JSON string (legacy / hand-edited vault entries).
+      try {
+        const parsed = JSON.parse(token);
+        if (parsed && typeof parsed === 'object' && parsed.username && parsed.password) {
+          const encoded = Buffer.from(`${parsed.username}:${parsed.password}`).toString('base64');
+          headers['Authorization'] = `Basic ${encoded}`;
+          break;
+        }
+      } catch {
+        // Not JSON — pass through
+      }
       headers['Authorization'] = `Basic ${token}`;
       break;
+    }
     case 'header':
       // Custom header name
       if (source.api!.headerName) {
@@ -775,7 +789,8 @@ async function testMcpConnection(
       try {
         // Merge static headers with credential-store headers (if headerNames configured)
         let headers = source.mcp.headers ? { ...source.mcp.headers } : undefined;
-        if (source.mcp.headerNames?.length && ctx.credentialManager) {
+        let accessToken: string | undefined;
+        if (ctx.credentialManager) {
           const workspaceId = basename(ctx.workspacePath) || '';
           const loadedSource = {
             config: source,
@@ -783,14 +798,31 @@ async function testMcpConnection(
             workspaceRootPath: ctx.workspacePath,
             workspaceId,
           };
-          try {
-            const rawCred = await ctx.credentialManager.getToken(loadedSource);
-            if (rawCred) {
-              const parsed = JSON.parse(rawCred) as Record<string, string>;
-              headers = { ...headers, ...parsed };
+
+          if (source.mcp.headerNames?.length) {
+            // Multi-header credential — credential value is JSON keyed by header name.
+            try {
+              const rawCred = await ctx.credentialManager.getToken(loadedSource);
+              if (rawCred) {
+                const parsed = JSON.parse(rawCred) as Record<string, string>;
+                headers = { ...headers, ...parsed };
+              }
+            } catch {
+              // Not JSON or no credential — continue without credential headers
             }
-          } catch {
-            // Not JSON or no credential — continue without credential headers
+          } else if (source.mcp.authType === 'oauth' || source.mcp.authType === 'bearer') {
+            // OAuth / bearer single-token path — mirror the runtime so the probe
+            // sends an Authorization header. Cached token first, refresh fallback
+            // only on miss (matches checkAuthStatus and TokenRefreshManager).
+            try {
+              accessToken =
+                (await ctx.credentialManager.getToken(loadedSource)) ??
+                (await ctx.credentialManager.refresh(loadedSource)) ??
+                undefined;
+            } catch {
+              // Token resolution failed — fall through; the probe will surface
+              // the resulting `needsAuth` / 401 the same way it always has.
+            }
           }
         }
         const result = await ctx.validateMcpConnection({
@@ -798,6 +830,7 @@ async function testMcpConnection(
           transport: source.mcp.transport,
           authType: source.mcp.authType,
           headers,
+          accessToken,
         });
         if (result.success) {
           success = true;

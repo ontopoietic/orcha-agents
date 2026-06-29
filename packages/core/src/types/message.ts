@@ -64,7 +64,7 @@ export interface ToolDisplayMeta {
 /**
  * Attachment type categories
  */
-export type AttachmentType = 'image' | 'text' | 'pdf' | 'office' | 'unknown';
+export type AttachmentType = 'image' | 'text' | 'pdf' | 'office' | 'audio' | 'unknown';
 
 /**
  * Attachment preview for display in user messages (runtime, before storage)
@@ -467,6 +467,8 @@ export type ErrorCode =
   | 'image_too_large'        // Image exceeds API dimension/size limits
   | 'provider_error'         // AI provider experiencing issues (overloaded, unavailable)
   | 'queued_message_replay_failed'  // A message queued during an active turn could not be auto-replayed (#616)
+  | 'sdk_binary_missing'     // SDK subprocess binary not present on disk (incomplete bundle)
+  | 'sdk_cwd_missing'        // SDK subprocess cwd not present on disk (stale cross-machine import)
   | 'unknown_error';
 
 /**
@@ -543,7 +545,8 @@ export type AgentEvent =
   | { type: 'status'; message: string }
   | { type: 'info'; message: string }
   | { type: 'text_delta'; text: string; turnId?: string; parentToolUseId?: string }
-  | { type: 'text_complete'; text: string; isIntermediate?: boolean; turnId?: string; parentToolUseId?: string; sdkTurnAnchor?: string }
+  | { type: 'text_complete'; text: string; isIntermediate?: boolean; turnId?: string; parentToolUseId?: string; sdkMessageId?: string }
+  | { type: 'pi_turn_anchor'; sdkMessageId: string; sdkTurnAnchor: string }
   | { type: 'tool_start'; toolName: string; toolUseId: string; input: Record<string, unknown>; intent?: string; displayName?: string; turnId?: string; parentToolUseId?: string; toolDisplayMeta?: ToolDisplayMeta }
   | { type: 'tool_result'; toolUseId: string; toolName?: string; result: string; isError: boolean; input?: Record<string, unknown>; turnId?: string; parentToolUseId?: string }
   | {

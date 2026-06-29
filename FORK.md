@@ -8,8 +8,8 @@ Dieses Repository ist ein Fork von [lukilabs/craft-agents-oss](https://github.co
 |---|---|
 | **Upstream** | `https://github.com/lukilabs/craft-agents-oss.git` |
 | **Unser Remote** | `https://github.com/ontopoietic/orcha-agents.git` |
-| **Zuletzt gemerged** | v0.9.1 |
-| **Upstream-Stand** | v0.9.1 (aktuell) |
+| **Zuletzt gemerged** | v0.10.4 |
+| **Upstream-Stand** | v0.10.4 (aktuell) |
 | **Aktiver Branch** | `main` |
 | **Feature-Branch** | `feature/cross-session-recall` (Observer/Reflector/Recall — größter offener Block, → main, s. §6) |
 | **Sentry** | Deaktiviert (main + renderer) — kein Reporting |
@@ -213,39 +213,53 @@ Diese Änderungen liegen im separaten Repository `~/Developer/orcha/` und sind *
 | 2026-04-11 | v0.8.3+fork | v0.8.6 | 10 Konflikte (trivial: Branding+i18n Overlay) | Timo + Craft Agent |
 | 2026-04-17 | v0.8.7 | v0.8.9 | 8 Konflikte (Branding, i18n locales, Local-Connection-Gruppe) | Timo + Craft Agent |
 | 2026-05-06 | v0.8.9 | v0.9.1 | 12 Konflikte (channel-map-parity, Branding, i18n locales, electron-builder SDK-Pfad, runtime-resolver Refactor, pi-agent backendName, package.json Tiptap+ripgrep, FreeFormInput Local-Group). v0.9.0 Native-Binary SDK-Migration: build-dmg.sh erforderlich für SDK+ripgrep-Copy. Sentry-Import in InputErrorBoundary entfernt. Motivation: cold-session hydration fix `d5a31774` für UI-Freeze bei stale `api-error.json`. | Timo + Craft Agent |
+| 2026-06-29 | v0.9.1 | v0.10.4 | **Merge statt Rebase** (124 Fork-Commits → Rebase unpraktikabel). 15 direkte Merge-Konflikte + 1 semantischer Auto-Merge-Fehler. Gelöst: package.json×3 (pi-Paket-Rename, Tiptap∪vaul, Version+Branding), index.html (CSP+Titel), main.tsx (Sentry bleibt aus, i18n-Bootstrap übernommen), AiSettingsPage (Manifest-Logik + Orcha-Label), **AppMenu/TopBar Upstream-Rewrite** (→ neue `app-menu/{Desktop,Mobile}AppMenu.tsx`, Symbol rebranded), auto-update (`autoUpdateLog` + Fork-Guard), main/index.ts (Data-Dir §3 + i18n-Hydration), ChatPage (compactTitleMenu + SessionAnchorBar), AppShell (Ledger/Observations-SessionList + FAB additiv), FreeFormInput (Local-Group jetzt in Upstream-Helper `groupConnectionsByProvider`), claude-agent (Streaming-Gate + resolvedCwd + sourceActivationDrain additiv). **Semantik-Fix:** prompt-builder Memory-Block (§6) musste von `buildStableContextParts()` → `buildVolatileContextParts()` verschoben werden (Issue-#862-Cache-Split). nav-helpers.ts (neu, exhaustive switch) brauchte ledger/observations-cases. **Upstream-Highlights:** LLM-Connections-Feature + storage-migrations, pi-SDK-Scope `@mariozechner` → `@earendil-works` 0.79.9, neue i18n-Lint-Gates. Validierung: typecheck:all ✓, shared 3120/0, electron+co 1045/10 (alle 10 Fehler **auch auf pristine v0.10.4** = vorbestehend), i18n parity+sorted ✓, electron:build ✓ (Embedder 79M + observer-scripts gestaged). | Timo + Craft Agent |
 
 ---
 
 ## Upstream-Update-Anleitung
 
+> **Package Manager: `bun`, nicht `pnpm`.** Falls `bun` nicht im PATH ist: `export PATH="$HOME/.bun/bin:$PATH"`.
+> **Merge statt Rebase.** Bei >100 Fork-Commits ist ein Rebase (replay jedes Commits) unpraktikabel — ein Merge des Versions-Tags löst alle Konflikte in einem Durchgang.
+
 Bei einem neuen Upstream-Release:
 
 ```bash
-# 1. Upstream-Änderungen holen
-git fetch upstream
+# 1. Upstream-Änderungen holen (Remote ggf. einmalig hinzufügen)
+git remote add upstream https://github.com/lukilabs/craft-agents-oss.git  # nur beim ersten Mal
+git fetch upstream --tags
 
-# 2. Diff analysieren — was überschneidet sich mit unseren Dateien?
-git diff --name-only HEAD..upstream/main
+# 2. Konfliktkandidaten ermitteln: Schnittmenge aus "von uns geändert" × "upstream geändert"
+git diff --name-only <letzter-merge-tag> main      > /tmp/ours.txt
+git diff --name-only <letzter-merge-tag> vX.Y.Z    > /tmp/upstream.txt
+comm -12 <(sort /tmp/ours.txt) <(sort /tmp/upstream.txt)   # = manuell zu prüfende Dateien
 
-# 3. Rebase auf neue Version
-# Alle Branches die auf altem Upstream basieren updaten:
-git checkout main
-git rebase upstream/main
-# → Konflikte in den Berührungspunkten (s.o.) manuell lösen
+# 3. Sicherung + Arbeits-Branch, dann Merge (NICHT Rebase)
+git branch backup/main-<alte-version> main
+git checkout -b update/vX.Y.Z
+git merge --no-commit --no-ff vX.Y.Z
+# → Konflikte in den Berührungspunkten (s.o.) manuell lösen.
+#   Lockfiles nicht von Hand mergen: `git checkout vX.Y.Z -- bun.lock package.json && bun install`.
+#   ACHTUNG: textuell sauber auto-gemergte Dateien können semantisch brechen
+#   (z.B. unser Code referenziert einen Param, den ein Upstream-Refactor verschoben hat)
+#   → typecheck:all ist der eigentliche Konflikt-Detektor.
 
-# 4. Build verifizieren
-pnpm install
-pnpm build
+# 4. Build + Validierung verifizieren
+bun install
+bun run typecheck:all
+bun run lint:i18n:parity && bun run lint:i18n:sorted   # Branding-Overlay-Gates (blockierend)
+bun test packages/shared/                              # Memory/automations/anchors
+bun run electron:build                                 # Embedder-Staging + observer-scripts
 
-# 5. FORK.md aktualisieren (PFLICHT!)
-# - "Zuletzt gemerged" auf neue Version setzen
-# - "Upstream-Stand" auf "aktuell" setzen oder nächste ausstehende Version
-# - Update-Protokoll ergänzen
-# - Ggf. neue/entfernte Berührungspunkte anpassen
+# 5. FORK.md aktualisieren (PFLICHT!) — Versionen, Update-Protokoll, neue/entfernte Berührungspunkte
 
 # 6. Committen
-git add FORK.md
-git commit -m "chore: rebase auf upstream vX.Y.Z, FORK.md aktualisiert"
+git add -A && git commit   # Merge-Commit mit Konfliktlösung
 ```
 
 > **Wichtig:** `FORK.md` ist Teil des Update-Prozesses. Nach jedem Rebase/Merge muss sie den aktuellen Stand widerspiegeln. Ohne aktuelle `FORK.md` ist der nächste Update-Aufwand schwerer einzuschätzen.
+
+### Bekannte vorbestehende Upstream-Defekte (Stand v0.10.4)
+Diese Fehler existieren **im reinen Upstream v0.10.4** und sind NICHT durch unseren Fork/Merge verursacht — nicht versuchen, sie im Rahmen eines Updates zu „fixen":
+- `lint:i18n:coverage` / `validate:ci` brechen: `scripts/check-i18n-coverage.ts` wird in `package.json` referenziert, existiert aber nicht. Stattdessen `lint:i18n:parity` + `lint:i18n:sorted` einzeln laufen lassen.
+- 10 Testfehler (headless-Umgebung): 8× `BrowserPaneManager` (electron-Window-Tests), 2× `RPC handler registration` (rtk-Kanäle registriert aber nicht deklariert). Verifiziert: identisch auf pristine v0.10.4.

@@ -317,7 +317,7 @@ export interface DirectoryListingResult {
 // ---------------------------------------------------------------------------
 
 export interface FileAttachment {
-  type: 'image' | 'text' | 'pdf' | 'office' | 'unknown'
+  type: 'image' | 'text' | 'pdf' | 'office' | 'audio' | 'unknown'
   path: string
   name: string
   mimeType: string
@@ -346,6 +346,17 @@ export interface FileSearchResult {
 // LLM connection types
 // ---------------------------------------------------------------------------
 
+/**
+ * Resolved Anthropic OAuth identity (issue #838), captured from the
+ * token-exchange response. Shape mirrors `ClaudeOAuthIdentity` in
+ * `auth/claude-oauth.ts`; kept in the protocol layer so DTOs stay decoupled
+ * from the auth module. All fields optional and fail-soft.
+ */
+export interface ClaudeOAuthIdentityDto {
+  account?: { uuid?: string; emailAddress?: string }
+  organization?: { uuid?: string; name?: string }
+}
+
 export interface LlmConnectionSetup {
   slug: string
   credential?: string
@@ -368,6 +379,11 @@ export interface LlmConnectionSetup {
   awsRegion?: string
   /** Bedrock authentication method — determines auth type for Pi+Bedrock connections */
   bedrockAuthMethod?: 'iam_credentials' | 'environment'
+  /**
+   * Resolved Anthropic OAuth identity (issue #838), threaded through setup so it
+   * persists for both new and re-auth connections. Optional and fail-soft.
+   */
+  oauthIdentity?: ClaudeOAuthIdentityDto
 }
 
 export interface TestLlmConnectionParams {
@@ -522,6 +538,12 @@ export interface ClaudeOAuthResult {
   success: boolean
   token?: string
   error?: string
+  /**
+   * Resolved Anthropic identity (issue #838), forwarded to the renderer so it
+   * can thread it into the SETUP payload (which is what persists it). Present
+   * only when the token-exchange response carried identity.
+   */
+  identity?: ClaudeOAuthIdentityDto
 }
 
 // ---------------------------------------------------------------------------
@@ -579,6 +601,14 @@ export interface BrowserInstanceInfo {
   isVisible: boolean
   agentControlActive: boolean
   themeColor: string | null
+  /**
+   * Workspace that owns this browser instance, or `null` for unbound manual
+   * windows. Renderers filter the tab strip / status badge by `activeWorkspaceId`
+   * so a session in workspace A doesn't see windows opened by workspace B.
+   * Missing/null entries always pass the filter — this keeps older renderers
+   * and main processes that pre-date the field working unchanged.
+   */
+  workspaceId?: string | null
 }
 
 export interface DeepLinkNavigation {
