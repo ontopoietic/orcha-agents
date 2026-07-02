@@ -8,8 +8,8 @@ Dieses Repository ist ein Fork von [lukilabs/craft-agents-oss](https://github.co
 |---|---|
 | **Upstream** | `https://github.com/lukilabs/craft-agents-oss.git` |
 | **Unser Remote** | `https://github.com/ontopoietic/orcha-agents.git` |
-| **Zuletzt gemerged** | v0.10.4 |
-| **Upstream-Stand** | v0.10.4 (aktuell) |
+| **Zuletzt gemerged** | v0.10.5 |
+| **Upstream-Stand** | v0.10.5 (aktuell) |
 | **Aktiver Branch** | `main` |
 | **Feature-Branch** | `feature/cross-session-recall` (Observer/Reflector/Recall — größter offener Block, → main, s. §6) |
 | **Sentry** | Deaktiviert (main + renderer) — kein Reporting |
@@ -233,6 +233,7 @@ Diese Änderungen liegen im separaten Repository `~/Developer/orcha/` und sind *
 | 2026-04-17 | v0.8.7 | v0.8.9 | 8 Konflikte (Branding, i18n locales, Local-Connection-Gruppe) | Timo + Craft Agent |
 | 2026-05-06 | v0.8.9 | v0.9.1 | 12 Konflikte (channel-map-parity, Branding, i18n locales, electron-builder SDK-Pfad, runtime-resolver Refactor, pi-agent backendName, package.json Tiptap+ripgrep, FreeFormInput Local-Group). v0.9.0 Native-Binary SDK-Migration: build-dmg.sh erforderlich für SDK+ripgrep-Copy. Sentry-Import in InputErrorBoundary entfernt. Motivation: cold-session hydration fix `d5a31774` für UI-Freeze bei stale `api-error.json`. | Timo + Craft Agent |
 | 2026-06-29 | v0.9.1 | v0.10.4 | **Merge statt Rebase** (124 Fork-Commits → Rebase unpraktikabel). 15 direkte Merge-Konflikte + 1 semantischer Auto-Merge-Fehler. Gelöst: package.json×3 (pi-Paket-Rename, Tiptap∪vaul, Version+Branding), index.html (CSP+Titel), main.tsx (Sentry bleibt aus, i18n-Bootstrap übernommen), AiSettingsPage (Manifest-Logik + Orcha-Label), **AppMenu/TopBar Upstream-Rewrite** (→ neue `app-menu/{Desktop,Mobile}AppMenu.tsx`, Symbol rebranded), auto-update (`autoUpdateLog` + Fork-Guard), main/index.ts (Data-Dir §3 + i18n-Hydration), ChatPage (compactTitleMenu + SessionAnchorBar), AppShell (Ledger/Observations-SessionList + FAB additiv), FreeFormInput (Local-Group jetzt in Upstream-Helper `groupConnectionsByProvider`), claude-agent (Streaming-Gate + resolvedCwd + sourceActivationDrain additiv). **Semantik-Fix:** prompt-builder Memory-Block (§6) musste von `buildStableContextParts()` → `buildVolatileContextParts()` verschoben werden (Issue-#862-Cache-Split). nav-helpers.ts (neu, exhaustive switch) brauchte ledger/observations-cases. **Upstream-Highlights:** LLM-Connections-Feature + storage-migrations, pi-SDK-Scope `@mariozechner` → `@earendil-works` 0.79.9, neue i18n-Lint-Gates. Validierung: typecheck:all ✓, shared 3120/0, electron+co 1045/10 (alle 10 Fehler **auch auf pristine v0.10.4** = vorbestehend), i18n parity+sorted ✓, electron:build ✓ (Embedder 79M + observer-scripts gestaged). | Timo + Craft Agent |
+| 2026-07-02 | v0.10.4 | v0.10.5 | Trivial-Patch (Claude Sonnet 5 + SDK-Uplift 0.3.170→0.3.197). Nur 2 Konflikte: `apps/electron/package.json` (Version 0.10.5 + Orcha-Branding) und `bun.lock` (→ Upstream + `bun install`). Rest auto-gemergt (models.ts Sonnet 5, shared/package.json SDK-Peer 0.3.197, en.json). Validierung: typecheck:all ✓, shared 3125/0, i18n parity+sorted ✓. **Merke:** SDK-Uplift ändert das native `claude`-Binary → Post-Build-Copy (§4) mit neuem 0.3.197-Binary nötig. | Timo + Craft Agent |
 
 ---
 
