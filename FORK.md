@@ -121,12 +121,31 @@ Der `electron:dist:dev:mac` Build kopiert standardmäßig nicht alle Runtime-Dep
 - `packages/shared/src/agent/backend/internal/runtime-resolver.ts` — `+CRAFT_BUN` Env-Var Fallback für Dev-Mode ( Bun-Pfad )
 
 **Manuelle Post-Build-Schritte (nicht in Git):**
+
+Stand v0.10.4: `electron:dist:dev:mac` staged inzwischen `claude-agent-sdk` (Kern), `bun` und den Embedder **selbst**. Manuell nachzukopieren bleiben (`<app>` = `.../Orcha Agents.app`):
+
 ```bash
-# Nach jedem electron:dist:dev:mac:
-cp -R node_modules/@anthropic-ai/claude-agent-sdk "<app>/Contents/Resources/app/node_modules/@anthropic-ai/claude-agent-sdk"
-cp /Users/timokurz/.bun/bin/bun "<app>/Contents/Resources/app/vendor/bun/bun"
-cp -R packages/shared/src "<app>/Contents/Resources/app/packages/shared/src"
+APP="<app>/Contents/Resources/app"
+
+# 1. TS-Sources für den Pi-bun-Subprozess (runtime-resolver lädt sie zur Laufzeit)
+cp -R packages/shared/src "$APP/packages/shared/src"
+
+# 2. Natives Claude-Binary (~211 MB, SDK ≥ 0.2.113) — fehlt bei dev:mac, da NUR
+#    build-dmg.sh es staged. Resolver sucht zuerst den Alias-Pfad.
+#    Fehlt es → "Claude Agent SDK native binary not found. The app package may be corrupted."
+ditto node_modules/@anthropic-ai/claude-agent-sdk-darwin-arm64 \
+      "$APP/node_modules/@anthropic-ai/claude-agent-sdk-binary"
+chmod +x "$APP/node_modules/@anthropic-ai/claude-agent-sdk-binary/claude"
+
+# 3. ripgrep (aus @vscode/ripgrep seit SDK 0.2.113) — fehlt ebenfalls bei dev:mac
+ditto node_modules/@vscode/ripgrep "$APP/node_modules/@vscode/ripgrep"
+chmod +x "$APP/node_modules/@vscode/ripgrep/bin/rg"
+
+# 4. Quarantäne entfernen (unsignierter Build), sonst blockiert Gatekeeper
+xattr -dr com.apple.quarantine "<app>"
 ```
+
+> **Sauberer wäre:** `electron:dist` (statt `:dev:mac`) inkl. `build-dmg.sh` nutzen — das staged SDK-Binary + ripgrep + Bun automatisch in den `claude-agent-sdk-binary`-Alias. Die manuellen Schritte oben sind der Workaround für schnelle Dev-Builds.
 
 ### 5. ZAI Models
 Zusätzliche Modelle für den ZAI-Provider.
