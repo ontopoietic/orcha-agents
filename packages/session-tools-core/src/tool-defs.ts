@@ -40,6 +40,7 @@ import { handleSetSessionStatus } from './handlers/set-session-status.ts';
 import { handleGetSessionInfo } from './handlers/get-session-info.ts';
 import { handleRecall } from './handlers/recall.ts';
 import { handleListSessions } from './handlers/list-sessions.ts';
+import { handleListBackgroundTasks } from './handlers/list-background-tasks.ts';
 import { handleSendAgentMessage } from './handlers/send-agent-message.ts';
 import { handleListMessagingChannels, handleUnbindMessagingChannel } from './handlers/messaging.ts';
 
@@ -226,6 +227,10 @@ export const RecallSchema = z.object({
   semantic: z.boolean().optional().describe('search: set false to force plain word-overlap scoring instead of embedding similarity'),
   before: z.number().optional().describe('resolve: messages of context to include before the anchor message (default 2)'),
   after: z.number().optional().describe('resolve: messages of context to include after the anchor message (default 6)'),
+});
+
+export const ListBackgroundTasksSchema = z.object({
+  sessionId: z.string().optional().describe('Session ID to query. Omit to list background tasks for the current session.'),
 });
 
 // Inter-session messaging
@@ -494,14 +499,16 @@ Each anchor is { type, id, title? } — title is the snapshot displayed in the U
 
 Only set anchors when the connection to the artifact is explicit. Don't guess.`,
 
-  set_session_status: `Set the status of the current session or a specific session by ID (e.g., "todo", "in_progress", "done").
+  set_session_status: `Set the status of the current session or a specific session by ID (e.g., "todo", "in_progress").
 
-Use this to signal completion or trigger status-based automations (SessionStatusChange events).
-Omit sessionId to target the current session.`,
+Use this to reflect progress or trigger status-based automations (SessionStatusChange events).
+Omit sessionId to target the current session.
+
+IMPORTANT: never move a task into a closed status (such as "done" or "cancelled") yourself — closing a task is the user's decision, made on the board. You may prepare and hand off work by setting an open status like "needs-review"; the user reviews and closes it. Closed-status calls are rejected.`,
 
   get_session_info: `Get metadata about the current session or a specific session by ID.
 
-Returns labels, status, name, permission mode, and other details.
+Returns labels, status, name, permission mode, projectId (if the session is bound to a project), workingDirectory, and other details.
 Call with no arguments to introspect your own session state.`,
 
   list_sessions: `List sessions in the workspace. Returns total count + paginated results.
@@ -518,6 +525,19 @@ Two modes:
 - mode "resolve": pass a hit's sessionId + messageId (its messageRange.from) to page the raw original messages around it, when you need exact quotes, tool output, or chronology that the summary dropped.
 
 Anchor search is precise and explainable; text search is semantic (embedding similarity with word-overlap fallback). Prefer anchors when you know the artifact; use text for everything phrased differently than it was recorded.`,
+
+  list_background_tasks: `List background agents/tasks tracked for a session (running, finished, or orphaned).
+
+This is the authoritative way to answer a "what background work is running / what's the status?" question.
+It reads the main-process registry, which tracks tasks ACROSS turns — unlike the SDK's in-subprocess task tools,
+which only see tasks launched in the current subprocess and lose visibility of tasks from prior turns.
+
+Status meanings:
+- running: backgrounded and not yet reported finished.
+- completed / failed / stopped: a terminal notification was received.
+- orphaned: the turn that launched the task ended before it finished, so it was terminated with that turn's subprocess.
+
+Never guess or claim "the app restarted" — report exactly what this tool returns. Omit sessionId for the current session.`,
 
   send_agent_message: `Send a message to another session. The message is delivered with your session ID so the target can reply back.
 
@@ -603,6 +623,7 @@ export const SESSION_TOOL_DEFS: SessionToolDef[] = [
   { name: 'get_session_info', description: TOOL_DESCRIPTIONS.get_session_info, inputSchema: GetSessionInfoSchema, executionMode: 'registry', safeMode: 'allow', readOnly: true, handler: handleGetSessionInfo },
   { name: 'list_sessions', description: TOOL_DESCRIPTIONS.list_sessions, inputSchema: ListSessionsSchema, executionMode: 'registry', safeMode: 'allow', readOnly: true, handler: handleListSessions },
   { name: 'recall', description: TOOL_DESCRIPTIONS.recall, inputSchema: RecallSchema, executionMode: 'registry', safeMode: 'allow', readOnly: true, handler: handleRecall },
+  { name: 'list_background_tasks', description: TOOL_DESCRIPTIONS.list_background_tasks, inputSchema: ListBackgroundTasksSchema, executionMode: 'registry', safeMode: 'allow', readOnly: true, handler: handleListBackgroundTasks },
   // Inter-session messaging
   { name: 'send_agent_message', description: TOOL_DESCRIPTIONS.send_agent_message, inputSchema: SendAgentMessageSchema, executionMode: 'registry', safeMode: 'block', handler: handleSendAgentMessage },
   // Messaging gateway tools

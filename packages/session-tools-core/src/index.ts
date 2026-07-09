@@ -132,6 +132,8 @@ export type {
   ListSessionsResult,
   RecallToolArgs,
   RecallToolResult,
+  BackgroundTaskInfo,
+  SendAgentMessageResult,
   ResolvedLabelsResult,
   ResolvedStatusResult,
 } from './context.ts';

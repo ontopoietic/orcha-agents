@@ -22,7 +22,9 @@ import {
   handleSourcesChanged,
   handleLabelsChanged,
   handleAnchorsChanged,
+  handleProjectIdChanged,
   handleSessionStatusChanged,
+  handleSessionMetadataChanged,
   handleSessionFlagged,
   handleSessionUnflagged,
   handleSessionArchived,
@@ -105,6 +107,11 @@ export function processEvent(
       return { state: newState, effects: [] }
     }
 
+    case 'workflow_agent_completed':
+      // Live workflow fan-out progress — the chip counter is updated in App.tsx's
+      // handleBackgroundTaskEvent; nothing to change in message/session state here.
+      return { state, effects: [] }
+
     case 'complete':
       return handleComplete(state, event)
 
@@ -160,8 +167,14 @@ export function processEvent(
     case 'anchors_changed':
       return handleAnchorsChanged(state, event)
 
+    case 'project_id_changed':
+      return handleProjectIdChanged(state, event)
+
     case 'session_status_changed':
       return handleSessionStatusChanged(state, event)
+
+    case 'session_metadata_changed':
+      return handleSessionMetadataChanged(state, event)
 
     case 'session_flagged':
       return handleSessionFlagged(state, event)

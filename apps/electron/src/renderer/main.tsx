@@ -37,13 +37,14 @@ if (resolvedLanguage) {
 function CrashFallback({ error }: { error?: Error }) {
   return (
     <div className="flex flex-col items-center justify-center h-screen font-sans text-foreground/50 gap-3 p-8">
-      <p className="text-base font-medium">Something went wrong</p>
+      <p className="text-base font-medium">{i18n.t('crash.somethingWentWrong')}</p>
+      <p className="text-[13px]">{i18n.t('crash.restartPrompt')}</p>
       {error && <pre className="text-xs text-red-500 max-w-xl overflow-auto whitespace-pre-wrap">{error.message}{"\n"}{error.stack?.substring(0, 2000)}</pre>}
       <button
         onClick={() => window.location.reload()}
         className="mt-2 px-4 py-1.5 rounded-md bg-background shadow-minimal text-[13px] text-foreground/70 cursor-pointer"
       >
-        Reload
+        {i18n.t('crash.reload')}
       </button>
     </div>
   )
