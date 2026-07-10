@@ -101,6 +101,7 @@ import { AutomationSystem, createPromptHistoryEntry, appendAutomationHistoryEntr
 import { buildBackendRuntimeSignature, buildRestartRequiredSignature, filterAttachmentsForModelInput } from './runtime-config'
 import { buildSpawnedChildSessionOptions } from './spawn-child-session-options'
 import { buildChildSessionBackgroundTaskEntry } from './child-session-background-task-entry'
+import { buildChildSessionBackgroundedEvent, buildChildSessionCompletedEvent } from './child-session-backgrounded-event'
 
 // Import from server-core domain utilities
 import { sanitizeForTitle, shouldActivateBrowserOverlay, normalizeBrowserToolName, rollbackFailedBranchCreation, releaseBrowserOwnershipOnForcedStop } from '@craft-agent/server-core/domain'
@@ -4243,6 +4244,16 @@ export class SessionManager implements ISessionManager {
           buildChildSessionBackgroundTaskEntry(session, request, Date.now()),
         )
 
+        // ORCHA §bg-child-sessions — mirror the registration into the
+        // `task_backgrounded` event the renderer's ActiveTasksBar actually
+        // listens for (bg-child-visibility-01). Without this, the registry
+        // entry above makes `list_background_tasks` truthful but the running
+        // chip never appears.
+        this.sendEvent(
+          buildChildSessionBackgroundedEvent(managed.id, session, request),
+          managed.workspace.id,
+        )
+
         // Build FileAttachment[] from paths (if any)
         let fileAttachments: FileAttachment[] | undefined
         if (request.attachments?.length) {
@@ -6625,6 +6636,13 @@ export class SessionManager implements ISessionManager {
     if (registryEntry) {
       registryEntry.status = status
       registryEntry.completedAt = Date.now()
+
+      // Clear the running chip via the same terminal-status event path used
+      // by every other background task kind (bg-child-visibility-01).
+      this.sendEvent(
+        buildChildSessionCompletedEvent(parentId, evt.sessionId, status),
+        parent.workspace.id,
+      )
     }
   }
 

@@ -413,3 +413,81 @@ test sessions only, prefixed and disposable, in the real `my-workspace` workspac
   report at `specs/bg-child-sessions/qa-report.md`. Bring the merge question (see Open
   questions above) to the user, including the one confirmed defect and its scoped fix
   location, per swarm convention.
+
+## p5 running-chip fix (this session) — FIX ROUND, single bug
+
+Fixed the one QA-confirmed defect (bg-child-visibility-01): `onSpawnSession` registered
+the child in `backgroundTaskRegistry` but never emitted `task_backgrounded`, so
+`ActiveTasksBar` (driven by that event, not by the registry) never showed a running chip
+for `kind:'child-session'` tasks.
+
+### Done
+- New file `packages/server-core/src/sessions/child-session-backgrounded-event.ts` — two
+  pure builders, same extraction pattern as `child-session-background-task-entry.ts`:
+  - `buildChildSessionBackgroundedEvent(parentSessionId, session, request)` → the
+    `task_backgrounded` event (`kind:'child-session'`, `taskId` = child session id,
+    synthetic `toolUseId: spawn_session:<childId>` since spawn_session has no matching
+    transcript tool result to key off of).
+  - `buildChildSessionCompletedEvent(parentSessionId, childSessionId, status)` → the
+    `task_completed` event that clears the chip (matches by `taskId`).
+- `SessionManager.ts`:
+  - `onSpawnSession` (~line 4223): after `backgroundTaskRegistry.set(...)`, now also
+    calls `this.sendEvent(buildChildSessionBackgroundedEvent(...), managed.workspace.id)`.
+  - `notifyParentOnChildComplete` (~line 6620): after mirroring `registryEntry.status`,
+    now also calls `this.sendEvent(buildChildSessionCompletedEvent(...), parent.workspace.id)`
+    inside the existing `if (registryEntry)` guard.
+- DTO/type changes (widened union only, no new branches needed anywhere):
+  - `packages/shared/src/protocol/dto.ts`: `task_backgrounded`'s `kind?: 'workflow'` →
+    `kind?: 'workflow' | 'child-session'`.
+  - `apps/electron/src/renderer/event-processor/types.ts`: same widening on
+    `TaskBackgroundedEvent.kind`.
+- **Renderer components untouched** — verified `ActiveTasksBar.tsx`/`TaskActionMenu.tsx`
+  are generic over `BackgroundTask` and don't branch on `kind`; `App.tsx`'s
+  `handleBackgroundTaskEvent` only branches on `kind === 'workflow'` (for the fan-out
+  counter), so `kind:'child-session'` falls through to `type:'agent'` and renders
+  automatically once the event exists. Confirms the QA root-cause note ("multi-file fix
+  needed") — turned out to be emission-only; renderer already handled the shape.
+  `BackgroundTask.type` union was NOT extended (smallest diff — 'agent' badge label is
+  fine; `intent` still carries the child name as the chip's display label).
+- Tests: extended `packages/server-core/src/sessions/bg-child-visibility.test.ts` (not a
+  new file — this is where bg-child-visibility-01/03 already lived):
+  - 3 new pure-builder tests (event shape, intent-omitted case, taskId-matching case).
+  - 1 new integration test asserting `notifyParentOnChildComplete` actually calls
+    `sendEvent` with a `task_completed` whose `taskId`/`sessionId` match (spies on the
+    private `sendEvent`, same cast pattern the file already uses for `sendMessage`).
+  - Did NOT add an integration test for the `onSpawnSession` emission itself — reaching
+    it requires a real `managed.agent` wiring (same reason the pre-existing
+    `buildChildSessionBackgroundTaskEntry` test only covers the builder, not the call
+    site); covered by the pure-builder test instead.
+
+### Gates (all green)
+- `(cd packages/server-core && bun run typecheck)` — 0 errors
+- `(cd packages/shared && bun run tsc --noEmit)` — 0 errors
+- `(cd apps/electron && bun run typecheck)` — 0 errors
+- `(cd packages/server-core && bun test src/sessions)` — 125 pass, 0 fail (18 files)
+- New tests specifically: `bun test src/sessions/bg-child-visibility.test.ts` — 14 pass, 0 fail
+
+### Files changed (exactly these 5 — conductor needs to rebuild for re-verify)
+- `packages/server-core/src/sessions/child-session-backgrounded-event.ts` (new)
+- `packages/server-core/src/sessions/SessionManager.ts` (server-core — main process)
+- `packages/server-core/src/sessions/bg-child-visibility.test.ts` (tests only)
+- `packages/shared/src/protocol/dto.ts` (shared type)
+- `apps/electron/src/renderer/event-processor/types.ts` (**renderer** — type-only change,
+  no component logic touched)
+
+**Renderer files DID change** (`apps/electron/src/renderer/event-processor/types.ts`), so
+the conductor must rebuild both `main.cjs` (server-core/electron-main consumes the
+SessionManager + shared changes) AND the renderer bundle before re-verifying live. The
+renderer change is a type-union widening only — no `ActiveTasksBar`/`App.tsx`/component
+logic was touched — but it's still renderer source, so skipping the renderer rebuild
+would silently test stale bundle code.
+
+### Open questions
+- None. Single-bug fix round, scope held exactly to bg-child-visibility-01.
+
+### Next
+- Conductor: rebuild (main + renderer per above), re-run QA scenario
+  bg-child-visibility-01 live (spawn a notify-on-complete child, confirm a running chip
+  appears above the parent's input with the child's name, confirm it clears/goes terminal
+  on completion). If it passes, this was the only outstanding defect from the QA report —
+  ready for the merge decision.

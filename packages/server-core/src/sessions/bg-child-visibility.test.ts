@@ -4,6 +4,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { SessionManager, createManagedSession, type SessionCompletionEvent } from './SessionManager.ts'
 import { buildChildSessionBackgroundTaskEntry } from './child-session-background-task-entry.ts'
+import { buildChildSessionBackgroundedEvent, buildChildSessionCompletedEvent } from './child-session-backgrounded-event.ts'
 
 // bg-child-visibility: background child sessions are tracked in the parent's
 // backgroundTaskRegistry so the existing chip UI / list_background_tasks
@@ -22,6 +23,38 @@ describe('bg-child-visibility-01: buildChildSessionBackgroundTaskEntry (spawn-si
     expect(entry.status).toBe('running')
     expect(entry.kind).toBe('child-session')
     expect(entry.startTime).toBe(1000)
+  })
+})
+
+describe('bg-child-visibility-01: task_backgrounded/task_completed event shapes (running-chip fix)', () => {
+  it('buildChildSessionBackgroundedEvent carries kind:child-session so the renderer chip can render it', () => {
+    const event = buildChildSessionBackgroundedEvent('parent-1', { id: 'child_abc' }, { name: 'research-competitors' })
+
+    expect(event).toEqual({
+      type: 'task_backgrounded',
+      sessionId: 'parent-1',
+      toolUseId: 'spawn_session:child_abc',
+      taskId: 'child_abc',
+      kind: 'child-session',
+      intent: 'research-competitors',
+    })
+  })
+
+  it('buildChildSessionBackgroundedEvent omits intent when the child has no name', () => {
+    const event = buildChildSessionBackgroundedEvent('parent-1', { id: 'child_abc' }, {})
+
+    expect(event).not.toHaveProperty('intent')
+  })
+
+  it('buildChildSessionCompletedEvent matches the task_backgrounded taskId so the chip can find and clear it', () => {
+    const event = buildChildSessionCompletedEvent('parent-1', 'child_abc', 'completed')
+
+    expect(event).toEqual({
+      type: 'task_completed',
+      sessionId: 'parent-1',
+      taskId: 'child_abc',
+      status: 'completed',
+    })
   })
 })
 
@@ -152,6 +185,38 @@ describe('bg-child-visibility-02/03/04: registry lifecycle in SessionManager', (
     expect(['completed', 'failed']).toContain(entry.status)
     expect(entry.status).not.toBe('running')
     expect(entry.completedAt).toBeGreaterThan(0)
+  })
+
+  it('bg-child-visibility-01: child completion emits task_completed so the running chip clears (not just the registry)', async () => {
+    const parent = buildParent('parent-2e')
+    buildChild('child-2e', 'parent-2e', 'finishes-visibly')
+    registerChildTask(parent, 'child-2e', { kind: 'child-session' })
+    ;(sm as unknown as {
+      sendMessage: (id: string, msg: string, ...rest: unknown[]) => Promise<void>
+    }).sendMessage = async () => {}
+    const sentEvents: unknown[] = []
+    ;(sm as unknown as {
+      sendEvent: (event: unknown, workspaceId?: string) => void
+    }).sendEvent = (event) => { sentEvents.push(event) }
+
+    const evt: SessionCompletionEvent = {
+      sessionId: 'child-2e',
+      workspaceId: 'ws_test',
+      reason: 'complete',
+      finalText: 'done',
+    }
+    await (sm as unknown as { emitSessionComplete: (e: SessionCompletionEvent) => void }).emitSessionComplete(evt)
+    await Promise.resolve()
+    await Promise.resolve()
+
+    const completedEvent = sentEvents.find(
+      (e): e is { type: string; taskId: string; sessionId: string; status: string } =>
+        typeof e === 'object' && e !== null && (e as { type?: string }).type === 'task_completed'
+    )
+    expect(completedEvent).toBeDefined()
+    expect(completedEvent!.taskId).toBe('child-2e')
+    expect(completedEvent!.sessionId).toBe('parent-2e')
+    expect(['completed', 'failed']).toContain(completedEvent!.status)
   })
 
   it('bg-child-visibility-04: terminal child-session entries older than the 1h retention window are evicted', () => {
