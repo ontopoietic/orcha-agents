@@ -302,3 +302,67 @@ bug in the background-execution model itself. Recommend:
 either merge with this logged as a fast-follow, or route back to coder/cleaner for the
 scoped fix identified above before merge — a call for the user, not for QA to make
 unilaterally.
+
+---
+
+## p5 verify — mini-verify of the running-chip fix (commit `529d94a7`)
+
+QA session: `260710-gentle-gorge`. Scope: **not** a full suite re-run — verified exactly
+the fix from `.swarm/checkpoint.md` § "p5 running-chip fix" against the previously
+confirmed defect (bg-child-visibility-01) plus a quick regression glance at -03.
+Packaged Electron app relaunched from the `529d94a7` build (confirmed live: `main.cjs`
+contains 4 occurrences of `task_backgrounded`; renderer `assets/` bundle contains
+`child-session`), CDP on `127.0.0.1:9333`, all interaction through the UI (DOM
+click/insertText via `Runtime.evaluate`, no project API). Own test session
+`260710-tall-bay` (auto-titled "Background Session Spawning" from the first prompt;
+`QA-P5:` was the literal prompt-text prefix used per the mandate), two children spawned
+in it: `260710-calm-aspen` (Bun.sh summary) and `260710-quiet-coral` (TCP history
+summary).
+
+### bg-child-visibility-01 — **PASS** (previously FAIL, now fixed)
+
+Second spawn (`TCP history summary`, deliberately given a longer research prompt to
+widen the observation window) polled at 2s intervals via `document.querySelectorAll`
+over the live DOM:
+
+| t (wall) | Observed chip state |
+|---|---|
+| 2s–9s | `button[title="Click for task actions"]` textContent `"TaskTCP history summary" + <elapsed>` (2s → 4s → 6s → 9s) — **running chip, visible above the input, elapsed counter live** |
+| 11s | Child completes; `list_background_tasks`-independent terminal `BackgroundFinishedChip` (`title="TCP history summary — Finished in the background"`) appears *alongside* the still-present running chip |
+| 13s–18s | Running chip persists briefly post-completion (elapsed frozen), both chips coexist |
+| 18s (next poll) | Running chip text flips to `"TaskTCP history summarydone"` — terminal state received |
+| 26s+ | Running chip **gone** from DOM; only the `BackgroundFinishedChip` remains |
+
+This is the exact `task_backgrounded` → running-chip → `task_completed` → clear
+lifecycle the checkpoint note describes. Root cause from the prior QA pass (`spawn_session`
+never emitted `task_backgrounded`, so `ActiveTasksBar` never saw `kind:'child-session'`
+tasks) is confirmed fixed: the chip now renders live while the child runs and clears on
+terminal state, matching bg-child-visibility-01's `Then` clauses in full (both the
+running-chip half and the clear-on-terminal half, which -01 also specifies).
+
+### bg-child-visibility-03 regression — **PASS** (still passing, quick glance)
+
+`BackgroundFinishedChip` (`title="TCP history summary — Finished in the background"` /
+`"Bun.sh summary — Finished in the background"`) still appears correctly for both
+completed children — unaffected by the fix, as expected (it's a separate mechanism from
+`ActiveTasksBar`).
+
+### Regression glance — exactly-once `background_result` delivery
+
+On-disk transcript (`~/.orcha-agents/workspaces/my-workspace/sessions/260710-tall-bay/session.jsonl`)
+checked for `background_result` occurrences: exactly 2 total, one per spawned child, each
+with a distinct `childSessionId` and `status="completed"`:
+```
+("Bun.sh summary", "260710-calm-aspen", "completed")
+("TCP history summary", "260710-quiet-coral", "completed")
+```
+No duplicate/missing deliveries — exactly-once holds per child, consistent with the
+already-PASS bg-child-result-01/-02.
+
+### Verdict
+
+**PASS.** The only outstanding defect from the original QA report (bg-child-visibility-01)
+is fixed and verified live; no regression on the adjacent -03 scenario or on
+exactly-once result delivery. Combined with the rest of `qa-report.md` above (unchanged
+by this fix, per the checkpoint's "exactly these 5 files" scope), the feature is now
+**ready for the merge decision with no known open defects.**

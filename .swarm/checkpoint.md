@@ -491,3 +491,26 @@ would silently test stale bundle code.
   appears above the parent's input with the child's name, confirm it clears/goes terminal
   on completion). If it passes, this was the only outstanding defect from the QA report —
   ready for the merge decision.
+
+## p5 verify (this session) — MINI-VERIFY, PASS
+
+Mini-verify of exactly the p5 fix (commit `529d94a7`), per conductor mandate — not a
+full QA re-run. Verified live against the packaged app (CDP `127.0.0.1:9333`), own
+session `260710-tall-bay` (two children: `260710-calm-aspen`, `260710-quiet-coral`).
+
+### Done
+- bg-child-visibility-01: **PASS**. Polled DOM every 2s during a running child — running
+  chip (`"Click for task actions"`, elapsed counter 2s→18s) visible above the input
+  while running, flips to `"...done"` on completion, clears from DOM ~8s later. Full
+  detail + evidence table in `specs/bg-child-sessions/qa-report.md` § "p5 verify".
+- bg-child-visibility-03 regression: PASS, unaffected (separate `BackgroundFinishedChip`
+  mechanism).
+- Exactly-once `background_result`: PASS, 2 children → 2 results, no dupes/misses.
+
+### Next
+- No known open defects for bg-child-sessions. Ready for conductor's merge decision —
+  no further QA work needed unless the user requests deferred/NOT-RUN scenarios
+  (keepalive-01/-04, result-01-failed, result-03 busy-parent, visibility-04) be covered.
+
+### Open questions
+- None.
