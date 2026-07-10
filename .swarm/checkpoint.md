@@ -335,3 +335,81 @@ in `claude-agent.ts`, not touched by this hardening pass).
   sessions-annotations}.isolated.ts`) is unrelated to this feature and was left untouched,
   but any prior "all green" claim that implicitly relied on one of those files running is
   worth re-checking.
+
+## QA pass (this session) — final independent verification
+
+Full report: `specs/bg-child-sessions/qa-report.md`. Ran live against the packaged
+Electron app (fork build at `180dff79`) via CDP UI-driving — no project API. Own
+test sessions only, prefixed and disposable, in the real `my-workspace` workspace.
+
+### Done
+- **Priority 1 (bg-child-keepalive-02/-03) — PASS, both, with strong live evidence.**
+  Testability gap found and worked around: the Mastra observer's token-trigger needs
+  ~96KB raw transcript growth at its default threshold (bytes/4 heuristic) to fire —
+  incompatible with a minimal-prompt QA budget. Relaunched the app with
+  `ORCHA_OBSERVER_THRESHOLD_TOKENS=300` (a legitimate launch-env affordance, same class
+  as `ORCHA_STREAMING_MODE`, unrelated to this feature's own code) to make the mechanism
+  observable cheaply. `meta/context-trace.jsonl` then showed the exact expected
+  signature: `replacement:true`, `sdkResume:false`, `inputTokens` dropping/plateauing
+  (39609 → ~31000) instead of continuing its prior linear growth. Full keepalive-03 E2E
+  chain (background prompt → child → turn ends → 2 more turns, context non-monotonic →
+  exactly one `background_result` → observation ledger entry naming the task) all
+  confirmed in one session (`260710-early-silver`).
+- **Priority 2 (bg-child-routing-01) — PASS.** Forced the actual PreToolUse gate (agent
+  explicitly told to call `Agent(run_in_background:true)`): denied with exact deny
+  reason naming `spawn_session` → agent self-rerouted via `spawn_session` in the SAME
+  turn → child created before turn end → turn ended normally → result delivered next
+  turn. Note: left to its own judgment the model often calls `spawn_session` directly
+  (bypassing the gate) since it's a first-class tool — both are intended behaviors, but
+  only forced Agent/Task calls exercise the gate itself.
+- **Priority 3 (bg-child-visibility-01/-03) — visibility-03 PASS; visibility-01
+  PARTIAL/FAIL.** `list_background_tasks` introspection correctly reports
+  `status:"running", kind:"child-session"` for genuinely running children — that half
+  passes. **The running-state UI chip never renders** for `kind:'child-session'` tasks
+  (confirmed via ~40s+ of live DOM polling across two separate running children) — only
+  a terminal `BackgroundFinishedChip` shows, and only after completion.
+- **Root cause found (not fixed):** `SessionManager.ts`'s `onSpawnSession` (~line 4223)
+  registers into `backgroundTaskRegistry` (drives `list_background_tasks`) but never
+  emits a `task_backgrounded` event (drives the renderer's `ActiveTasksBar`, the actual
+  running-chip component — separate from the terminal-only `BackgroundFinishedChip`).
+  `task_backgrounded` is only emitted for `Task`/`Agent`/`Workflow` tool calls via
+  signature-scanning in `packages/shared/src/agent/tool-matching.ts`; `spawn_session`
+  was never wired into that path. This directly contradicts
+  `bg-child-visibility.feature` scenario 01's explicit running-chip requirement — a
+  genuine gap against the accepted spec, not a flaky timing issue. Renderer files
+  involved (`App.tsx`, `ActiveTasksBar.tsx`, `atoms/sessions.ts`) have zero commits on
+  this branch — pre-existing generic code the feature never finished wiring into.
+- **Not fixed this session** — minimal correct fix touches the shared DTO (`kind` union
+  needs `'child-session'` added, currently `'workflow'`-only), `SessionManager.ts` (emit
+  the event from `onSpawnSession`), and renderer state (`ActiveTasksBar` kind handling)
+  — multi-file, needs an app rebuild to re-verify live. Not the single-site "minimal QA
+  fix" the checkpoint-discipline gate scopes QA-owned fixes to. Escalating instead.
+- Result-feedback, exactly-once delivery, truncation-with-pointer, and observation
+  recording all independently reconfirmed as a side effect of the E2E runs above (PASS
+  on bg-child-result-01/02/04/05/06). Context inheritance (model, permissionMode,
+  enabledSourceSlugs, parentSessionId) confirmed by diffing parent/child
+  `session.jsonl` headers (PASS on bg-child-routing-03/04).
+- Remaining gate-matrix rows (routing-02 b/c/d, routing-06, keepalive-01/-04) NOT-RUN at
+  UI level — each needs a full app relaunch with different launch env vars, not
+  attempted given budget after the above. High confidence carried over from the
+  hardener's unit/mutation coverage (100% kill rates on the relevant blocks).
+  bg-child-result-01(failed)/QA-F-3 and QA-F-2 (busy-parent) also NOT-RUN — attempted
+  the failed-child case but the child agent gracefully absorbed the induced error
+  instead of hitting the SDK-level `"failed"` terminal status; busy-parent case never
+  got a chance to fire since every background task in this pass completed in under a
+  minute. bg-child-visibility-04 (1h+ retention) NOT-RUN, infeasible in-session.
+
+### Open questions
+- **For conductor/user (merge decision):** the running-chip gap (bg-child-visibility-01)
+  is real and spec-contradicting, but scoped to visibility/polish — the task is fully
+  and correctly tracked via `list_background_tasks` throughout its lifecycle; only the
+  live visual indicator is missing (a retroactive "finished" chip does appear).
+  Recommend either merging with this logged as a fast-follow, or routing back to
+  coder/cleaner for the scoped fix (see root-cause notes above) before merge. Not a
+  data-loss or correctness defect in the background-execution model itself.
+
+### Next
+- Conductor: QA pass complete, all priority items covered with live evidence. Full
+  report at `specs/bg-child-sessions/qa-report.md`. Bring the merge question (see Open
+  questions above) to the user, including the one confirmed defect and its scoped fix
+  location, per swarm convention.
