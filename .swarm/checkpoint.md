@@ -68,3 +68,39 @@
 
 ### Open questions
 - None blocking.
+
+---
+
+## Phase 3 (Registry/UI Visibility) — done
+
+### Done
+- All 4 scenarios in `specs/bg-child-sessions/bg-child-visibility.feature` implemented and unit-tested.
+- **Bug found and fixed**: `markOrphanedBackgroundTasks` (SessionManager.ts, turn-end sweep) orphaned *every* `status:'running'` registry entry regardless of `kind`, including `kind:'child-session'` ones — violating bg-child-visibility-02 (a child session's own subprocess/turn lifecycle is independent of the parent's, so it must not be orphaned when the parent's turn ends). Fixed with a `info.kind !== 'child-session'` guard in the sweep loop.
+- Validated the rest of the phase-3 surface, which was already correct as inherited WIP:
+  - Spawn-site registration (`onSpawnSession` closure, ~line 4238): sets `{taskId: session.id, intent: request.name, startTime, status:'running', kind:'child-session'}`. `intent` *is* the label field — `BackgroundTaskInfo`/chip UI read `intent`, not a separate `label` (session-tools-core/src/context.ts:562). Extracted the literal into a new pure `buildChildSessionBackgroundTaskEntry(session, request, now)` in `packages/server-core/src/sessions/child-session-background-task-entry.ts` (same spirit as phase-1's `buildSpawnedChildSessionOptions`) purely so bg-child-visibility-01's shape assertions are unit-testable without instantiating a full agent — behavior unchanged.
+  - Terminal-status mirroring (bg-child-visibility-03): already existed inline at the tail of `notifyParentOnChildComplete` (SessionManager.ts ~line 6621, flagged by phase 2's checkpoint) — validated with a new test, correct as-is.
+  - Retention cleanup (bg-child-visibility-04): `evictStaleBackgroundTasks` doesn't discriminate by `kind` at all — terminal child-session entries are swept by the same 1h-old rule as everything else. Confirmed via `listBackgroundTasks` (lazy eviction on read). No changes needed.
+- New test file `packages/server-core/src/sessions/bg-child-visibility.test.ts` (7 tests):
+  - 01: table test over `buildChildSessionBackgroundTaskEntry` — both example rows (research-competitors, summarize-repo) — asserts taskId/intent/status/kind/startTime.
+  - 02: `markOrphanedBackgroundTasks` called directly (same seam-casting pattern as other phase tests) — a `kind:'child-session'` running entry stays `running`/no `completedAt`; a `kind:'in-query'` running entry in the same registry still gets orphaned (guards against a blanket "never orphan anything" over-fix).
+  - 02b: `listBackgroundTasks` after the sweep reports the child entry with `status:'running'`, no `orphaned` anywhere.
+  - 03: fires `emitSessionComplete` (same seam phase 2's tests use) with a pre-registered `running` entry present — asserts the registry entry flips to a terminal status (`completed`/`failed`) with `completedAt` set.
+  - 04: a terminal `child-session` entry with `completedAt` 2h in the past is evicted by `listBackgroundTasks`.
+  - 04b: same but 5 min in the past — kept (guards against an off-by-everything "evict all terminal entries" mistake).
+
+### Gates
+- `cd packages/server-core && bun run typecheck` → 0 errors.
+- `cd packages/shared && bun run tsc --noEmit` → 0 errors.
+- `bun test src/sessions/bg-child-visibility.test.ts` → 7 pass, 22 expect() calls.
+- `bun test src/sessions` (full sessions dir, regression sweep) → 107 pass, 0 fail, 218 expect() calls, 18 files — no regressions from the orphan-sweep fix or new files.
+
+### Tried & rejected
+- Considered testing bg-child-visibility-01 by driving the full `onSpawnSession` closure (real `createSession` + real agent wiring). Rejected: that closure only exists after `managed.agent` is lazily instantiated, which pulls in far more machinery than this phase owns (same reasoning phase 1 used for `buildSpawnedChildSessionOptions`) — extracted the pure entry-building literal instead, byte-for-byte same shape.
+- Considered just documenting the orphan-sweep bug as an "open question" for QA to catch later instead of fixing it now. Rejected: the task's own definition-of-done explicitly calls out "check the orphan-sweep logic excludes kind 'child-session'" as this phase's job, and leaving a known bg-child-visibility-02 violation in place would make the phase's own tests either fail or (worse) pass by asserting the bug.
+
+### Next
+- Conductor: spawn coder · p4/4 (keep-alive resolution in `claude-agent.ts`). Per phase-1's open question (still unresolved): `resolveKeepBackgroundTasksAlive() && !isStreamingModeEnabled()` in `claude-agent.ts` already typechecks and its own test (`keep-alive lifecycle matrix` in `bg-child-sessions.test.ts`) already passes as inherited WIP — worth the phase-4 coder confirming independently against phase 4's own spec/scenarios rather than assuming done, same as phases 1-3 each had to validate their inherited WIP instead of trusting it blind.
+- No known phase-3 loose ends. Chip UI itself needs no new code (per the fixed design decision) — `RunningBackgroundTask`/`BackgroundTaskInfo` shapes already carry everything ActiveTasksBar/list_background_tasks need; scenario 01's actual chip-rendering assertion is explicitly QA's job (E2E), not this phase's.
+
+### Open questions
+- None blocking.

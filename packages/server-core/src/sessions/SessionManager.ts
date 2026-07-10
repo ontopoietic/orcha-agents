@@ -100,6 +100,7 @@ import { loadStatusConfig } from '@craft-agent/shared/statuses/storage'
 import { AutomationSystem, createPromptHistoryEntry, appendAutomationHistoryEntry, type AutomationSystemMetadataSnapshot } from '@craft-agent/shared/automations'
 import { buildBackendRuntimeSignature, buildRestartRequiredSignature, filterAttachmentsForModelInput } from './runtime-config'
 import { buildSpawnedChildSessionOptions } from './spawn-child-session-options'
+import { buildChildSessionBackgroundTaskEntry } from './child-session-background-task-entry'
 
 // Import from server-core domain utilities
 import { sanitizeForTitle, shouldActivateBrowserOverlay, normalizeBrowserToolName, rollbackFailedBranchCreation, releaseBrowserOwnershipOnForcedStop } from '@craft-agent/server-core/domain'
@@ -4235,13 +4236,12 @@ export class SessionManager implements ISessionManager {
         // background task registry so the existing chip UI and
         // list_background_tasks report it truthfully (kind: 'child-session'
         // distinguishes it from in-query background tasks for the UI).
-        managed.backgroundTaskRegistry.set(session.id, {
-          taskId: session.id,
-          intent: request.name,
-          startTime: Date.now(),
-          status: 'running',
-          kind: 'child-session',
-        })
+        // Shape is built by buildChildSessionBackgroundTaskEntry so it's
+        // unit-testable in isolation (bg-child-visibility-01).
+        managed.backgroundTaskRegistry.set(
+          session.id,
+          buildChildSessionBackgroundTaskEntry(session, request, Date.now()),
+        )
 
         // Build FileAttachment[] from paths (if any)
         let fileAttachments: FileAttachment[] | undefined
@@ -6938,6 +6938,12 @@ export class SessionManager implements ISessionManager {
    *
    * No-op once WS2 keep-alive is enabled: with a persistent query the tasks
    * genuinely outlive the turn, so `keepBackgroundTasksAlive` short-circuits this.
+   *
+   * ORCHA §bg-child-sessions — `kind: 'child-session'` entries are exempt
+   * (bg-child-visibility-02): a child session is its own independent
+   * ManagedSession with its own subprocess/turn lifecycle, so it does not die
+   * when the *parent's* turn/subprocess is torn down. Only in-query background
+   * tasks (which share the parent's subprocess) can be orphaned by this sweep.
    */
   private markOrphanedBackgroundTasks(sessionId: string): void {
     if (this.keepBackgroundTasksAlive) return
@@ -6946,7 +6952,7 @@ export class SessionManager implements ISessionManager {
     const now = Date.now()
     let orphaned = 0
     for (const info of managed.backgroundTaskRegistry.values()) {
-      if (info.status === 'running') {
+      if (info.status === 'running' && info.kind !== 'child-session') {
         info.status = 'orphaned'
         info.completedAt = now
         orphaned++
