@@ -187,3 +187,151 @@
 - **For conductor/architect:** disposition of `unsubscribeChildCompletionWatcher` — escalated
   above, needs a decision (leave as-is vs. design a `SessionManager` dispose lifecycle).
   Non-blocking for merge either way.
+- **Conductor decision (this session):** leave `unsubscribeChildCompletionWatcher` as-is,
+  non-blocking. Not touched.
+
+## Hardener pass (this session) — mutation hardening
+
+### Tooling
+- Procured **Stryker** (`@stryker-mutator/core@9.6.1`) as a devDependency in both
+  `packages/shared` and `packages/server-core` (well within the 15-minute timebox — no
+  fallback to manual mutation needed).
+- **Bun-monorepo caveat (document for future hardener runs):** a Stryker sandbox rooted
+  *inside* `packages/server-core` cannot resolve `@craft-agent/shared/*` subpath imports —
+  bun's `hoisted` linker only symlinks workspace packages into the **repo-root**
+  `node_modules`, not into each package's own `node_modules`. Fix: run Stryker from the
+  **repo root** (`./node_modules/.bin/stryker run`) with `mutate` globs pointing at
+  `packages/server-core/src/...` paths and `commandRunner.command` doing `cd
+  packages/server-core && bun test ...`. `packages/shared` itself has no such cross-package
+  imports in the mutated files, so its sandbox worked fine from within the package.
+  Config files were scratch (not committed) — recreate from this note if resuming:
+  `mutate: ["packages/server-core/src/sessions/SessionManager.ts:6566-6629", ...]` (Stryker
+  supports `file:startLine-endLine` range syntax, used throughout to stay inside the
+  feature's added ranges per the mutation-scope mandate).
+
+### Real gap found: the Step-0 gate's own test suite never runs
+`pre-tool-use-checks.isolated.ts` (1332 lines) is the dedicated test suite for
+`runPreToolUseChecks()`, including the bg-child-routing-02 gate matrix. Its `.isolated.ts`
+naming (a pre-existing, repo-wide convention — 5 files total, this one dates to v0.5.0, long
+before this feature) deliberately excludes it from bun's default `*.test.ts` discovery,
+because it uses module-level `mock.module()` overrides that would leak into other test files
+if run in the same process. **Nothing else runs it either** — confirmed via `bun test
+./path/to/file.isolated.ts` (explicit path) vs `bun test src/agent/core` (glob discovery):
+125 pass either way from the glob command, but the isolated file standalone shows 4 failures
+including the mutant I'd just introduced. Every "125 pass" gate cited in this feature's
+checkpoint history (coder, cleaner, refactorer phases) was measured **without** this file's
+79 tests ever executing. This is a repo-wide test-infra gap, not something introduced by this
+feature — flagging for conductor/QA since it likely affects gate confidence on other features
+too, not just this one.
+- **Fix scoped to this feature only** (did not touch the isolated-file convention itself —
+  out of mutation scope and risky to change repo-wide test discovery unilaterally): added
+  `packages/shared/src/agent/core/__tests__/pre-tool-use-step0-routing.test.ts`, a properly
+  bun-test-discovered file covering the same Step-0 scenarios. Works without the heavy mocking
+  because Step-0 is the *first* check in the pipeline and returns before touching anything the
+  isolated file's `mock.module()` calls stub out (mode-manager, permissions-config, fs, config
+  validators, …). `bun test src/agent/core` went from 125 → 134 pass.
+
+### Kill rates (production code mutated, existing + new tests as the kill mechanism)
+| File / region | Killed / Total |
+|---|---|
+| `bg-child-sessions.ts` (whole file) | 10/10 |
+| `pre-tool-use.ts:753-767` (Step-0 gate block) | 17/17 |
+| `spawn-child-session-options.ts` (whole file) | 11/11 |
+| `child-session-background-task-entry.ts` (whole file) | 4/4 |
+| `SessionManager.ts` added regions (registry glue, `getSessionLastErrorText`,
+  `notifyParentOnChildComplete`, `markOrphanedBackgroundTasks` guard) | 90/114 |
+
+### Real gaps found & fixed (new tests / strengthened assertions)
+- Deny reason was only asserted via `toContain('spawn_session')` — a mutated/truncated
+  reason string could still pass. Added an exact full-string assertion.
+- `buildSpawnedChildSessionOptions`: `llmConnection`, `thinkingLevel`, `labels`, `projectId`
+  inheritance/override were never asserted (only `model`/`permissionMode`/`workingDirectory`/
+  `enabledSourceSlugs` were) — `?? ` mutated to `&&` survived silently. Added inherit +
+  override assertions for all four.
+- `getSessionLastErrorText`: only ever exercised with a single-message array, so the
+  scan-from-end direction and the `role === 'error'` filter were unverified — a `for`-loop
+  direction mutant and an always-true role-check mutant both survived. Added tests with a
+  stale error followed by a fresh one (must return the *last*), and a trailing non-error
+  message with an earlier error (must skip forward to find it).
+- The `status === 'completed'` branch selecting `evt.finalText` vs.
+  `getSessionLastErrorText(...)` survived a "always take the failed branch" mutant because
+  existing tests never gave a *completed* child a stale error message to be confused by.
+  Added that case.
+- Truncation cap: only checked "stays under 16KB" for an oversized body — the `>` vs `>=`
+  boundary and `Math.max`/`Math.min` (which would silently truncate content to near-zero
+  while still passing the "under 16KB" check) both survived. Added an exact-16KB-untruncated
+  test, a 16KB+1-byte-truncated test (multi-byte UTF-8 content, since `Buffer.byteLength`
+  ignores unrecognized encoding args in Bun — ASCII test strings couldn't have caught a
+  `'utf8'` → `''` encoding-string mutant even if it weren't equivalent), and a
+  content-not-gutted assertion (`> 16KB - 200 bytes`).
+- `?.trim()` on the assembled body was never verified — added a leading/trailing-whitespace
+  case.
+- `markOrphanedBackgroundTasks`: added a case where an entry is already terminal (must stay
+  untouched, not get re-orphaned), a `keepBackgroundTasksAlive=true` case (must no-op
+  entirely), and an unknown-`sessionId` case (must no-op, not throw) — none had dedicated
+  coverage before.
+
+### Accepted residue (24 survivors, SessionManager.ts) — documented, not force-covered
+All in `notifyParentOnChildComplete` / `markOrphanedBackgroundTasks`, all either (a) pure
+logging arguments with no other consumer, or (b) defensive guards whose only observable
+effect under an active mutant is an exception swallowed by the fire-and-forget
+`.catch(sessionLog.error)` at the subscription site — indistinguishable from the correct
+early-return through the `sendMessage`-spy test harness this suite uses (both produce zero
+`sendMessage` calls; the difference only shows up in log output, which nothing in this suite
+mocks/asserts on):
+- `sessionLog.info`/`.warn` string and object-literal arguments (lines 6575, 6613, 6617,
+  6962) — content is not a behavior contract.
+- `targetBusy` (line 6612, all 4 sub-mutants) — computed only to feed the log line above;
+  no other code path reads it.
+- `orphaned` counter (6958) and its `> 0` log gate (6961, 5 sub-mutants + block) — same
+  class, log-only.
+- `if (!child || !child.parentSessionId || !child.notifyParentOnComplete) return` (6568,
+  2 sub-mutants) and `if (!parent) { warn; return }` (6574, 2 sub-mutants) — both guard
+  against session-map states that can't arise from `spawn_session`'s own wiring in normal
+  operation (a child always has its parent registered before it can complete); forcing
+  observability here would mean adding `sessionLog` mocking infrastructure for two guards
+  that don't affect delivery correctness when they do trip — not worth the added test-infra
+  fragility (the very fragility that caused the `.isolated.ts` gap above).
+- `if (registryEntry) { ... }` (6625) — same class: registry entry is always present for a
+  `spawn_session`-created child by construction (`onSpawnSession` sets it before the child
+  can complete); the guard is defense-in-depth, not a reachable branch in current wiring.
+- `Buffer.byteLength(str, 'utf8')` → `Buffer.byteLength(str, '')` (6589, 6593): verified by
+  hand this is **equivalent** in Bun — `Buffer.byteLength` silently ignores unrecognized
+  encoding arguments and always computes UTF-8 byte length regardless
+  (`Buffer.byteLength('é'.repeat(3), '') === Buffer.byteLength('é'.repeat(3), 'utf8')`).
+
+### Gherkin acceptance mutation (soft, manual — no TS/JS gherkin-mutator exists)
+No repo test runner executes `specs/bg-child-sessions/*.feature` directly (no cucumber/step
+definitions found) — the `.feature` files are specs; the `bun test` files with matching
+scenario-ID names (`bg-child-routing-02`, `bg-child-result-01a/b`, `bg-child-visibility-01`,
+…) are the executable acceptance layer. Per `swarm-mutation-hardening`, "there is no unclebob
+Gherkin-mutator for TS" — did a manual walkthrough instead: for every scenario/Examples row
+in `bg-child-routing.feature`, `bg-child-result-feedback.feature`, and
+`bg-child-visibility.feature` (the three specs backed by this session's mutation scope),
+traced each Given/When/Then to its assertion and confirmed the assertion is
+value-specific (not just type/shape-checking) — the language-mutation pass above already
+proves this rigorously for the routing matrix, spawn-options inheritance, and registry-entry
+shape (100% kill rate = every example-row value is genuinely load-bearing). The one gap this
+walkthrough surfaced independently — the deny-reason step ("names spawn_session") only being
+checked by substring — is the same fix already listed above. `bg-child-keep-alive.feature`'s
+scenarios 02/03 remain QA/E2E scope (per the coder's original deferral); scenario 04's
+routing-side half and scenario 01's matrix are outside this session's file-scope (they live
+in `claude-agent.ts`, not touched by this hardening pass).
+
+### Gates (this session)
+- `(cd packages/shared && bun run tsc --noEmit)` → 0 errors.
+- `(cd packages/server-core && bun run typecheck)` → 0 errors.
+- `(cd packages/shared && bun test src/agent/core)` → 134 pass / 0 fail (was 125 — +9 from
+  the new step0-routing test file).
+- `(cd packages/server-core && bun test src/sessions)` → 121 pass / 0 fail (was 107 — +14
+  from strengthened result-feedback/visibility tests).
+
+### Next
+- Conductor: hardener pass complete. Next role: **QA** — deferred scope unchanged from
+  earlier phases (bg-child-keepalive-02/03 integration scenarios, full E2E background-work
+  flow). Also worth QA/conductor awareness: the repo-wide `.isolated.ts` test-discovery gap
+  (4 other files: `prerequisite-manager.isolated.ts`,
+  `apps/electron/src/main/__tests__/{notifications-routing,session-branch-rollback,
+  sessions-annotations}.isolated.ts`) is unrelated to this feature and was left untouched,
+  but any prior "all green" claim that implicitly relied on one of those files running is
+  worth re-checking.
