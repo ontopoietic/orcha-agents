@@ -6582,17 +6582,24 @@ export class SessionManager implements ISessionManager {
       : (this.getSessionLastErrorText(evt.sessionId) ?? evt.finalText)
     )?.trim() ?? ''
 
+    // bg-child-result-05: the truncation POINTER counts against the cap too — the
+    // body (content + pointer, if present) must never exceed the 16 KB cap in total,
+    // not just the content portion before the pointer is appended.
+    const truncationNote = `\n\n[Result truncated — read the full output in child session ${evt.sessionId}.]`
+    const truncationNoteBytes = Buffer.byteLength(truncationNote, 'utf8')
+
     let body = rawBody
     let truncated = false
     if (Buffer.byteLength(body, 'utf8') > SessionManager.BG_CHILD_RESULT_CAP_BYTES) {
       truncated = true
-      body = Buffer.from(body, 'utf8').subarray(0, SessionManager.BG_CHILD_RESULT_CAP_BYTES).toString('utf8')
+      const contentCapBytes = Math.max(0, SessionManager.BG_CHILD_RESULT_CAP_BYTES - truncationNoteBytes)
+      body = Buffer.from(body, 'utf8').subarray(0, contentCapBytes).toString('utf8')
     }
     if (!body) {
       body = status === 'completed' ? '(no final text)' : `(turn ended with reason: ${evt.reason})`
     }
     if (truncated) {
-      body += `\n\n[Result truncated — read the full output in child session ${evt.sessionId}.]`
+      body += truncationNote
     }
 
     const taskLabel = child.name ?? evt.sessionId

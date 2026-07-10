@@ -32,3 +32,39 @@
 
 ## Open questions
 - None blocking. Note for the conductor: the `keepBackgroundTasksAlive` change in `claude-agent.ts` (`resolveKeepBackgroundTasksAlive() && !isStreamingModeEnabled()`) was left untouched as phase-4 scope even though it already typechecks and its own test (`keep-alive lifecycle matrix` in `bg-child-sessions.test.ts`) already passes — worth confirming with whoever owns phase 4 whether that means phase 4 is effectively already done too, or still needs independent validation against its own scenarios.
+
+---
+
+## Phase 2 (Result Feedback) — done
+
+### Done
+- All 6 scenarios in `specs/bg-child-sessions/bg-child-result-feedback.feature` implemented and unit-tested.
+- Validated inherited WIP in `packages/server-core/src/sessions/SessionManager.ts` (search `ORCHA §bg-child-sessions` near line 6534 onward) against the spec — it was already largely correct:
+  - `unsubscribeChildCompletionWatcher` — a class-field `onSessionComplete` listener, i.e. hooks the exact same `emitSessionComplete` seam (fired from `onProcessingStopped` only when the message queue is truly empty — the same completion point the Tasks Conductor/TaskRunner uses) that phase 1's checkpoint flagged as still-WIP. Correct as-is.
+  - `notifyParentOnChildComplete(evt)` — gates on `child.parentSessionId && child.notifyParentOnComplete` (bg-child-result-01 condition), clears the marker **before** the async send (exactly-once, bg-child-result-04), maps `reason==='complete'→'completed'`, anything else→`'failed'`, picks body from `finalText`/`getSessionFinalText` on success or `getSessionLastErrorText` (scans messages for last `role:'error'`) on failure — never silently swallows a failed turn (bg-child-result-01's "last error text"). Wraps in the exact `<background_result task="..." childSessionId="..." status="...">` tag the task spec names. Delivers via `this.sendMessage(parentId, wrapped, undefined)` — the same primitive `send_agent_message`'s `sendAgentMessageFn` uses (line ~4400), so delivered/queued semantics (busy-parent capture via `parent.isProcessing` before the call) are inherited, not reimplemented. Correct as-is.
+  - **Bug found and fixed**: the 16 KB cap (`BG_CHILD_RESULT_CAP_BYTES`) was applied to the *content* only; the truncation pointer (`"\n\n[Result truncated — read the full output in child session ...]"`) was appended **after** capping, so the delivered body could exceed 16 KB in total — violating bg-child-result-05's "body is at most 16 kilobytes" (which the scenario ties to the *same* body that also names the child session). Fixed: compute the pointer's byte length first, cap content to `16KB − pointerBytes`, then append — total body is now always `<= 16KB`.
+  - Left the registry-mirroring block at the end of `notifyParentOnChildComplete` (`parent.backgroundTaskRegistry.get(evt.sessionId)` → sets `status`/`completedAt`) **untouched** — this implements bg-child-visibility-03 (phase 3 scope), not phase 2. Did not add/remove/test it; noted here so phase 3's coder knows it already exists inline in this function rather than needing to be added fresh.
+- New test file `packages/server-core/src/sessions/bg-child-result-feedback.test.ts` (9 tests) — invokes the private `emitSessionComplete`/`sendMessage` via casts (same pattern as `background-task-surface.test.ts`), covers:
+  - 01a/01b: completed → final assistant text, failed → last error text, exact wrapper shape.
+  - 02/03: idle vs busy parent — asserts the notifier calls `sendMessage` in both cases and never itself touches `parent.isProcessing` (that stays exclusively `sendMessage`'s job; queue vs. immediate-turn semantics are `sendMessage`'s existing, separately-tested behavior).
+  - 04: exactly-once — marker (`notifyParentOnComplete`) flips to `false` after first delivery; a second `emitSessionComplete` for the same child does not call `sendMessage` again.
+  - 05: oversized (20 KB) final text → asserts the **total** delivered body (content + pointer) is `<= 16KB` and names the child session id (this is what caught the truncation-cap bug above).
+  - 06: asserts delivery goes through the ordinary `sendMessage` entrypoint (no bypass) — the observation-ledger pipeline itself is generic infra already covered by `packages/shared/src/sessions/__tests__/observation-trigger.test.ts` and friends; not re-tested here to avoid duplicating out-of-phase-2 infra.
+  - 2 extra guard tests: no parent → no notify; marker unset → no notify.
+
+### Gates
+- `cd packages/server-core && bun run typecheck` → 0 errors.
+- `cd packages/shared && bun run tsc --noEmit` → 0 errors.
+- `bun test src/sessions/bg-child-result-feedback.test.ts` → 9 pass, 23 expect() calls.
+- `bun test src/sessions` (full sessions dir, sanity re-run) → 100 pass, 0 fail, 196 expect() calls, 17 files — no regressions from the truncation-cap fix or the new test file.
+
+### Tried & rejected
+- Considered testing via the full `onProcessingStopped` path (real turn completion) instead of calling the private `emitSessionComplete` directly. Rejected: `onProcessingStopped` pulls in browser-pane-manager teardown, queue processing, mini-agent auto-complete, persistence — none of which phase 2 owns or needs to exercise; casting straight to `emitSessionComplete` (the documented seam) keeps the test scoped to the watcher's actual contract, same spirit as `fireTaskCompleted` casting to `processEvent` in `background-task-surface.test.ts`.
+- Considered leaving the 16 KB truncation bug unfixed and only asserting current (buggy) behavior. Rejected: `bg-child-result-05` explicitly requires the body **and** the pointer together to respect the cap; a test asserting the bug would just be documenting non-compliance with the phase's own definition of done.
+
+### Next
+- Conductor: spawn coder · p3/4 (registry/UI visibility — `specs/bg-child-sessions/bg-child-visibility.feature`). Note the phase-3 registry-mirroring code (`registryEntry.status`/`completedAt` on terminal delivery) already exists inline at the tail of `notifyParentOnChildComplete` in `SessionManager.ts` — phase 3 should validate/test it there rather than assume it needs to be written from scratch. `backgroundTaskRegistry.set(...)` for the initial `running` entry (in `onSpawnSession`, ~line 4238) and the chip UI are still fully untouched/unvalidated, per this phase's mandate.
+- Phase 4 (keep-alive resolution in `claude-agent.ts`) still untouched — same open question as noted in the phase-1 section above.
+
+### Open questions
+- None blocking.
