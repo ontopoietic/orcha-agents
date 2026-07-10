@@ -111,6 +111,79 @@
   from phases 1-3) still route to the specifier/QA role for the end-to-end suite, per each
   phase's "does not own" boundary — unchanged from the coder's handoff.
 
+## Refactorer pass (this session) — no code changes
+
+### Priority item: `unsubscribeChildCompletionWatcher` — investigated, ESCALATING (not fixed)
+- Confirmed the cleaner's read: `SessionManager.ts:6549` assigns the unsubscribe closure
+  returned by `this.onSessionComplete(...)` to a private field that is never read anywhere.
+- Checked for a teardown path to wire it into: **`SessionManager` has no `dispose`/`close`/
+  `shutdown`/`destroy` method anywhere in the class** (grepped the whole file — only
+  per-*agent* disposal exists, e.g. `disposeManagedAgentRuntime`, `managed.agent.dispose()`;
+  nothing disposes a `SessionManager` instance as a whole).
+- Checked for a "neighboring watcher" convention to follow: **there is none** —
+  `unsubscribeChildCompletionWatcher` is the only self-registered listener field of this
+  shape in the class; `sessionCompletionListeners` has exactly one subscriber.
+- Checked call sites: grepped the whole repo (`server-core/src`, `apps/electron/src`) for
+  any `sessionManager.dispose/close/shutdown/destroy` call — **none exist**. In production
+  `SessionManager` is effectively a process-lifetime singleton; in tests, instances are
+  created per-`describe` and simply fall out of scope (never explicitly disposed).
+- **Is it actually a leak?** No, not in the JS reference-counting sense that "leak" usually
+  implies. The listener closure captures `this` and is stored on `this.sessionCompletionListeners`
+  — a field of the *same* instance. This is a self-contained cycle entirely inside one
+  `SessionManager` object; JS GC is reachability-based, so once nothing external holds a
+  reference to that `SessionManager`, the whole self-referential graph (instance + its own
+  listener set + the closure pointing back at itself) is collected together. It cannot pin
+  down a stale/replaced instance on its own. The genuine risk class this pattern usually
+  guards against — a *shared/global* emitter outliving per-instance listeners — doesn't
+  apply here because `sessionCompletionListeners` is per-instance, not shared.
+- **Why escalate instead of fixing:** the mandate says wire it into a dispose path
+  "consistent with how neighboring watchers/listeners in the same class handle teardown."
+  There is no such path and no such neighbor to be consistent with — plugging this would
+  mean *inventing* a new `SessionManager.dispose()` lifecycle method (new public API
+  surface) with no existing caller to invoke it. That's new behavior/structure, not
+  structure-preserving cleanup, and exactly the kind of change the mandate said to stop and
+  escalate on rather than take unilaterally.
+- **Recommendation for conductor/architect:** either (a) leave as-is — not an active leak
+  per the analysis above, or (b) if/when `SessionManager` grows a real dispose lifecycle
+  (e.g. for hot-reload or multi-instance test isolation), fold this call in at that time.
+  Not blocking merge.
+
+### General CRAP/DRY pass over the feature diff
+- Scope: `git diff --name-only 88669bc1 HEAD` (unchanged from cleaner's scope) —
+  `bg-child-sessions.ts`, `pre-tool-use.ts` (Step-0 addition only), `spawn-child-session-options.ts`,
+  `child-session-background-task-entry.ts`, the `SessionManager.ts` watcher/spawn block, all
+  new/extended tests.
+- `bg-child-sessions.ts` (24 lines), `spawn-child-session-options.ts` (62 lines),
+  `child-session-background-task-entry.ts` (36 lines): single pure function each, already
+  extracted for testability by the coder, well-documented, no duplication. No changes.
+- `pre-tool-use.ts` Step-0 block (~28 added lines): one guard clause, one return. No changes.
+- `SessionManager.ts` new surface (`onSpawnSession` wiring, `notifyParentOnChildComplete`,
+  `getSessionLastErrorText`, `markOrphanedBackgroundTasks` guard): `notifyParentOnChildComplete`
+  is the largest single new unit (~55 lines) but is linear/cohesive (gate → compute status →
+  cap/truncate body → wrap → send → mirror registry) and already has dedicated tests for its
+  edge cases (bg-child-result-04 double-notify guard, bg-child-result-05 truncation cap). No
+  split warranted.
+- Ran `jscpd --min-lines 10` across all changed files. 11 clones reported, all with both
+  sides **outside** the feature's added line ranges (pre-existing duplication elsewhere in
+  the 9000+ line `SessionManager.ts`, out of this feature's diff scope per the fork-merge
+  guardrail). Zero duplication introduced by this feature.
+- Mutation-site scan (count-only, per gate #3): skipped installing Stryker fresh for this
+  pass — all new/changed files are small (24–62 line new files; ~28 and ~200 line diffs in
+  larger files) and well under any plausible 100-mutation-site split threshold by inspection
+  (few branches, mostly straight-line pure functions and one guard clause). Flagging this
+  shortcut explicitly per the token-diet gate rather than silently skipping it — if the
+  hardener's mutation run surfaces a >100-site file in this diff, that's new information,
+  not something this pass missed.
+- **Verdict: no code changes made this pass.** Feature diff is already at the CRAP/DRY bar;
+  the one flagged item (listener field) is escalated above, not fixed.
+
+### Gates (this session, before AND after — no changes made, so identical)
+- `(cd packages/shared && bun run tsc --noEmit)` → 0 errors.
+- `(cd packages/server-core && bun run typecheck)` → 0 errors.
+- `(cd packages/shared && bun test src/agent/core)` → 125 pass / 0 fail / 256 expect().
+- `(cd packages/server-core && bun test src/sessions)` → 107 pass / 0 fail / 218 expect().
+
 ## Open questions
-- None blocking. One non-blocking lead for the refactorer/hardener: see
-  `unsubscribeChildCompletionWatcher` above.
+- **For conductor/architect:** disposition of `unsubscribeChildCompletionWatcher` — escalated
+  above, needs a decision (leave as-is vs. design a `SessionManager` dispose lifecycle).
+  Non-blocking for merge either way.
