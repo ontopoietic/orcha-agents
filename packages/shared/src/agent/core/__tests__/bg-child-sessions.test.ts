@@ -56,4 +56,20 @@ describe('keep-alive lifecycle matrix (bg-child-keepalive-01)', () => {
       expect(effectiveKeepAlive()).toBe(row.expected);
     });
   }
+
+  // bg-child-keepalive-04 (upstream regression guard, streaming mode off): the
+  // resolution-side half. This is the same condition as the MATRIX row above
+  // (streaming='0', keepAlive=undefined) — asserted again here under its own
+  // name so the scenario has a directly-traceable test, without duplicating
+  // the full matrix. The routing-side half (no child session is created
+  // because the PreToolUse gate does not intercept when streaming is off) is
+  // covered by `pre-tool-use-checks.isolated.ts`'s step-0 gate matrix, row
+  // `streaming=0 flag=unset background=true -> allowed` — not re-tested here.
+  it('bg-child-keepalive-04: streaming off resolves keep-alive ON (background subagent survives in-query)', () => {
+    delete process.env.ORCHA_STREAMING_MODE;
+    process.env.ORCHA_STREAMING_MODE = '0';
+    delete process.env.CRAFT_KEEP_BG_AGENTS_ALIVE;
+
+    expect(effectiveKeepAlive()).toBe(true);
+  });
 });
