@@ -94,6 +94,31 @@ describe('bg-child-visibility-02/03/04: registry lifecycle in SessionManager', (
     expect(inQueryEntry.status).toBe('orphaned')
   })
 
+  it('does not re-orphan an already-terminal entry (status !== "running" is untouched)', () => {
+    const parent = buildParent('parent-1c')
+    registerChildTask(parent, 'inquery-1c', { kind: 'in-query', status: 'completed', completedAt: 500 })
+
+    ;(sm as unknown as { markOrphanedBackgroundTasks: (id: string) => void }).markOrphanedBackgroundTasks('parent-1c')
+
+    const entry = parent.backgroundTaskRegistry.get('inquery-1c')!
+    expect(entry.status).toBe('completed')
+    expect(entry.completedAt).toBe(500)
+  })
+
+  it('does nothing when keepBackgroundTasksAlive is on (running entries stay running)', () => {
+    const parent = buildParent('parent-1d', { keepAlive: true })
+    registerChildTask(parent, 'inquery-1d', { kind: 'in-query' })
+
+    ;(sm as unknown as { markOrphanedBackgroundTasks: (id: string) => void }).markOrphanedBackgroundTasks('parent-1d')
+
+    expect(parent.backgroundTaskRegistry.get('inquery-1d')!.status).toBe('running')
+  })
+
+  it('is a no-op for an unknown sessionId', () => {
+    ;(sm as unknown as { keepBackgroundTasksAlive: boolean }).keepBackgroundTasksAlive = false
+    expect(() => (sm as unknown as { markOrphanedBackgroundTasks: (id: string) => void }).markOrphanedBackgroundTasks('does-not-exist')).not.toThrow()
+  })
+
   it('bg-child-visibility-02b: the registry reports no "orphaned" entry for the still-running child', () => {
     const parent = buildParent('parent-1b')
     registerChildTask(parent, 'child-1b', { kind: 'child-session' })

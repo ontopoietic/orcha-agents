@@ -164,7 +164,93 @@ describe('bg-child-result-feedback (child-complete watcher)', () => {
     expect(bodyMatch).not.toBeNull()
     const body = bodyMatch![1]!
     expect(Buffer.byteLength(body, 'utf8')).toBeLessThanOrEqual(16 * 1024)
+    // The content portion is capped at (16KB - pointer size), not discarded down
+    // to near-zero — guards Math.max/Math.min getting swapped when computing
+    // contentCapBytes.
+    expect(Buffer.byteLength(body, 'utf8')).toBeGreaterThan(16 * 1024 - 200)
     expect(body).toContain('child session child-6')
+  })
+
+  it('bg-child-result-05b: a body exactly at the 16 KB cap is delivered untruncated (boundary, not off-by-one)', async () => {
+    buildParent('parent-6b')
+    buildChild('child-6b', 'parent-6b', { name: 'exact-cap-check' })
+    const calls = spyOnSendMessage()
+
+    // Multi-byte chars (é = 2 bytes in utf8) so a wrong/ignored encoding when
+    // measuring byte length would compute a different (wrong) size here.
+    const exact = 'é'.repeat(8 * 1024)
+    await fireChildComplete({ sessionId: 'child-6b', workspaceId: 'ws_test', reason: 'complete', finalText: exact })
+
+    const msg = calls[0]!.msg
+    expect(msg).not.toContain('[Result truncated')
+    const bodyMatch = msg.match(/status="completed">\n([\s\S]*)\n<\/background_result>/)
+    expect(Buffer.byteLength(bodyMatch![1]!, 'utf8')).toBe(16 * 1024)
+  })
+
+  it('bg-child-result-05c: a body one byte over the cap IS truncated', async () => {
+    buildParent('parent-6c')
+    buildChild('child-6c', 'parent-6c', { name: 'over-by-one-check' })
+    const calls = spyOnSendMessage()
+
+    const overByOne = 'é'.repeat(8 * 1024) + 'z'
+    await fireChildComplete({ sessionId: 'child-6c', workspaceId: 'ws_test', reason: 'complete', finalText: overByOne })
+
+    expect(calls[0]!.msg).toContain('[Result truncated')
+  })
+
+  it('a normal-sized result is delivered without the truncation pointer', async () => {
+    buildParent('parent-6d')
+    buildChild('child-6d', 'parent-6d', { name: 'small-result-check' })
+    const calls = spyOnSendMessage()
+
+    await fireChildComplete({ sessionId: 'child-6d', workspaceId: 'ws_test', reason: 'complete', finalText: 'a short result' })
+
+    expect(calls[0]!.msg).not.toContain('[Result truncated')
+    expect(calls[0]!.msg).toContain('a short result')
+  })
+
+  it('a completed child uses its final text even if it also has a stale error message (does not mistake status)', async () => {
+    buildParent('parent-6h')
+    buildChild('child-6h', 'parent-6h', { name: 'completed-with-stale-error', errorMessage: 'a stale earlier error' })
+    const calls = spyOnSendMessage()
+
+    await fireChildComplete({ sessionId: 'child-6h', workspaceId: 'ws_test', reason: 'complete', finalText: 'the actual completed result' })
+
+    expect(calls[0]!.msg).toContain('status="completed"')
+    expect(calls[0]!.msg).toContain('the actual completed result')
+    expect(calls[0]!.msg).not.toContain('a stale earlier error')
+  })
+
+  it('trims surrounding whitespace off the delivered body', async () => {
+    buildParent('parent-6g')
+    buildChild('child-6g', 'parent-6g', { name: 'whitespace-check' })
+    const calls = spyOnSendMessage()
+
+    await fireChildComplete({ sessionId: 'child-6g', workspaceId: 'ws_test', reason: 'complete', finalText: '  \n  padded result  \n  ' })
+
+    const bodyMatch = calls[0]!.msg.match(/status="completed">\n([\s\S]*)\n<\/background_result>/)
+    expect(bodyMatch![1]).toBe('padded result')
+  })
+
+  it('a completed child with no final text and no messages reports "(no final text)"', async () => {
+    buildParent('parent-6e')
+    buildChild('child-6e', 'parent-6e', { name: 'empty-result-check' })
+    const calls = spyOnSendMessage()
+
+    await fireChildComplete({ sessionId: 'child-6e', workspaceId: 'ws_test', reason: 'complete', finalText: undefined })
+
+    expect(calls[0]!.msg).toContain('(no final text)')
+  })
+
+  it('a failed child with no error message and no final text reports the turn-end reason', async () => {
+    buildParent('parent-6f')
+    buildChild('child-6f', 'parent-6f', { name: 'reasonless-failure-check' })
+    const calls = spyOnSendMessage()
+
+    await fireChildComplete({ sessionId: 'child-6f', workspaceId: 'ws_test', reason: 'timeout', finalText: undefined })
+
+    expect(calls[0]!.msg).toContain('status="failed"')
+    expect(calls[0]!.msg).toContain('(turn ended with reason: timeout)')
   })
 
   it('bg-child-result-06: delivery uses the standard sendMessage path so the parent\'s ordinary turn/observation pipeline processes it (no bypass)', async () => {
@@ -180,6 +266,34 @@ describe('bg-child-result-feedback (child-complete watcher)', () => {
     // (covered independently by observation-trigger.test.ts and friends).
     expect(calls.length).toBe(1)
     expect(calls[0]!.sessionId).toBe('parent-7')
+  })
+
+  it('getSessionLastErrorText scans from the end and returns the LAST error message, not the first', () => {
+    const child = buildChild('child-10', 'parent-10')
+    child.messages = [
+      { id: 'm1', role: 'error', content: 'stale error', timestamp: 1 } as never,
+      { id: 'm2', role: 'assistant', content: 'ok', timestamp: 2 } as never,
+      { id: 'm3', role: 'error', content: 'fresh error', timestamp: 3 } as never,
+    ]
+
+    const text = (sm as unknown as { getSessionLastErrorText: (id: string) => string | undefined }).getSessionLastErrorText('child-10')
+    expect(text).toBe('fresh error')
+  })
+
+  it('getSessionLastErrorText skips a trailing non-error message to find an earlier error', () => {
+    const child = buildChild('child-11', 'parent-11')
+    child.messages = [
+      { id: 'm1', role: 'error', content: 'the only error', timestamp: 1 } as never,
+      { id: 'm2', role: 'assistant', content: 'ok', timestamp: 2 } as never,
+    ]
+
+    const text = (sm as unknown as { getSessionLastErrorText: (id: string) => string | undefined }).getSessionLastErrorText('child-11')
+    expect(text).toBe('the only error')
+  })
+
+  it('getSessionLastErrorText returns undefined for an unknown session', () => {
+    const text = (sm as unknown as { getSessionLastErrorText: (id: string) => string | undefined }).getSessionLastErrorText('does-not-exist')
+    expect(text).toBeUndefined()
   })
 
   it('does not notify when the child has no parentSessionId', async () => {

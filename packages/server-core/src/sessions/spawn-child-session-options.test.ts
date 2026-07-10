@@ -53,17 +53,33 @@ describe('buildSpawnedChildSessionOptions', () => {
     })
   })
 
+  it('inherits llmConnection, thinkingLevel, labels, and projectId from the parent when no override is given', () => {
+    const options = buildSpawnedChildSessionOptions({}, parent)
+    expect(options.llmConnection).toBe('anthropic-api')
+    expect(options.thinkingLevel).toBe('medium')
+    expect(options.labels).toEqual(['swarm'])
+    expect(options.projectId).toBe('proj_1')
+  })
+
   it('prefers an explicit request override over the parent default', () => {
     const options = buildSpawnedChildSessionOptions({
       model: 'gpt-5',
       permissionMode: 'safe',
       workingDirectory: '/other',
       enabledSourceSlugs: ['slack'],
+      llmConnection: 'openai-api',
+      thinkingLevel: 'high',
+      labels: ['other'],
+      projectId: 'proj_2',
     }, parent)
 
     expect(options.model).toBe('gpt-5')
     expect(options.permissionMode).toBe('safe')
     expect(options.workingDirectory).toBe('/other')
     expect(options.enabledSourceSlugs).toEqual(['slack'])
+    expect(options.llmConnection).toBe('openai-api')
+    expect(options.thinkingLevel).toBe('high')
+    expect(options.labels).toEqual(['other'])
+    expect(options.projectId).toBe('proj_2')
   })
 })
