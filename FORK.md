@@ -124,13 +124,14 @@ Der `electron:dist:dev:mac` Build kopiert standardmäßig nicht alle Runtime-Dep
 
 Stand v0.10.4: `electron:dist:dev:mac` staged inzwischen `claude-agent-sdk` (Kern), `bun` und den Embedder **selbst**. Manuell nachzukopieren bleiben (`<app>` = `.../Orcha Agents.app`):
 
+> **v0.11.0-Layout-Änderung:** Das App-Bundle hat kein `packages/`-Verzeichnis mehr — es bündelt `apps/electron` direkt (`dist/`, `src/`, `vendor/`, `node_modules/`). **Schritt 1 (TS-Sources kopieren) ist damit obsolet:** Observer-Skripte liegen als vorkompilierte `dist/observer-scripts/*.cjs`, pi-agent-server + session-mcp-server als gebündelte `dist/resources/*/index.js`. Es bleiben nur Schritte 2–4 (Binary/ripgrep/Quarantäne). Embedder kommt via `extraResources`-Merge nach `node_modules/@huggingface/transformers` (+ onnxruntime-node/-common), nicht mehr `vendor/embedder`.
+
 ```bash
 APP="<app>/Contents/Resources/app"
 
-# 1. TS-Sources für den Pi-bun-Subprozess (runtime-resolver lädt sie zur Laufzeit)
-cp -R packages/shared/src "$APP/packages/shared/src"
+# 1. (v0.11.0: ENTFÄLLT — Observer-Skripte sind vorkompiliert in dist/observer-scripts/*.cjs)
 
-# 2. Natives Claude-Binary (~211 MB, SDK ≥ 0.2.113) — fehlt bei dev:mac, da NUR
+# 2. Natives Claude-Binary (~217 MB, SDK ≥ 0.2.113) — fehlt bei dev:mac, da NUR
 #    build-dmg.sh es staged. Resolver sucht zuerst den Alias-Pfad.
 #    Fehlt es → "Claude Agent SDK native binary not found. The app package may be corrupted."
 ditto node_modules/@anthropic-ai/claude-agent-sdk-darwin-arm64 \

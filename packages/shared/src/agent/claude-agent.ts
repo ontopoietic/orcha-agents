@@ -514,6 +514,24 @@ export class ClaudeAgent extends BaseAgent {
    * per-turn subprocess that tears them down at turn end). Resolved once from
    * `CRAFT_KEEP_BG_AGENTS_ALIVE` via the shared resolver. Default is ON (opt-out);
    * set `CRAFT_KEEP_BG_AGENTS_ALIVE=0` to force the per-turn kill-switch path.
+   *
+   * ORCHA fork (§6) — KNOWN CONFLICT with streaming-mode, NOT yet resolved.
+   * keep-alive and streaming-mode make opposite demands on the ONE SDK subprocess:
+   *   - streaming-mode wants a FRESH `query()` per turn (resume suppressed) so the
+   *     observation ledger + tail REPLACE raw history → context stays bounded.
+   *   - keep-alive wants ONE persistent `query()` so background sub-agents survive
+   *     past turn-end (a fresh per-turn query tears them down at `finally`, before
+   *     they can deliver — they then hang in the UI and never report back).
+   * Turning keep-alive OFF under streaming (an earlier attempt) fixed context but
+   * BROKE background sub-agents (killed at turn-end). Turning it ON leaves context
+   * stuck at ~100% because the persistent query never restarts to apply the
+   * observation replacement. There is no SDK primitive to swap a live session's
+   * history for our observations (rewindConversation is not exposed), so neither
+   * can be reconciled inside one query. Proper fix: decouple surviving background
+   * work onto independent child sessions (spawn_session / TaskRunner) so the main
+   * conversation keeps its per-turn observation model. Until that lands we keep the
+   * upstream default (subagents working > context bounded); context-at-100% has the
+   * app-restart workaround.
    */
   private readonly keepBackgroundTasksAlive: boolean = resolveKeepBackgroundTasksAlive();
 
