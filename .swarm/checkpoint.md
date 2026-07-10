@@ -73,13 +73,44 @@
   fixed in the inherited WIP. Rewriting it again would have been redundant churn against
   already-correct prose.
 
+## Cleaner pass (this session)
+- Scope: files touched between `88669bc1` (spec commit) and coder's `a1bd7171` HEAD only
+  (`git diff --name-only 88669bc1 HEAD`) — no unrelated fork/upstream code touched.
+- Reviewed every file in that diff (`bg-child-sessions.ts`, `pre-tool-use.ts`,
+  `spawn-child-session-options.ts`(+test), `child-session-background-task-entry.ts`,
+  `SessionManager.ts`, `claude-agent.ts`, `system.ts`, `dto.ts`, `context.ts`, `FORK.md`,
+  all four new/extended test files) for dead code, unused imports/exports, stale WIP
+  comments, naming consistency, and duplication. Ran `jscpd` (min-lines 10) over the new
+  production + test files — only trivial (<3%) in-file test-boilerplate overlap, nothing
+  worth extracting. No dead code, unused exports, or WIP debris found — the WIP-era
+  comments were already accurate (matches the phase-4 checkpoint's own finding).
+- **Found and fixed one real defect:** the Step-0 background-subagent routing gate in
+  `pre-tool-use.ts` (`runPreToolUseChecks`) had its `block` reason written in German —
+  every other block reason in that file (and every other internal, non-i18n agent-facing
+  string in the PreToolUse pipeline) is English. This is an internal steering string read
+  by the LLM, not a `src/i18n/`-routed user-facing string, so the German text was a stray
+  artifact, not a locale bug. Translated to English; the only test asserting on it
+  (`names spawn_session in the deny reason`) checks a `toContain('spawn_session')`
+  substring, unaffected. Commit `120a5c92`.
+- Noted for refactorer/hardener, not fixed here (behavior-shaped, out of cleaner scope):
+  `SessionManager.ts`'s `unsubscribeChildCompletionWatcher` field
+  (`this.onSessionComplete(...)` return value, ~line 6549) is assigned but its
+  unsubscribe function is never invoked anywhere — looks like a latent listener-leak on
+  `SessionManager` disposal/recreation (e.g. hot-reload, multi-instance tests). Worth
+  checking whether `SessionManager` has a dispose/teardown path that should call it.
+- Gates before AND after the fix: `(cd packages/shared && bun run tsc --noEmit)` 0 errors,
+  `(cd packages/server-core && bun run typecheck)` 0 errors, `(cd packages/shared && bun
+  test src/agent/core)` 125 pass / 0 fail, `(cd packages/server-core && bun test
+  src/sessions)` 107 pass / 0 fail. All green before and after.
+
 ## Next
-- Conductor: **feature is code-complete across all 4 phases.** Next role per swarm-role-coder
-  convention: **cleaner** (six-pack) — no further coder phases remain for
-  `bg-child-sessions`. Deferred QA scenarios (02/03 of this phase, plus the always-QA-owned
-  end-to-end assertions from phases 1-3) should route to the specifier/QA role for the
-  end-to-end suite, per each phase's "does not own" boundary.
-- No known open coder-side loose ends across any of the 4 phases.
+- Conductor: cleaner pass complete. Next role: **refactorer** (six-pack) — see the
+  `unsubscribeChildCompletionWatcher` note above as its one lead; otherwise no known
+  structural issues in the `bg-child-sessions` diff.
+- Deferred QA scenarios (02/03 of phase 4, plus the always-QA-owned end-to-end assertions
+  from phases 1-3) still route to the specifier/QA role for the end-to-end suite, per each
+  phase's "does not own" boundary — unchanged from the coder's handoff.
 
 ## Open questions
-- None blocking.
+- None blocking. One non-blocking lead for the refactorer/hardener: see
+  `unsubscribeChildCompletionWatcher` above.
