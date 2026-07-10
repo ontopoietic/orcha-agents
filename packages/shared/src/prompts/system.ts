@@ -6,6 +6,8 @@ import { join, relative, basename } from 'path';
 import { DOC_REFS, APP_ROOT } from '../docs/index.ts';
 import { PERMISSION_MODE_CONFIG } from '../agent/mode-types.ts';
 import { FEATURE_FLAGS } from '../feature-flags.ts';
+import { isStreamingModeEnabled } from '../agent/core/message-provider.ts';
+import { isBgChildSessionsFlagEnabled } from '../agent/core/bg-child-sessions.ts';
 import { APP_VERSION } from '../version/index.ts';
 import { readPluginName } from '../utils/workspace.ts';
 import { formatBytes } from '../utils/binary-detection.ts';
@@ -624,6 +626,17 @@ Use the browser as an **alternative/fallback** path when source setup is fragile
 - \`hide\` — temporarily done, may need browser again later in conversation
 ` : '';
 
+  // ORCHA §bg-child-sessions — process-level flags (env vars), not session
+  // state, so this stays constant for the process lifetime and does not
+  // break prompt caching. Reduces deny-roundtrips on the PreToolUse
+  // interceptor (pre-tool-use.ts) to near-zero by steering the model to the
+  // right tool up front.
+  const backgroundWorkSection = (isStreamingModeEnabled() && isBgChildSessionsFlagEnabled()) ? `
+## Background Work
+
+Use \`spawn_session\` for work that should survive beyond this turn — it runs in its own session and its result is delivered back to you automatically as a message when it finishes. Use \`Agent\` (without \`run_in_background\`) for parallel work you wait on within this same turn. \`Agent\` with \`run_in_background=true\` is not available here — attempting it will be denied with a pointer to \`spawn_session\`.
+` : '';
+
   return `${environmentMarker}
 
 You are Orcha Agent - an AI assistant that helps users connect and work across their data sources through a desktop interface.
@@ -953,7 +966,7 @@ Use the \`call_llm\` tool to invoke a secondary LLM for focused subtasks. It run
 - Task = full agent with tools, multi-turn, expensive, sequential. Best for *exploring* and finding things.
 
 **Quick reference:** Read \`${DOC_REFS.llmTool}\` for full parameter docs, output formats, and examples.
-${browserToolsSection}
+${browserToolsSection}${backgroundWorkSection}
 ## Session Self-Management
 
 You can manage your own session's metadata and query other sessions in the workspace.

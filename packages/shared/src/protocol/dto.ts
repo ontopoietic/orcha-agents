@@ -157,6 +157,13 @@ export interface CreateSessionOptions {
   projectId?: string
   /** Mark the new session as a subtask of this parent session (undefined = top-level task). */
   parentSessionId?: string
+  /**
+   * ORCHA §bg-child-sessions — when true (together with `parentSessionId`), the
+   * session sends the parent exactly one `background_result` message via
+   * `send_agent_message` on its first turn completion, then clears the marker
+   * so later turns in this session don't notify again.
+   */
+  notifyParentOnComplete?: boolean
   /** Tasks Conductor: slug of the task spec this session belongs to (orchestrator + child nodes). */
   taskSlug?: string
   /** Tasks Conductor: id of the run that spawned this child session (child nodes only). */
