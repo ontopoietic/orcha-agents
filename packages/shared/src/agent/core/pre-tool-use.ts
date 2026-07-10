@@ -759,10 +759,10 @@ export function runPreToolUseChecks(ctx: PreToolUseInput): PreToolUseCheckResult
     return {
       type: 'block',
       reason:
-        'Background-Subagents laufen in dieser App als eigenständige Child-Sessions. ' +
-        'Nutze `spawn_session` mit deinem Prompt; das Ergebnis wird dir automatisch als ' +
-        'Nachricht zugestellt. Für parallele Arbeit, auf die du wartest, rufe Agent ohne ' +
-        'run_in_background auf.',
+        'Background subagents run as independent child sessions in this app. ' +
+        'Use `spawn_session` with your prompt; the result will be delivered to you ' +
+        'automatically as a message. For parallel work you want to wait on, call Agent ' +
+        'without run_in_background.',
     };
   }
 
