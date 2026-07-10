@@ -99,6 +99,7 @@ import { ensureLabelsExist, ensureTaskItemLabel } from '@craft-agent/shared/labe
 import { loadStatusConfig } from '@craft-agent/shared/statuses/storage'
 import { AutomationSystem, createPromptHistoryEntry, appendAutomationHistoryEntry, type AutomationSystemMetadataSnapshot } from '@craft-agent/shared/automations'
 import { buildBackendRuntimeSignature, buildRestartRequiredSignature, filterAttachmentsForModelInput } from './runtime-config'
+import { buildSpawnedChildSessionOptions } from './spawn-child-session-options'
 
 // Import from server-core domain utilities
 import { sanitizeForTitle, shouldActivateBrowserOverlay, normalizeBrowserToolName, rollbackFailedBranchCreation, releaseBrowserOwnershipOnForcedStop } from '@craft-agent/server-core/domain'
@@ -4222,27 +4223,13 @@ export class SessionManager implements ISessionManager {
       managed.agent.onSpawnSession = async (request) => {
         sessionLog.info(`Spawn session request from session ${managed.id}:`, request.name || '(unnamed)')
 
-        const session = await this.createSession(managed.workspace.id, {
-          name: request.name,
-          llmConnection: request.llmConnection ?? managed.llmConnection,
-          model: request.model ?? managed.model,
-          enabledSourceSlugs: request.enabledSourceSlugs ?? managed.enabledSourceSlugs,
-          permissionMode: request.permissionMode ?? managed.permissionMode,
-          thinkingLevel: request.thinkingLevel ?? managed.thinkingLevel,
-          labels: request.labels ?? managed.labels,
-          workingDirectory: request.workingDirectory ?? managed.workingDirectory,
-          projectId: request.projectId ?? managed.projectId,
-          // Spawned sessions become subtasks of the spawning session.
-          parentSessionId: managed.id,
-          // ORCHA §bg-child-sessions — every spawn_session child notifies its
-          // parent with exactly one background_result message on its first turn
-          // completion (see notifyParentOnChildComplete). This is what lets the
-          // PreToolUse interceptor's steered spawn_session retry (pre-tool-use.ts)
-          // deliver a result back into the parent conversation without a new
-          // mechanism — spawn_session was already fire-and-forget with no return
-          // path, so the notify-back is a strict improvement for every caller.
-          notifyParentOnComplete: true,
-        })
+        // ORCHA §bg-child-sessions — parentSessionId + notifyParentOnComplete
+        // marker and inheritance defaults (bg-child-routing-03/04) live in
+        // buildSpawnedChildSessionOptions so they're unit-testable in isolation.
+        const session = await this.createSession(
+          managed.workspace.id,
+          buildSpawnedChildSessionOptions(request, managed),
+        )
 
         // ORCHA §bg-child-sessions — register the child in the parent's
         // background task registry so the existing chip UI and
