@@ -135,3 +135,85 @@ describe('runPreToolUseChecks > step 0: background-subagent routing gate', () =>
     });
   }
 });
+
+describe('runPreToolUseChecks > default-async steering reminder (ORCHA §bg-child-sessions p6)', () => {
+  const ORIGINAL_STREAMING = process.env.ORCHA_STREAMING_MODE;
+  const ORIGINAL_FLAG = process.env.ORCHA_BG_CHILD_SESSIONS;
+
+  afterEach(() => {
+    if (ORIGINAL_STREAMING === undefined) delete process.env.ORCHA_STREAMING_MODE;
+    else process.env.ORCHA_STREAMING_MODE = ORIGINAL_STREAMING;
+    if (ORIGINAL_FLAG === undefined) delete process.env.ORCHA_BG_CHILD_SESSIONS;
+    else process.env.ORCHA_BG_CHILD_SESSIONS = ORIGINAL_FLAG;
+  });
+
+  it('emits an additionalContext reminder for a default-async Agent call under streaming+flag', () => {
+    process.env.ORCHA_STREAMING_MODE = '1';
+    delete process.env.ORCHA_BG_CHILD_SESSIONS;
+
+    const result = runPreToolUseChecks(createInput({
+      toolName: 'Agent',
+      input: {},
+    }));
+
+    expect(result.type).toBe('allow');
+    if (result.type !== 'allow') return;
+    expect(result.additionalContext).toContain('do not survive turn end');
+    expect(result.additionalContext).toContain('TaskOutput');
+    expect(result.additionalContext).toContain('spawn_session');
+  });
+
+  it('does not emit a reminder when streaming mode is off', () => {
+    process.env.ORCHA_STREAMING_MODE = '0';
+    delete process.env.ORCHA_BG_CHILD_SESSIONS;
+
+    const result = runPreToolUseChecks(createInput({
+      toolName: 'Agent',
+      input: {},
+    }));
+
+    expect(result.type).toBe('allow');
+    if (result.type !== 'allow') return;
+    expect(result.additionalContext).toBeUndefined();
+  });
+
+  it('does not emit a reminder when the bg-child-sessions kill switch is set', () => {
+    process.env.ORCHA_STREAMING_MODE = '1';
+    process.env.ORCHA_BG_CHILD_SESSIONS = '0';
+
+    const result = runPreToolUseChecks(createInput({
+      toolName: 'Agent',
+      input: {},
+    }));
+
+    expect(result.type).toBe('allow');
+    if (result.type !== 'allow') return;
+    expect(result.additionalContext).toBeUndefined();
+  });
+
+  it('does not emit a reminder for run_in_background=true (that path is a deny, not a reminder)', () => {
+    process.env.ORCHA_STREAMING_MODE = '1';
+    delete process.env.ORCHA_BG_CHILD_SESSIONS;
+
+    const result = runPreToolUseChecks(createInput({
+      toolName: 'Agent',
+      input: { run_in_background: true },
+    }));
+
+    expect(result.type).toBe('block');
+  });
+
+  it('does not emit a reminder for unrelated tools', () => {
+    process.env.ORCHA_STREAMING_MODE = '1';
+    delete process.env.ORCHA_BG_CHILD_SESSIONS;
+
+    const result = runPreToolUseChecks(createInput({
+      toolName: 'Read',
+      input: { file_path: '/test/file.ts' },
+    }));
+
+    expect(result.type).toBe('allow');
+    if (result.type !== 'allow') return;
+    expect(result.additionalContext).toBeUndefined();
+  });
+});

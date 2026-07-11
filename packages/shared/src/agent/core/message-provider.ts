@@ -64,8 +64,10 @@ const DEFAULT_MAX_CHARS_PER_MESSAGE = 1500;
  * Whether streaming-mode message-injection is currently active.
  * Read on each call so tests/users can toggle without process restart.
  */
-export function isStreamingModeEnabled(): boolean {
-  const v = process.env.ORCHA_STREAMING_MODE;
+export function isStreamingModeEnabled(
+  env: Record<string, string | undefined> = process.env,
+): boolean {
+  const v = env.ORCHA_STREAMING_MODE;
   // Default ON — opt out with =0/false. The coverage gate in claude-agent.ts
   // keeps this safe even when the observer is behind.
   return v !== '0' && v !== 'false';

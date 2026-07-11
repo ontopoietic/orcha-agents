@@ -533,9 +533,15 @@ export class ClaudeAgent extends BaseAgent {
    * the observation-replacement context bound hold. With streaming mode OFF,
    * upstream keep-alive behavior (including in-query background survival) is
    * unchanged — see bg-child-keepalive-04.
+   *
+   * ORCHA §bg-child-sessions p6 — the `!isStreamingModeEnabled()` combination
+   * now lives INSIDE `resolveKeepBackgroundTasksAlive()` itself (see
+   * `persistent-input.ts`), not recomputed here. Read the resolver pure —
+   * recombining it on only one call site is exactly the drift that caused the
+   * zombie-task incident (`SessionManager` read the raw flag and never saw
+   * streaming mode, so `markOrphanedBackgroundTasks` stayed suppressed).
    */
-  private readonly keepBackgroundTasksAlive: boolean =
-    resolveKeepBackgroundTasksAlive() && !isStreamingModeEnabled();
+  private readonly keepBackgroundTasksAlive: boolean = resolveKeepBackgroundTasksAlive();
 
   // ── WS2 persistent streaming-input query state (flag ON only) ─────────────
   /** Pushable prompt feeding the one long-lived `query()`; `push()` per turn, `end()` to tear down. */
@@ -1392,28 +1398,35 @@ export class ClaudeAgent extends BaseAgent {
               }
 
               // Translate result to SDK format
+              const steerContext = steerMsg
+                ? `The user just sent a new message while you were working. Stop what you are currently doing and address their message instead:\n\n${steerMsg}`
+                : undefined;
               switch (checkResult.type) {
-                case 'allow':
-                  if (steerMsg) {
+                case 'allow': {
+                  const combinedContext = [steerContext, checkResult.additionalContext].filter(Boolean).join('\n\n');
+                  if (combinedContext) {
                     return {
                       continue: true,
                       hookSpecificOutput: {
                         hookEventName: 'PreToolUse' as const,
-                        additionalContext: `The user just sent a new message while you were working. Stop what you are currently doing and address their message instead:\n\n${steerMsg}`,
+                        additionalContext: combinedContext,
                       },
                     };
                   }
                   return { continue: true };
+                }
 
-                case 'modify':
+                case 'modify': {
+                  const combinedContext = [steerContext, checkResult.additionalContext].filter(Boolean).join('\n\n');
                   return {
                     continue: true,
                     hookSpecificOutput: {
                       hookEventName: 'PreToolUse' as const,
                       updatedInput: checkResult.input,
-                      ...(steerMsg ? { additionalContext: `The user just sent a new message while you were working. Stop what you are currently doing and address their message instead:\n\n${steerMsg}` } : {}),
+                      ...(combinedContext ? { additionalContext: combinedContext } : {}),
                     },
                   };
+                }
 
                 case 'block': {
                   const diagnostics = getPermissionModeDiagnostics(sessionId);

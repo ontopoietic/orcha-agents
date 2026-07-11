@@ -239,3 +239,69 @@ describe('bg-child-visibility-02/03/04: registry lifecycle in SessionManager', (
     expect(entries[0]!.taskId).toBe('child-4')
   })
 })
+
+// ORCHA §bg-child-sessions p6 — the production zombie-task incident: under
+// streaming mode, `SessionManager.keepBackgroundTasksAlive` used to resolve
+// the RAW `resolveKeepBackgroundTasksAlive()` flag (still `true` by default),
+// while `ClaudeAgent` separately ANDed in `!isStreamingModeEnabled()`. The two
+// call sites drifted — `markOrphanedBackgroundTasks` early-returned under
+// streaming because `keepBackgroundTasksAlive` was still `true`, so
+// still-running registry entries were never flipped to `orphaned` even though
+// their subprocess had already torn down at turn end. Unlike the tests above
+// (which override the `keepBackgroundTasksAlive` field directly to isolate
+// the sweep), these tests set env BEFORE constructing `SessionManager` so the
+// real `resolveKeepBackgroundTasksAlive()` resolution path — the one that
+// actually broke in production — is exercised end-to-end.
+describe('bg-child-sessions p6: markOrphanedBackgroundTasks resolves keep-alive honestly under streaming', () => {
+  let tmpRoot: string
+  const ORIGINAL_STREAMING = process.env.ORCHA_STREAMING_MODE
+  const ORIGINAL_KEEP_ALIVE = process.env.CRAFT_KEEP_BG_AGENTS_ALIVE
+
+  beforeEach(() => {
+    tmpRoot = mkdtempSync(join(tmpdir(), 'sm-bgvisibility-streaming-'))
+  })
+
+  afterEach(() => {
+    rmSync(tmpRoot, { recursive: true, force: true })
+    if (ORIGINAL_STREAMING === undefined) delete process.env.ORCHA_STREAMING_MODE
+    else process.env.ORCHA_STREAMING_MODE = ORIGINAL_STREAMING
+    if (ORIGINAL_KEEP_ALIVE === undefined) delete process.env.CRAFT_KEEP_BG_AGENTS_ALIVE
+    else process.env.CRAFT_KEEP_BG_AGENTS_ALIVE = ORIGINAL_KEEP_ALIVE
+  })
+
+  function workspace() {
+    return { id: 'ws_test', name: 'Test Workspace', rootPath: tmpRoot, createdAt: Date.now() }
+  }
+
+  function registerTask(parent: { backgroundTaskRegistry: Map<string, unknown> }, taskId: string, kind: 'in-query' | 'child-session') {
+    parent.backgroundTaskRegistry.set(taskId, { taskId, startTime: Date.now(), status: 'running', kind })
+  }
+
+  it('streaming ON (default keep-alive flag still set): orphans the in-query entry, exempts the child-session entry', () => {
+    process.env.ORCHA_STREAMING_MODE = '1'
+    process.env.CRAFT_KEEP_BG_AGENTS_ALIVE = '1'
+    const sm = new SessionManager()
+    const managed = createManagedSession({ id: 'p6-parent-1', name: 'parent' }, workspace() as never, { messagesLoaded: true })
+    ;(sm as unknown as { sessions: Map<string, unknown> }).sessions.set('p6-parent-1', managed)
+    registerTask(managed, 'inquery-1', 'in-query')
+    registerTask(managed, 'child-1', 'child-session')
+
+    ;(sm as unknown as { markOrphanedBackgroundTasks: (id: string) => void }).markOrphanedBackgroundTasks('p6-parent-1')
+
+    expect(managed.backgroundTaskRegistry.get('inquery-1')!.status).toBe('orphaned')
+    expect(managed.backgroundTaskRegistry.get('child-1')!.status).toBe('running')
+  })
+
+  it('streaming OFF (ORCHA_STREAMING_MODE=0): upstream keep-alive suppression returns — nothing is orphaned', () => {
+    process.env.ORCHA_STREAMING_MODE = '0'
+    process.env.CRAFT_KEEP_BG_AGENTS_ALIVE = '1'
+    const sm = new SessionManager()
+    const managed = createManagedSession({ id: 'p6-parent-2', name: 'parent' }, workspace() as never, { messagesLoaded: true })
+    ;(sm as unknown as { sessions: Map<string, unknown> }).sessions.set('p6-parent-2', managed)
+    registerTask(managed, 'inquery-2', 'in-query')
+
+    ;(sm as unknown as { markOrphanedBackgroundTasks: (id: string) => void }).markOrphanedBackgroundTasks('p6-parent-2')
+
+    expect(managed.backgroundTaskRegistry.get('inquery-2')!.status).toBe('running')
+  })
+})

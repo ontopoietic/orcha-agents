@@ -1,6 +1,5 @@
 import { describe, it, expect, afterEach } from 'bun:test';
 import { isBgChildSessionsFlagEnabled } from '../bg-child-sessions.ts';
-import { isStreamingModeEnabled } from '../message-provider.ts';
 import { resolveKeepBackgroundTasksAlive } from '../../backend/claude/persistent-input.ts';
 
 describe('isBgChildSessionsFlagEnabled', () => {
@@ -27,10 +26,15 @@ describe('keep-alive lifecycle matrix (bg-child-keepalive-01)', () => {
     else process.env.CRAFT_KEEP_BG_AGENTS_ALIVE = ORIGINAL_KEEP_ALIVE;
   });
 
-  // Mirrors the exact expression used for `keepBackgroundTasksAlive` in claude-agent.ts:
-  //   resolveKeepBackgroundTasksAlive() && !isStreamingModeEnabled()
+  // ORCHA §bg-child-sessions p6 — the streaming combination now lives INSIDE
+  // `resolveKeepBackgroundTasksAlive()` itself (persistent-input.ts), so both
+  // `claude-agent.ts`'s `keepBackgroundTasksAlive` field and
+  // `SessionManager.ts`'s `keepBackgroundTasksAlive` field read the resolver
+  // PURE — no local recombination. Call the resolver directly here (not a
+  // hand-rolled mirror expression) so this test would catch a regression at
+  // either call site, not just re-assert a copy of the same bug.
   function effectiveKeepAlive(): boolean {
-    return resolveKeepBackgroundTasksAlive() && !isStreamingModeEnabled();
+    return resolveKeepBackgroundTasksAlive();
   }
 
   const MATRIX: Array<{

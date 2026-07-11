@@ -1,3 +1,5 @@
+import { isStreamingModeEnabled } from '../../core/message-provider.ts';
+
 /**
  * Pushable async-iterable input stream for the Claude SDK's streaming-input mode.
  *
@@ -29,6 +31,19 @@
  * completion-surfacing have all landed, so background sub-agents genuinely survive
  * across turns and `list_background_tasks` stays honest. Set
  * `CRAFT_KEEP_BG_AGENTS_ALIVE=0` to fall back to the per-turn kill-switch.
+ *
+ * ORCHA §bg-child-sessions p6 — the effective value ALSO folds in streaming
+ * mode: under streaming, in-query background subagents are rerouted to
+ * independent child sessions (see claude-agent.ts's class-level comment), so
+ * there is nothing left for a persistent per-session query to keep alive, and
+ * `markOrphanedBackgroundTasks` must be free to flip stale entries to
+ * `orphaned` instead of trusting a keep-alive that no longer applies. This
+ * combination used to be recomputed separately in `claude-agent.ts` (which
+ * ANDed in `!isStreamingModeEnabled()`) while `SessionManager` read the raw
+ * flag — the two call sites drifted, and orphaning silently never fired under
+ * streaming (production incident: tasks stuck 'running' for 3+ hours after
+ * their subprocess was already torn down). Folding the combination in HERE
+ * restores the "can never drift" guarantee for both call sites.
  */
 const DEFAULT_KEEP_ALIVE = true;
 
@@ -36,9 +51,8 @@ export function resolveKeepBackgroundTasksAlive(
   env: Record<string, string | undefined> = process.env,
 ): boolean {
   const raw = env.CRAFT_KEEP_BG_AGENTS_ALIVE;
-  if (raw === '1' || raw === 'true') return true;
-  if (raw === '0' || raw === 'false') return false;
-  return DEFAULT_KEEP_ALIVE;
+  const flagOn = raw === '1' || raw === 'true' ? true : raw === '0' || raw === 'false' ? false : DEFAULT_KEEP_ALIVE;
+  return flagOn && !isStreamingModeEnabled(env);
 }
 
 export interface PushableInputStream<T> {

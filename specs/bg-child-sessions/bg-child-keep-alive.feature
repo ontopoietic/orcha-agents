@@ -4,6 +4,7 @@
 #   bg-child-keepalive-02: observation replacement reduces parent context across turns under streaming mode
 #   bg-child-keepalive-03: end-to-end background work with shrinking context and observed result
 #   bg-child-keepalive-04: upstream keep-alive regression guard with streaming mode off
+#   bg-child-keepalive-05: honest orphaning of a default-async in-query subagent under streaming (p6 incident)
 #
 # Env-var step convention: the value "unset" means the variable is not set.
 
@@ -56,3 +57,18 @@ Feature: Keep-Alive Resolution
     Then the background subagent keeps running after the turn ends
     And the session's background task list reports it as "running"
     And no child session is created for it
+
+  Scenario: bg-child-keepalive-05 honest orphaning of a default-async in-query subagent under streaming
+    Given the app runs with ORCHA_STREAMING_MODE set to "1"
+    And the app runs with CRAFT_KEEP_BG_AGENTS_ALIVE set to "1"
+    And a session is open and idle
+    When the session's agent launches an Agent tool call without run_in_background
+    And the turn that launched it ends before the subagent reports back
+    Then the session's background task list reports the still-running entry as "orphaned", not "running"
+    And a child-session-kind entry for the same session is left "running", unaffected by the sweep
+    # Regression guard: this is the production incident. Before the fix,
+    # SessionManager's keepBackgroundTasksAlive read the raw
+    # CRAFT_KEEP_BG_AGENTS_ALIVE flag (still true) without folding in
+    # streaming mode, so markOrphanedBackgroundTasks early-returned and the
+    # entry stayed "running" for 3+ hours — a zombie neither TaskOutput nor
+    # TaskStop could resolve.

@@ -1243,7 +1243,11 @@ export class SessionManager implements ISessionManager {
    * die at turn end, so markOrphanedBackgroundTasks() flips still-running registry
    * entries to `orphaned` on turn completion. Resolved via the shared
    * `resolveKeepBackgroundTasksAlive` so the main process and the Claude backend
-   * can never disagree about whether keep-alive is on.
+   * can never disagree about whether keep-alive is on. The resolver itself also
+   * folds in streaming mode (`!isStreamingModeEnabled()`) — under streaming,
+   * in-query background subagents are rerouted to independent child sessions
+   * (see `claude-agent.ts`), so nothing survives past turn-end there either,
+   * and this field correctly resolves `false` so orphaning fires.
    */
   private readonly keepBackgroundTasksAlive: boolean = resolveKeepBackgroundTasksAlive()
   /**

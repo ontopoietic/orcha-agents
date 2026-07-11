@@ -1,5 +1,125 @@
 # bg-child-sessions — checkpoint
 
+## p6 keepalive-drift (this session) — FIX ROUND, two field-found defects
+
+Production incident: streaming mode ON, an agent launched analysis subagents via
+`Agent` WITHOUT `run_in_background` (WS2 makes subagents async-by-default — "Async
+agent launched"). The turn ended; keep-alive is off under streaming (p4 fix), so
+subprocess teardown killed them. The registry showed them 'running' for 3+ hours
+(zombies); `TaskOutput`/`TaskStop` in later turns couldn't resolve the ids.
+
+### Done — Defect 1 (root cause: flag drift)
+- `claude-agent.ts` resolved `keepBackgroundTasksAlive` as
+  `resolveKeepBackgroundTasksAlive() && !isStreamingModeEnabled()` (p4 change) while
+  `SessionManager.ts:1248` read the plain `resolveKeepBackgroundTasksAlive()` — the two
+  call sites drifted, so `markOrphanedBackgroundTasks` (SessionManager.ts:~6966)
+  early-returned under streaming and dead tasks never flipped to `orphaned`.
+- Fixed at the root: moved the `&& !isStreamingModeEnabled()` combination INTO
+  `resolveKeepBackgroundTasksAlive()` itself
+  (`packages/shared/src/agent/backend/claude/persistent-input.ts`). No import cycle —
+  `message-provider.ts` (home of `isStreamingModeEnabled`) has no dependency back on
+  `persistent-input.ts`. Gave `isStreamingModeEnabled()` an optional `env` param
+  (default `process.env`) so the resolver can pass it through cleanly.
+- `claude-agent.ts`'s `keepBackgroundTasksAlive` field now reads the resolver PURE
+  (`resolveKeepBackgroundTasksAlive()`, no local recombination). `SessionManager.ts`
+  inherits automatically — verified `markOrphanedBackgroundTasks` now fires under
+  streaming and flips running non-child entries to `orphaned` (new test, see below).
+- The `complete` event's `backgroundTasksAlive` field (SessionManager.ts ~4148/4206)
+  now reports the effective (streaming-aware) value too — desirable, this is the
+  renderer's keep-alive signal and it should match reality. No renderer code changed;
+  the field's semantics just became honest. **No renderer rebuild dependency for this
+  defect** (shared + server-core only).
+
+### Done — Defect 2 (steering fix, not a hard deny)
+- The Step-0 interceptor (`pre-tool-use.ts`) only denied Agent/Task calls with
+  `run_in_background === true`; default-async calls passed through silently and died
+  at turn end with no signal to the model.
+- Did NOT extend the deny to all Agent calls — in-turn parallelism must stay usable.
+- (a) `system.ts`'s "Background Work" section gets one more sentence (only rendered
+  under streaming+flag, same gate as the existing section): in-query subagents don't
+  survive turn end — drain with `TaskOutput` (block) before ending the turn, or use
+  `spawn_session` for work that must survive.
+- (b) `pre-tool-use.ts`: added a new Step-0-adjacent check — Agent/Task calls WITHOUT
+  `run_in_background` under streaming+flag are ALLOWED but the pipeline now attaches an
+  `additionalContext` one-liner reminding of exactly that. Implemented as a computed
+  `defaultAsyncReminder` var, attached at both terminal `allow`/`modify` return points
+  (per-call, not per-turn — no per-turn state was trivially available in this
+  synchronous pipeline). `PreToolUseCheckResult`'s `allow`/`modify` variants gained an
+  optional `additionalContext?: string` field. `claude-agent.ts`'s switch merges it with
+  the existing `pendingSteerMessage` additionalContext (steer text first, blank-line
+  joined) instead of the two racing to overwrite each other. **`pi-agent.ts` NOT
+  touched** — its `pre_tool_use_response` IPC protocol has no additionalContext
+  concept, and WS2 default-async is Claude-SDK-specific; out of scope for this p6
+  round.
+
+### Tried & rejected
+- None — both fixes landed cleanly on the first attempt, no dead ends worth recording.
+
+### Tests
+- `packages/shared/src/agent/core/__tests__/bg-child-sessions.test.ts` — the
+  keep-alive matrix's local `effectiveKeepAlive()` helper used to hand-roll the exact
+  drift-prone expression (`resolveKeepBackgroundTasksAlive() && !isStreamingModeEnabled()`).
+  Replaced with a direct call to `resolveKeepBackgroundTasksAlive()` so the test
+  actually exercises the fixed resolver instead of re-asserting a copy of the bug.
+  Matrix + bg-child-keepalive-04 guard still pass unchanged (9 tests).
+- `packages/shared/src/agent/core/__tests__/pre-tool-use-step0-routing.test.ts` — new
+  `describe('default-async steering reminder ...')` block: reminder present under
+  streaming+flag for a bare `Agent` call; absent when streaming off; absent when the
+  `ORCHA_BG_CHILD_SESSIONS` kill switch is set; absent (deny path unchanged) for
+  `run_in_background:true`; absent for unrelated tools. 5 new tests, all pass.
+- `packages/server-core/src/sessions/bg-child-visibility.test.ts` — new
+  `describe('bg-child-sessions p6: markOrphanedBackgroundTasks resolves keep-alive
+  honestly under streaming')` block. Unlike the existing tests in this file (which
+  override the `keepBackgroundTasksAlive` field directly to isolate the sweep from
+  construction), these two tests set `ORCHA_STREAMING_MODE`/`CRAFT_KEEP_BG_AGENTS_ALIVE`
+  env vars BEFORE `new SessionManager()` so the real construction-time resolution path
+  — the one that actually broke in production — is exercised end-to-end: (1) streaming
+  ON with the keep-alive flag still set to `1` → in-query entry orphans, child-session
+  entry stays running (exempt); (2) `ORCHA_STREAMING_MODE=0` → upstream suppression
+  returns, nothing orphaned (regression guard). 2 new tests, both pass.
+- `specs/bg-child-sessions/bg-child-keep-alive.feature` — added
+  `bg-child-keepalive-05` scenario documenting the honest-orphaning behavior and the
+  regression it guards against.
+
+### Gates (all green)
+- `(cd packages/shared && bun run tsc --noEmit)` — 0 errors
+- `(cd packages/server-core && bun run typecheck)` — 0 errors
+- `(cd packages/shared && bun test src/agent/core)` — 139 pass, 0 fail (8 files)
+- `(cd packages/shared && bun test ./src/agent/core/__tests__/pre-tool-use-checks.isolated.ts)` — 79 pass, 0 fail
+- `(cd packages/server-core && bun test src/sessions)` — 127 pass, 0 fail (18 files)
+
+### Files changed
+- `packages/shared/src/agent/backend/claude/persistent-input.ts` — resolver now folds
+  in streaming mode (the fix)
+- `packages/shared/src/agent/core/message-provider.ts` — `isStreamingModeEnabled` gained
+  optional `env` param
+- `packages/shared/src/agent/claude-agent.ts` — `keepBackgroundTasksAlive` reads
+  resolver pure; PreToolUse switch merges steer + step-0 additionalContext
+- `packages/shared/src/agent/core/pre-tool-use.ts` — new default-async reminder logic;
+  `PreToolUseCheckResult` type gained `additionalContext?`
+- `packages/shared/src/prompts/system.ts` — one more sentence in the "Background Work"
+  section
+- `packages/server-core/src/sessions/SessionManager.ts` — comment update only (behavior
+  already inherited from the resolver fix)
+- Tests: `bg-child-sessions.test.ts`, `pre-tool-use-step0-routing.test.ts`,
+  `bg-child-visibility.test.ts` (all in-tree, extended not replaced)
+- Spec: `specs/bg-child-sessions/bg-child-keep-alive.feature` (+1 scenario)
+
+**Renderer/system-prompt implication for the conductor:** `system.ts` changed (prompt
+text, not renderer) — conductor should rebuild `main.cjs`/subprocess bundle so the new
+reminder sentence actually ships; no renderer (`apps/electron/src/renderer/**`) files
+touched, so no renderer bundle rebuild is required for this round.
+
+### Open questions
+- None.
+
+### Next
+- Conductor: rebuild main bundle (shared + server-core + prompts changed), re-verify
+  the p6 incident scenario live if desired (spawn a default-async Agent call under
+  streaming, let the turn end, confirm the registry entry flips to `orphaned` and the
+  additionalContext reminder appeared in the transcript). This was the only outstanding
+  fix round scoped to this session (bg-child-sessions p6) — nothing else pending.
+
 ## FEATURE COMPLETE (all 4 phases) — see per-phase sections below
 
 - **Phase 1 (Routing)** — `bg-child-routing.feature`, all 6 scenarios. PreToolUse Step-0 gate

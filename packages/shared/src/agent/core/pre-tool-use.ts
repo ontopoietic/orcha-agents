@@ -583,8 +583,8 @@ export function getConfigDomainBashRedirect(
  * Each agent translates these into its SDK-specific format via a simple switch.
  */
 export type PreToolUseCheckResult =
-  | { type: 'allow' }
-  | { type: 'modify'; input: Record<string, unknown> }
+  | { type: 'allow'; additionalContext?: string }
+  | { type: 'modify'; input: Record<string, unknown>; additionalContext?: string }
   | { type: 'block'; reason: string; source?: 'prerequisite' }
   | {
       type: 'prompt';
@@ -766,6 +766,25 @@ export function runPreToolUseChecks(ctx: PreToolUseInput): PreToolUseCheckResult
     };
   }
 
+  // ORCHA §bg-child-sessions p6 — WS2 launches Agent/Task calls WITHOUT
+  // run_in_background as ASYNC BY DEFAULT ("Async agent launched"). Under
+  // streaming, those in-query subagents share the parent's subprocess, which
+  // tears down at turn end (keep-alive is off under streaming) — an
+  // unresolved default-async call that survives past the turn silently dies
+  // as a zombie (production incident: registry stuck 'running' for 3+ hours,
+  // TaskOutput/TaskStop couldn't resolve the ids). This is NOT a deny — such
+  // calls stay valid for in-turn parallelism — just a steering reminder to
+  // drain them (TaskOutput with block) before the turn ends.
+  const defaultAsyncReminder =
+    isParentTaskTool(toolName) &&
+    input.run_in_background !== true &&
+    isStreamingModeEnabled() &&
+    isBgChildSessionsFlagEnabled()
+      ? 'Reminder: under streaming mode, in-query subagents do not survive turn end. ' +
+        'Drain this task (TaskOutput with block) before ending your turn, or use ' +
+        'spawn_session for work that must survive past this turn.'
+      : undefined;
+
   // ============================================================
   // 1. PERMISSION MODE CHECK
   // ============================================================
@@ -945,9 +964,9 @@ export function runPreToolUseChecks(ctx: PreToolUseInput): PreToolUseCheckResult
   // RESULT
   // ============================================================
   if (wasModified) {
-    return { type: 'modify', input: currentInput };
+    return { type: 'modify', input: currentInput, additionalContext: defaultAsyncReminder };
   }
-  return { type: 'allow' };
+  return { type: 'allow', additionalContext: defaultAsyncReminder };
 }
 
 // ============================================================
