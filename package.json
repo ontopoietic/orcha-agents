@@ -22,7 +22,7 @@
     "!apps/online-docs"
   ],
   "scripts": {
-    "test": "bun test packages/ apps/electron/src/ scripts/ && for f in $(find packages/ apps/electron/src/ scripts/ -name '*.isolated.ts'); do bun test \"$f\" || exit 1; done",
+    "test": "bun test packages/ apps/electron/src/ scripts/ && for f in $(find ./packages/ ./apps/electron/src/ ./scripts/ -name '*.isolated.ts'); do bun test \"$f\" || exit 1; done",
     "typecheck": "bun run typecheck:shared",
     "typecheck:shared": "cd packages/shared && bun run tsc --noEmit",
     "typecheck:staged": "bash scripts/typecheck-staged.sh",
