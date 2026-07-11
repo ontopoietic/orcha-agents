@@ -157,6 +157,13 @@ export interface CreateSessionOptions {
   projectId?: string
   /** Mark the new session as a subtask of this parent session (undefined = top-level task). */
   parentSessionId?: string
+  /**
+   * ORCHA §bg-child-sessions — when true (together with `parentSessionId`), the
+   * session sends the parent exactly one `background_result` message via
+   * `send_agent_message` on its first turn completion, then clears the marker
+   * so later turns in this session don't notify again.
+   */
+  notifyParentOnComplete?: boolean
   /** Tasks Conductor: slug of the task spec this session belongs to (orchestrator + child nodes). */
   taskSlug?: string
   /** Tasks Conductor: id of the run that spawned this child session (child nodes only). */
@@ -397,7 +404,7 @@ export type SessionEvent =
   | { type: 'anchors_changed'; sessionId: string; anchors: import('../sessions/anchors').AnchorRef[] }
   | { type: 'project_id_changed'; sessionId: string; projectId: string | null }
   | { type: 'connection_changed'; sessionId: string; connectionSlug: string; supportsBranching?: boolean }
-  | { type: 'task_backgrounded'; sessionId: string; toolUseId: string; taskId: string; intent?: string; turnId?: string; kind?: 'workflow'; workflowId?: string }
+  | { type: 'task_backgrounded'; sessionId: string; toolUseId: string; taskId: string; intent?: string; turnId?: string; kind?: 'workflow' | 'child-session'; workflowId?: string }
   | { type: 'shell_backgrounded'; sessionId: string; toolUseId: string; shellId: string; intent?: string; command?: string; turnId?: string }
   | { type: 'task_progress'; sessionId: string; toolUseId: string; elapsedSeconds: number; turnId?: string }
   | { type: 'task_completed'; sessionId: string; taskId: string; status: 'completed' | 'failed' | 'stopped'; outputFile?: string; summary?: string; turnId?: string }

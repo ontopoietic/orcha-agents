@@ -99,6 +99,9 @@ import { ensureLabelsExist, ensureTaskItemLabel } from '@craft-agent/shared/labe
 import { loadStatusConfig } from '@craft-agent/shared/statuses/storage'
 import { AutomationSystem, createPromptHistoryEntry, appendAutomationHistoryEntry, type AutomationSystemMetadataSnapshot } from '@craft-agent/shared/automations'
 import { buildBackendRuntimeSignature, buildRestartRequiredSignature, filterAttachmentsForModelInput } from './runtime-config'
+import { buildSpawnedChildSessionOptions } from './spawn-child-session-options'
+import { buildChildSessionBackgroundTaskEntry } from './child-session-background-task-entry'
+import { buildChildSessionBackgroundedEvent, buildChildSessionCompletedEvent } from './child-session-backgrounded-event'
 
 // Import from server-core domain utilities
 import { sanitizeForTitle, shouldActivateBrowserOverlay, normalizeBrowserToolName, rollbackFailedBranchCreation, releaseBrowserOwnershipOnForcedStop } from '@craft-agent/server-core/domain'
@@ -792,6 +795,13 @@ interface RunningBackgroundTask {
   workflowId?: string
   /** Count of workflow sub-agents completed so far (Workflow tasks only). */
   agentsCompleted?: number
+  /**
+   * ORCHA §bg-child-sessions — distinguishes a rerouted child-session background
+   * task (taskId = the child's session id) from an in-query background task
+   * (taskId = the SDK's Task/Agent tool-call id). Undefined for existing
+   * in-query entries (treated as the implicit default).
+   */
+  kind?: 'in-query' | 'child-session'
 }
 
 interface ManagedSession {
@@ -934,6 +944,11 @@ interface ManagedSession {
   // subprocess at turn end, so this main-process registry is the real source of
   // truth for background-task status. See RunningBackgroundTask.
   backgroundTaskRegistry: Map<string, RunningBackgroundTask>
+  // ORCHA §bg-child-sessions — one-shot marker: notify `parentSessionId` with a
+  // `background_result` message on this session's first turn completion, then
+  // clear it. Runtime-only (not persisted); see createSession's notifyParentOnComplete
+  // wiring and `notifyParentOnChildComplete()`.
+  notifyParentOnComplete?: boolean
   // Whether messages have been loaded from disk (for lazy loading)
   messagesLoaded: boolean
   // Pending auth request tracking (for unified auth flow)
@@ -2981,6 +2996,11 @@ export class SessionManager implements ISessionManager {
       branchFromSdkTurnId: validatedBranch?.branchFromSdkTurnId,
       branchSeedApplied: validatedBranch ? validatedBranch.branchContextStrategy === 'sdk-fork' : undefined,
       messagesLoaded: !isBranch,  // Branched sessions: lazy-load messages from JSONL
+      // ORCHA §bg-child-sessions — runtime-only marker (not persisted to the session
+      // header): the child-complete watcher checks this and clears it after the first
+      // notification, so app-restart-then-resume just drops the one-shot notify (no
+      // stale marker to leak a duplicate across restarts).
+      notifyParentOnComplete: options?.parentSessionId ? options?.notifyParentOnComplete : undefined,
     })
 
     // Eagerly load messages for branched sessions so the renderer gets the full
@@ -4205,19 +4225,34 @@ export class SessionManager implements ISessionManager {
       managed.agent.onSpawnSession = async (request) => {
         sessionLog.info(`Spawn session request from session ${managed.id}:`, request.name || '(unnamed)')
 
-        const session = await this.createSession(managed.workspace.id, {
-          name: request.name,
-          llmConnection: request.llmConnection ?? managed.llmConnection,
-          model: request.model ?? managed.model,
-          enabledSourceSlugs: request.enabledSourceSlugs ?? managed.enabledSourceSlugs,
-          permissionMode: request.permissionMode ?? managed.permissionMode,
-          thinkingLevel: request.thinkingLevel ?? managed.thinkingLevel,
-          labels: request.labels ?? managed.labels,
-          workingDirectory: request.workingDirectory,
-          projectId: request.projectId ?? managed.projectId,
-          // Spawned sessions become subtasks of the spawning session.
-          parentSessionId: managed.id,
-        })
+        // ORCHA §bg-child-sessions — parentSessionId + notifyParentOnComplete
+        // marker and inheritance defaults (bg-child-routing-03/04) live in
+        // buildSpawnedChildSessionOptions so they're unit-testable in isolation.
+        const session = await this.createSession(
+          managed.workspace.id,
+          buildSpawnedChildSessionOptions(request, managed),
+        )
+
+        // ORCHA §bg-child-sessions — register the child in the parent's
+        // background task registry so the existing chip UI and
+        // list_background_tasks report it truthfully (kind: 'child-session'
+        // distinguishes it from in-query background tasks for the UI).
+        // Shape is built by buildChildSessionBackgroundTaskEntry so it's
+        // unit-testable in isolation (bg-child-visibility-01).
+        managed.backgroundTaskRegistry.set(
+          session.id,
+          buildChildSessionBackgroundTaskEntry(session, request, Date.now()),
+        )
+
+        // ORCHA §bg-child-sessions — mirror the registration into the
+        // `task_backgrounded` event the renderer's ActiveTasksBar actually
+        // listens for (bg-child-visibility-01). Without this, the registry
+        // entry above makes `list_background_tasks` truthful but the running
+        // chip never appears.
+        this.sendEvent(
+          buildChildSessionBackgroundedEvent(managed.id, session, request),
+          managed.workspace.id,
+        )
 
         // Build FileAttachment[] from paths (if any)
         let fileAttachments: FileAttachment[] | undefined
@@ -4351,6 +4386,7 @@ export class SessionManager implements ISessionManager {
               startTime: t.startTime,
               elapsedSeconds: t.elapsedSeconds ?? wallElapsed,
               completedAt: t.completedAt,
+              kind: t.kind,
             }
           })
         },
@@ -5044,6 +5080,23 @@ export class SessionManager implements ISessionManager {
     const id = this.getLastFinalAssistantMessageId(managed.messages)
     if (!id) return undefined
     return managed.messages.find(m => m.id === id)?.content
+  }
+
+  /**
+   * ORCHA §bg-child-sessions — read a session's most recent error message TEXT,
+   * for the `background_result` failure path (bg-child-result-01's "last error
+   * text" bodyContent). `finalText` on a `SessionCompletionEvent` only tracks
+   * the last *assistant* message, which is stale/empty when a turn ends in
+   * error — scan from the end for the last `role: 'error'` message instead.
+   */
+  private getSessionLastErrorText(sessionId: string): string | undefined {
+    const managed = this.sessions.get(sessionId)
+    if (!managed) return undefined
+    for (let i = managed.messages.length - 1; i >= 0; i--) {
+      const msg = managed.messages[i]
+      if (msg.role === 'error') return msg.content
+    }
+    return undefined
   }
 
   /**
@@ -6490,6 +6543,110 @@ export class SessionManager implements ISessionManager {
   }
 
   /**
+   * ORCHA §bg-child-sessions — raw-byte cap on a `background_result` body.
+   * Oversized child output is truncated with a pointer to the child session
+   * instead of blowing up the parent's context (bg-child-result-05).
+   */
+  private static readonly BG_CHILD_RESULT_CAP_BYTES = 16 * 1024
+
+  /**
+   * ORCHA §bg-child-sessions — self-registered field initializer (runs once
+   * per instance, right after `sessionCompletionListeners` above is ready).
+   * Watches every in-process session completion for a child that (a) has a
+   * `parentSessionId` and (b) is still marked `notifyParentOnComplete`, and
+   * delivers exactly one `background_result` message to the parent — see
+   * `notifyParentOnChildComplete`.
+   */
+  private readonly unsubscribeChildCompletionWatcher = this.onSessionComplete((evt) => {
+    this.notifyParentOnChildComplete(evt).catch((err) => {
+      sessionLog.error(`[bg-child-sessions] notifyParentOnChildComplete failed for child ${evt.sessionId}:`, err)
+    })
+  })
+
+  /**
+   * ORCHA §bg-child-sessions — deliver a `background_result` message to a
+   * completed child session's parent, exactly once.
+   *
+   * Fires on EVERY session completion (cheap map lookups when not
+   * applicable), gated on the child's `parentSessionId` + one-shot
+   * `notifyParentOnComplete` marker (set only by the `spawn_session` wiring,
+   * see `onSpawnSession` above). The marker is cleared before the async
+   * send so a later turn in the same child session — or a delivery that
+   * throws — can never double-notify (bg-child-result-04).
+   */
+  private async notifyParentOnChildComplete(evt: SessionCompletionEvent): Promise<void> {
+    const child = this.sessions.get(evt.sessionId)
+    if (!child || !child.parentSessionId || !child.notifyParentOnComplete) return
+
+    child.notifyParentOnComplete = false
+
+    const parentId = child.parentSessionId
+    const parent = this.sessions.get(parentId)
+    if (!parent) {
+      sessionLog.warn(`[bg-child-sessions] parent session ${parentId} not found for child ${evt.sessionId}; dropping background_result`)
+      return
+    }
+
+    const status: 'completed' | 'failed' = evt.reason === 'complete' ? 'completed' : 'failed'
+    const rawBody = (status === 'completed'
+      ? (evt.finalText ?? this.getSessionFinalText(evt.sessionId))
+      : (this.getSessionLastErrorText(evt.sessionId) ?? evt.finalText)
+    )?.trim() ?? ''
+
+    // bg-child-result-05: the truncation POINTER counts against the cap too — the
+    // body (content + pointer, if present) must never exceed the 16 KB cap in total,
+    // not just the content portion before the pointer is appended.
+    const truncationNote = `\n\n[Result truncated — read the full output in child session ${evt.sessionId}.]`
+    const truncationNoteBytes = Buffer.byteLength(truncationNote, 'utf8')
+
+    let body = rawBody
+    let truncated = false
+    if (Buffer.byteLength(body, 'utf8') > SessionManager.BG_CHILD_RESULT_CAP_BYTES) {
+      truncated = true
+      const contentCapBytes = Math.max(0, SessionManager.BG_CHILD_RESULT_CAP_BYTES - truncationNoteBytes)
+      body = Buffer.from(body, 'utf8').subarray(0, contentCapBytes).toString('utf8')
+    }
+    if (!body) {
+      body = status === 'completed' ? '(no final text)' : `(turn ended with reason: ${evt.reason})`
+    }
+    if (truncated) {
+      body += truncationNote
+    }
+
+    const taskLabel = child.name ?? evt.sessionId
+    const wrapped = [
+      `<background_result task="${taskLabel}" childSessionId="${evt.sessionId}" status="${status}">`,
+      body,
+      `</background_result>`,
+    ].join('\n')
+
+    const targetBusy = parent.isProcessing === true
+    sessionLog.info(`[bg-child-sessions] delivering background_result`, {
+      childSessionId: evt.sessionId,
+      parentSessionId: parentId,
+      status,
+      delivery: targetBusy ? 'queued' : 'delivered',
+    })
+    await this.sendMessage(parentId, wrapped, undefined)
+
+    // Mirror the terminal status into the parent's registry entry (Phase 3
+    // visibility) so chips / list_background_tasks reflect reality without a
+    // second event path (bg-child-visibility-03).
+    const registryEntry = parent.backgroundTaskRegistry.get(evt.sessionId)
+    if (registryEntry) {
+      registryEntry.status = status
+      registryEntry.completedAt = Date.now()
+
+      // Clear the running chip via the same terminal-status event path used
+      // by every other background task kind (bg-child-visibility-01).
+      this.sendEvent(
+        buildChildSessionCompletedEvent(parentId, evt.sessionId, status),
+        parent.workspace.id,
+      )
+    }
+  }
+
+  /**
    * Central handler for when processing stops (any reason).
    * Single source of truth for cleanup and queue processing.
    *
@@ -6799,6 +6956,12 @@ export class SessionManager implements ISessionManager {
    *
    * No-op once WS2 keep-alive is enabled: with a persistent query the tasks
    * genuinely outlive the turn, so `keepBackgroundTasksAlive` short-circuits this.
+   *
+   * ORCHA §bg-child-sessions — `kind: 'child-session'` entries are exempt
+   * (bg-child-visibility-02): a child session is its own independent
+   * ManagedSession with its own subprocess/turn lifecycle, so it does not die
+   * when the *parent's* turn/subprocess is torn down. Only in-query background
+   * tasks (which share the parent's subprocess) can be orphaned by this sweep.
    */
   private markOrphanedBackgroundTasks(sessionId: string): void {
     if (this.keepBackgroundTasksAlive) return
@@ -6807,7 +6970,7 @@ export class SessionManager implements ISessionManager {
     const now = Date.now()
     let orphaned = 0
     for (const info of managed.backgroundTaskRegistry.values()) {
-      if (info.status === 'running') {
+      if (info.status === 'running' && info.kind !== 'child-session') {
         info.status = 'orphaned'
         info.completedAt = now
         orphaned++
@@ -6829,6 +6992,11 @@ export class SessionManager implements ISessionManager {
   listBackgroundTasks(sessionId: string): RunningBackgroundTask[] {
     const managed = this.sessions.get(sessionId)
     if (!managed) return []
+    // Lazy eviction on read: terminal entries older than the 1h retention
+    // window (evictStaleBackgroundTasks) are otherwise only swept when
+    // another task_completed event lands in the same session — a query can
+    // arrive long after that, so sweep here too (bg-child-visibility-04).
+    this.evictStaleBackgroundTasks(managed)
     return Array.from(managed.backgroundTaskRegistry.values())
       .map((t) => ({ ...t }))
       .sort((a, b) => b.startTime - a.startTime)

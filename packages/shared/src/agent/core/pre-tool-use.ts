@@ -48,6 +48,9 @@ import {
 import { permissionsConfigCache, type PermissionsContext } from '../permissions-config.ts';
 import type { PrerequisiteCheckResult } from './prerequisite-manager.ts';
 import { rewriteBashWithRtk } from './rtk-rewrite.ts';
+import { isParentTaskTool } from '../../utils/toolNames.ts';
+import { isStreamingModeEnabled } from './message-provider.ts';
+import { isBgChildSessionsFlagEnabled } from './bg-child-sessions.ts';
 
 // ============================================================
 // TYPES
@@ -733,6 +736,34 @@ export function runPreToolUseChecks(ctx: PreToolUseInput): PreToolUseCheckResult
       `[ModeSync] sessionId=${sessionId} incomingMode=${permissionMode} effectiveMode=${effectivePermissionMode} ` +
       `modeVersion=${diagnostics.modeVersion} changedBy=${diagnostics.lastChangedBy} changedAt=${diagnostics.lastChangedAt}`
     );
+  }
+
+  // ============================================================
+  // 0. BACKGROUND-SUBAGENT ROUTING (ORCHA §bg-child-sessions)
+  // ============================================================
+  // Under streaming mode, in-query background subagents (Agent/Task with
+  // run_in_background=true) would need to survive turn-end — but streaming
+  // mode tears the query down after every turn (see keepBackgroundTasksAlive
+  // resolution in claude-agent.ts). Deny with a steering reason instead of
+  // silently rewriting the call (there is no `updatedInput` shape that turns
+  // an Agent/Task call into a spawn_session call) — the agent reformulates
+  // in the same turn. Gated off entirely when streaming mode is off (upstream
+  // in-query background tasks keep working, see bg-child-keepalive-04) or the
+  // kill switch `ORCHA_BG_CHILD_SESSIONS=0` is set.
+  if (
+    isParentTaskTool(toolName) &&
+    input.run_in_background === true &&
+    isStreamingModeEnabled() &&
+    isBgChildSessionsFlagEnabled()
+  ) {
+    return {
+      type: 'block',
+      reason:
+        'Background subagents run as independent child sessions in this app. ' +
+        'Use `spawn_session` with your prompt; the result will be delivered to you ' +
+        'automatically as a message. For parallel work you want to wait on, call Agent ' +
+        'without run_in_background.',
+    };
   }
 
   // ============================================================

@@ -4,7 +4,7 @@
  * Tests `runPreToolUseChecks()` (6-step pipeline) and `shouldPromptInAskMode()`
  * which are shared by both agent backends (ClaudeAgent, PiAgent).
  */
-import { describe, it, expect, beforeEach, mock } from 'bun:test';
+import { describe, it, expect, beforeEach, afterEach, mock } from 'bun:test';
 
 // ============================================================
 // Module mocks (must be before imports of the module under test)
@@ -167,6 +167,95 @@ describe('runPreToolUseChecks', () => {
     mockValidateConfigFileContent.mockImplementation(() => null);
     mockReadOnlyBashPatterns = [];
     mockCraftAgentsCliFlag = false;
+  });
+
+  // ============================================================
+  // Step 0: Background-subagent routing gate (ORCHA §bg-child-sessions)
+  // ============================================================
+
+  describe('step 0: background-subagent routing gate', () => {
+    const ORIGINAL_STREAMING = process.env.ORCHA_STREAMING_MODE;
+    const ORIGINAL_FLAG = process.env.ORCHA_BG_CHILD_SESSIONS;
+
+    afterEach(() => {
+      if (ORIGINAL_STREAMING === undefined) delete process.env.ORCHA_STREAMING_MODE;
+      else process.env.ORCHA_STREAMING_MODE = ORIGINAL_STREAMING;
+      if (ORIGINAL_FLAG === undefined) delete process.env.ORCHA_BG_CHILD_SESSIONS;
+      else process.env.ORCHA_BG_CHILD_SESSIONS = ORIGINAL_FLAG;
+    });
+
+    // streaming | flag  | background | outcome  (bg-child-routing-02 matrix)
+    const MATRIX: Array<{
+      streaming: string | undefined;
+      flag: string | undefined;
+      background: boolean | undefined;
+      outcome: 'denied' | 'allowed';
+    }> = [
+      { streaming: '1', flag: undefined, background: true, outcome: 'denied' },
+      { streaming: '1', flag: '1', background: true, outcome: 'denied' },
+      { streaming: '1', flag: '0', background: true, outcome: 'allowed' },
+      { streaming: '0', flag: undefined, background: true, outcome: 'allowed' },
+      { streaming: '0', flag: '1', background: true, outcome: 'allowed' },
+      { streaming: '1', flag: '1', background: false, outcome: 'allowed' },
+    ];
+
+    for (const row of MATRIX) {
+      it(`streaming=${row.streaming ?? 'unset'} flag=${row.flag ?? 'unset'} background=${row.background ?? 'unset'} -> ${row.outcome}`, () => {
+        if (row.streaming === undefined) delete process.env.ORCHA_STREAMING_MODE;
+        else process.env.ORCHA_STREAMING_MODE = row.streaming;
+        if (row.flag === undefined) delete process.env.ORCHA_BG_CHILD_SESSIONS;
+        else process.env.ORCHA_BG_CHILD_SESSIONS = row.flag;
+
+        const input: Record<string, unknown> = {};
+        if (row.background !== undefined) input.run_in_background = row.background;
+
+        const result = runPreToolUseChecks(createInput({
+          toolName: 'Task',
+          input,
+        }));
+
+        expect(result.type).toBe(row.outcome === 'denied' ? 'block' : 'allow');
+      });
+    }
+
+    it('denies an Agent tool call the same as Task', () => {
+      process.env.ORCHA_STREAMING_MODE = '1';
+      delete process.env.ORCHA_BG_CHILD_SESSIONS;
+
+      const result = runPreToolUseChecks(createInput({
+        toolName: 'Agent',
+        input: { run_in_background: true },
+      }));
+
+      expect(result.type).toBe('block');
+    });
+
+    it('names spawn_session in the deny reason', () => {
+      process.env.ORCHA_STREAMING_MODE = '1';
+      delete process.env.ORCHA_BG_CHILD_SESSIONS;
+
+      const result = runPreToolUseChecks(createInput({
+        toolName: 'Task',
+        input: { run_in_background: true },
+      }));
+
+      expect(result.type).toBe('block');
+      if (result.type === 'block') {
+        expect(result.reason).toContain('spawn_session');
+      }
+    });
+
+    it('does not gate unrelated tools even under streaming+flag', () => {
+      process.env.ORCHA_STREAMING_MODE = '1';
+      delete process.env.ORCHA_BG_CHILD_SESSIONS;
+
+      const result = runPreToolUseChecks(createInput({
+        toolName: 'Read',
+        input: { file_path: '/test/file.ts' },
+      }));
+
+      expect(result.type).toBe('allow');
+    });
   });
 
   // ============================================================

@@ -515,25 +515,27 @@ export class ClaudeAgent extends BaseAgent {
    * `CRAFT_KEEP_BG_AGENTS_ALIVE` via the shared resolver. Default is ON (opt-out);
    * set `CRAFT_KEEP_BG_AGENTS_ALIVE=0` to force the per-turn kill-switch path.
    *
-   * ORCHA fork (§6) — KNOWN CONFLICT with streaming-mode, NOT yet resolved.
-   * keep-alive and streaming-mode make opposite demands on the ONE SDK subprocess:
+   * ORCHA fork (§6) — CONFLICT with streaming-mode, RESOLVED via
+   * spec/bg-child-sessions (commit history: swarm/bg-child-sessions branch).
+   * keep-alive and streaming-mode used to make opposite demands on the ONE SDK
+   * subprocess:
    *   - streaming-mode wants a FRESH `query()` per turn (resume suppressed) so the
    *     observation ledger + tail REPLACE raw history → context stays bounded.
    *   - keep-alive wants ONE persistent `query()` so background sub-agents survive
    *     past turn-end (a fresh per-turn query tears them down at `finally`, before
    *     they can deliver — they then hang in the UI and never report back).
-   * Turning keep-alive OFF under streaming (an earlier attempt) fixed context but
-   * BROKE background sub-agents (killed at turn-end). Turning it ON leaves context
-   * stuck at ~100% because the persistent query never restarts to apply the
-   * observation replacement. There is no SDK primitive to swap a live session's
-   * history for our observations (rewindConversation is not exposed), so neither
-   * can be reconciled inside one query. Proper fix: decouple surviving background
-   * work onto independent child sessions (spawn_session / TaskRunner) so the main
-   * conversation keeps its per-turn observation model. Until that lands we keep the
-   * upstream default (subagents working > context bounded); context-at-100% has the
-   * app-restart workaround.
+   * Streaming mode now wins unconditionally: under streaming mode, the PreToolUse
+   * interceptor (`pre-tool-use.ts`) reroutes every in-query background subagent
+   * spawn (Agent/Task with `run_in_background=true`) onto an independent child
+   * session (`spawn_session`) instead, whose result is delivered back via
+   * `SessionManager.notifyParentOnChildComplete`. There is nothing left for the
+   * per-turn query to keep alive, so it can safely tear down every turn and let
+   * the observation-replacement context bound hold. With streaming mode OFF,
+   * upstream keep-alive behavior (including in-query background survival) is
+   * unchanged — see bg-child-keepalive-04.
    */
-  private readonly keepBackgroundTasksAlive: boolean = resolveKeepBackgroundTasksAlive();
+  private readonly keepBackgroundTasksAlive: boolean =
+    resolveKeepBackgroundTasksAlive() && !isStreamingModeEnabled();
 
   // ── WS2 persistent streaming-input query state (flag ON only) ─────────────
   /** Pushable prompt feeding the one long-lived `query()`; `push()` per turn, `end()` to tear down. */

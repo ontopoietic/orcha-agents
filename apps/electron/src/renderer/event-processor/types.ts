@@ -376,8 +376,8 @@ export interface TaskBackgroundedEvent {
   taskId: string
   intent?: string
   turnId?: string
-  /** 'workflow' marks a fan-out Workflow launch (many sub-agents); undefined = a single Agent/Task. */
-  kind?: 'workflow'
+  /** 'workflow' marks a fan-out Workflow launch (many sub-agents); 'child-session' marks a spawned background child session; undefined = a single Agent/Task. */
+  kind?: 'workflow' | 'child-session'
   /** Workflow run id (wf_...) — correlates workflow_agent_completed events to this chip. */
   workflowId?: string
 }

@@ -567,6 +567,12 @@ export interface BackgroundTaskInfo {
   elapsedSeconds: number;
   /** ms timestamp when the task reached a terminal/orphaned status, if any */
   completedAt?: number;
+  /**
+   * ORCHA §bg-child-sessions — 'child-session' when this task is a rerouted
+   * background subagent running as its own session (taskId = child session id);
+   * undefined/'in-query' for a task backgrounded inside the same subprocess.
+   */
+  kind?: 'in-query' | 'child-session';
 }
 
 // ============================================================
