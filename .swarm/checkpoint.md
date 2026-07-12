@@ -1,6 +1,167 @@
 # bg-child-sessions — checkpoint
 
-## p6 keepalive-drift (this session) — FIX ROUND, two field-found defects
+## p7 stop-guard (this session) — FIX ROUND, three items from a second field incident
+
+Incident: user asked an agent to "run this with the swarm" (plain text — no
+`[skill:...]` mention, so the prerequisite gate never fired). The agent
+improvised with the **Workflow tool**, which is background-by-design (returns
+a task id immediately). The turn ended ~10s later; under streaming (keep-alive
+off, per p4/p6) subprocess teardown killed the workflow. p6's orphan sweep
+honestly marked it `orphaned` — but the work silently died with zero useful
+indicator, and Workflow is a third spawn path the Step-0 gate (`Agent`/`Task`
+only) never covered.
+
+### Done — Item 1: Stop-hook guard (structural catch-all)
+- New pure module `packages/shared/src/agent/core/stop-hook-guard.ts`:
+  - `buildStopHookGuardDecision({runningTaskCount, streamingModeEnabled,
+    bgChildSessionsFlagEnabled, alreadyFiredThisTurn})` → `{block: false} |
+    {block: true, reason}`. Blocks only when running tasks > 0 AND streaming
+    ON AND flag ON AND not already fired this turn — one-shot by
+    construction (a stubborn model's second Stop attempt always passes).
+  - `applyTaskLifecycleEvent(ids, event)` — pure `Set` update mirroring what
+    `claude-agent.ts`'s per-message event loop already observes: add on
+    `task_backgrounded`, delete on `task_completed`, no-op otherwise.
+- `claude-agent.ts`:
+  - New private state: `runningInQueryTaskIds: Set<string>` and
+    `stopHookGuardFiredThisTurn: boolean`, both reset at the top of
+    `chatImpl` (turn start) — anything left over from a prior turn already
+    died at that turn's teardown, so carrying it forward would misreport.
+  - The `chatImpl` event loop (`for (const event of events)`, right after
+    `eventAdapter.adapt(message)`) now calls
+    `applyTaskLifecycleEvent(this.runningInQueryTaskIds, event)` on every
+    event before the existing source-activation-drain handling.
+    `task_backgrounded` in this agent's own `AgentEvent` stream is ALWAYS an
+    in-query Agent/Task/Workflow task — `kind:'child-session'` backgrounding
+    (spawn_session, p5) is emitted by `SessionManager` directly to the
+    renderer via a separate DTO event and never flows through this loop, so
+    no extra filtering was needed (confirmed: the core `AgentEvent` type for
+    `task_backgrounded` only has `kind?: 'workflow'`, no `'child-session'` —
+    TS caught this when I tried to filter it defensively).
+  - New `Stop` hook added to `internalHooks` in the SDK hooks builder
+    (sibling to the existing `SubagentStop` hook, same block that already
+    merges additively with automation hooks via `mergedHooks` — untouched).
+    Calls `buildStopHookGuardDecision` with a live snapshot
+    (`isStreamingModeEnabled()`, `isBgChildSessionsFlagEnabled()`,
+    `this.runningInQueryTaskIds.size`, `this.stopHookGuardFiredThisTurn`),
+    sets the fired flag, and returns `{continue: false, decision: 'block',
+    reason}` (same generic `SyncHookJSONOutput` shape PreToolUse blocks
+    already use — confirmed in `sdk.d.ts`: `decision`/`reason`/`continue` are
+    NOT scoped to `PreToolUseHookSpecificOutput`, they're on the shared
+    output type, so the same block shape works for `Stop`).
+  - Noted but NOT used: `StopHookInput.background_tasks` — the SDK itself
+    exposes an in-flight background-work summary on every Stop hook call
+    (shell/subagent/monitor/workflow types, richer than what we need). Went
+    with the hand-rolled set instead, per the explicit spawn-prompt
+    instruction (and it also keeps the guard tied exactly to the
+    Agent/Task/Workflow tasks this incident is about, not e.g. background
+    shells which have different survival semantics).
+
+### Done — Item 2: Workflow joins the p6 default-async reminder
+- `pre-tool-use.ts`, same Step-0-adjacent block that already builds
+  `defaultAsyncReminder` for bare `Agent`/`Task` calls (p6): added an
+  `isWorkflowTool = toolName === 'Workflow'` leg. The reminder now fires for
+  `(isParentTaskTool(toolName) && !run_in_background) || isWorkflowTool`
+  under streaming+flag, with Workflow-specific wording ("background-by-design
+  ... does not survive turn end ... will be marked orphaned"). The
+  `run_in_background===true` DENY path for Agent/Task is completely
+  unchanged — Workflow is never denied, only reminded (it has no
+  `run_in_background` input to check in the first place).
+
+### Done — Item 3: proactive swarm-skill hint
+- `prompt-builder.ts`: new `getSwarmSkillHint(userMessage: string): string |
+  null` method, module-level `SWARM_ORCHESTRATION_PATTERN` (swarm / "role
+  team" keyword, OR a role name — coder/qa/specifier/hardener/cleaner/
+  refactorer/architect/conductor — paired with an orchestration verb —
+  run/spawn/dispatch/launch/use/orchestrate — to avoid firing on every bare
+  mention of "qa"). Gated on `existsSync(join(workspaceRootPath, 'skills',
+  'swarm', 'SKILL.md'))` — mirrors the 3-tier skill-path pattern already used
+  in `pre-tool-use.ts::resolveSkillPlugin` (workspace tier only, since the
+  hint is specifically about *this* workspace's swarm skill).
+  - **Deliberately NOT wired into `buildContextParts`/`buildVolatileContextParts`**
+    (unlike the anchor reminder) — those builders never receive the raw user
+    message text, and the CAUTION in the spawn prompt said touch only the new
+    hint block, nothing around observations/recall. Instead wired directly
+    into `claude-agent.ts`'s `buildTextPrompt` and `buildSDKUserMessage` (the
+    two places that already have `text` in scope), pushed right after
+    `contextParts`/before attachments. Zero changes to the anchor-reminder
+    machinery or anything else in `buildContextParts`.
+
+### Tried & rejected
+- None — all three items landed on the first attempt, no dead ends worth
+  recording.
+
+### Tests
+- `packages/shared/src/agent/core/__tests__/stop-hook-guard.test.ts` (new,
+  11 tests): `buildStopHookGuardDecision` — blocks with running tasks under
+  streaming+flag (plural + singular reason wording), allows the second
+  attempt through (`alreadyFiredThisTurn`), never blocks with streaming off /
+  flag off / zero running tasks. `applyTaskLifecycleEvent` — add on
+  `task_backgrounded`, remove on `task_completed`, ignores unrelated event
+  types, no-ops on a missing `taskId`, returns the same `Set` instance.
+- `packages/shared/src/agent/core/__tests__/pre-tool-use-step0-routing.test.ts`
+  (extended, +4 tests): Workflow reminder present under streaming+flag
+  (checks for "background-by-design" and "does not survive turn end"),
+  Workflow is always `allow` (never denied), reminder absent when streaming
+  off or the kill switch is set.
+- `packages/shared/src/agent/core/__tests__/prompt-builder-swarm-hint.test.ts`
+  (new, 8 tests): constructs a real `PromptBuilder` against a `mkdtemp`
+  workspace so `existsSync` exercises the real filesystem (not mocked) —
+  hint present for "swarm" / "role team" / role-name+verb phrasing when
+  `skills/swarm/SKILL.md` exists; null when the skill is missing (even
+  though the text matches), null for a bare role-name mention with no
+  orchestration verb, null for ordinary requests, null for an empty message.
+- `specs/bg-child-sessions/bg-child-routing.feature` — new
+  `bg-child-routing-07` scenario (Workflow gets the same steering reminder).
+- `specs/bg-child-sessions/bg-child-keep-alive.feature` — new
+  `bg-child-keepalive-06` (Stop hook blocks once, allows the second attempt)
+  and `bg-child-keepalive-07` (never blocks outside its gate) scenarios.
+
+### Gates (all green)
+- `(cd packages/shared && bun run tsc --noEmit)` — 0 errors
+- `(cd packages/server-core && bun run typecheck)` — 0 errors
+- `(cd packages/shared && bun test src/agent/core)` — 161 pass, 0 fail (10 files)
+- `(cd packages/shared && bun test ./src/agent/core/__tests__/pre-tool-use-checks.isolated.ts)` — 79 pass, 0 fail
+- `(cd packages/server-core && bun test src/sessions)` — 127 pass, 0 fail (18 files)
+
+### Files changed
+- `packages/shared/src/agent/core/stop-hook-guard.ts` (new — pure decision +
+  set-update logic)
+- `packages/shared/src/agent/claude-agent.ts` — new private state, event-loop
+  tracking call, new `Stop` hook in `internalHooks`, swarm-hint call sites in
+  `buildTextPrompt`/`buildSDKUserMessage`
+- `packages/shared/src/agent/core/pre-tool-use.ts` — Workflow leg on the
+  `defaultAsyncReminder` computation
+- `packages/shared/src/agent/core/prompt-builder.ts` — new
+  `getSwarmSkillHint()` method + module-level pattern constants
+- Tests: `stop-hook-guard.test.ts` (new), `pre-tool-use-step0-routing.test.ts`
+  (extended), `prompt-builder-swarm-hint.test.ts` (new)
+- Specs: `bg-child-routing.feature` (+1 scenario), `bg-child-keep-alive.feature`
+  (+2 scenarios)
+
+**Rebuild implications for the conductor:** `claude-agent.ts`,
+`pre-tool-use.ts`, `prompt-builder.ts`, and the new `stop-hook-guard.ts` are
+ALL `packages/shared` (prompt/agent-core, consumed by the main/subprocess
+bundle) — **no renderer (`apps/electron/src/renderer/**`) files touched**, so
+only a main-bundle rebuild is needed to ship this round; no renderer bundle
+rebuild required.
+
+### Open questions
+- None.
+
+### Next
+- Conductor: rebuild the main bundle (shared package changed) and, if
+  desired, re-verify live: (a) ask an agent to improvise a `Workflow` call
+  under streaming — confirm the `additionalContext` reminder appears in the
+  transcript; (b) force a scenario where an in-query task is still running
+  when the model tries to end its turn — confirm the Stop hook blocks once
+  with the expected reason and allows the second attempt; (c) send a
+  workspace session (with a `skills/swarm/SKILL.md` present) a plain-text
+  "run this with the swarm" message — confirm the hint block appears in the
+  user-message tail and the agent reads the skill file before orchestrating.
+  This was the only outstanding fix round scoped to this session
+  (bg-child-sessions p7) — nothing else pending.
+
+## p6 keepalive-drift (previous session) — FIX ROUND, two field-found defects
 
 Production incident: streaming mode ON, an agent launched analysis subagents via
 `Agent` WITHOUT `run_in_background` (WS2 makes subagents async-by-default — "Async

@@ -775,14 +775,26 @@ export function runPreToolUseChecks(ctx: PreToolUseInput): PreToolUseCheckResult
   // TaskOutput/TaskStop couldn't resolve the ids). This is NOT a deny — such
   // calls stay valid for in-turn parallelism — just a steering reminder to
   // drain them (TaskOutput with block) before the turn ends.
+  // ORCHA §bg-child-sessions p7 — the `Workflow` tool is background-by-design
+  // (it always launches in the background and returns a task id immediately,
+  // unlike Agent/Task which support both foreground and background calls).
+  // It is not a `PARENT_TASK_TOOLS` entry, so it needs its own leg of this
+  // same gate: the reminder applies unconditionally (no `run_in_background`
+  // check — Workflow has no such input) whenever streaming+flag are active.
+  // Never deny — Workflow must stay usable; the Stop-hook guard is the
+  // structural backstop if the model ends its turn without draining it.
+  const isWorkflowTool = toolName === 'Workflow';
   const defaultAsyncReminder =
-    isParentTaskTool(toolName) &&
-    input.run_in_background !== true &&
+    (isParentTaskTool(toolName) && input.run_in_background !== true || isWorkflowTool) &&
     isStreamingModeEnabled() &&
     isBgChildSessionsFlagEnabled()
-      ? 'Reminder: under streaming mode, in-query subagents do not survive turn end. ' +
-        'Drain this task (TaskOutput with block) before ending your turn, or use ' +
-        'spawn_session for work that must survive past this turn.'
+      ? isWorkflowTool
+        ? 'Reminder: the Workflow tool is background-by-design and does not survive turn end under ' +
+          'streaming mode. Drain it (TaskOutput with block) before ending your turn, or accept that ' +
+          'it will be marked orphaned if the turn ends first.'
+        : 'Reminder: under streaming mode, in-query subagents do not survive turn end. ' +
+          'Drain this task (TaskOutput with block) before ending your turn, or use ' +
+          'spawn_session for work that must survive past this turn.'
       : undefined;
 
   // ============================================================

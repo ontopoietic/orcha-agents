@@ -77,6 +77,8 @@ import type { RtkContext } from './core/rtk-rewrite.ts';
 import { type ThinkingLevel, THINKING_TO_EFFORT, getThinkingTokens, DEFAULT_THINKING_LEVEL } from './thinking-levels.ts';
 import { generateConversationSummary } from './conversation-summary.ts';
 import { isStreamingModeEnabled, streamingTailCoversHistory } from './core/message-provider.ts';
+import { isBgChildSessionsFlagEnabled } from './core/bg-child-sessions.ts';
+import { buildStopHookGuardDecision, applyTaskLifecycleEvent } from './core/stop-hook-guard.ts';
 import type { LoadedSource } from '../sources/types.ts';
 import { sourceNeedsAuthentication } from '../sources/credential-manager.ts';
 import type {
@@ -558,6 +560,27 @@ export class ClaudeAgent extends BaseAgent {
   private onBackgroundEvent: ((event: AgentEvent) => void) | null = null;
 
   /**
+   * ORCHA §bg-child-sessions p7 — Stop-hook guard state.
+   *
+   * `runningInQueryTaskIds` tracks in-query background tasks (Agent/Task/
+   * Workflow calls that reported `task_backgrounded`) launched THIS turn that
+   * have not yet reported `task_completed`. Populated purely from the SDK
+   * message events this agent already observes (`chatImpl`'s event loop) —
+   * never from SessionManager. Cleared at the start of every turn: any id
+   * left over from a prior turn already died at that turn's subprocess
+   * teardown (the very incident this guard exists to catch), so carrying it
+   * forward would just report a stale count.
+   *
+   * `stopHookGuardFiredThisTurn` makes the Stop-hook block ONE-SHOT per turn:
+   * the guard blocks the first attempt to end the turn while tasks are still
+   * running, but always allows the second attempt through (even if tasks are
+   * still running) so a stubborn model — or a task that genuinely never
+   * resolves — can't be trapped in an infinite Stop-hook loop.
+   */
+  private runningInQueryTaskIds: Set<string> = new Set();
+  private stopHookGuardFiredThisTurn: boolean = false;
+
+  /**
    * Tear down the persistent query. Idempotent, and the single funnel for ALL
    * teardown paths (dispose/destroy, auth-fail, recreate-on-change, clearHistory,
    * consumer exit). Guarantees no subprocess leak: ends the input, returns the
@@ -1027,6 +1050,13 @@ export class ClaudeAgent extends BaseAgent {
 
     // Clear any leftover steer from a previous turn (safety net — should already be null)
     this.pendingSteerMessage = null;
+
+    // ORCHA §bg-child-sessions p7 — reset the Stop-hook guard's per-turn state.
+    // Any task id left in the set from a prior turn already died at that
+    // turn's teardown; starting this turn with a clean set (and a fresh
+    // one-shot block budget) is correct, not a leak.
+    this.runningInQueryTaskIds.clear();
+    this.stopHookGuardFiredThisTurn = false;
 
     try {
       const sessionId = this.config.session?.id || `temp-${Date.now()}`;
@@ -1588,6 +1618,37 @@ export class ClaudeAgent extends BaseAgent {
               return { continue: true };
             }],
           }],
+
+          // ═══════════════════════════════════════════════════════════════════════════
+          // STOP HOOK: ORCHA §bg-child-sessions p7 — structural catch-all guard.
+          // Blocks (once per turn) an attempt to end the turn while in-query
+          // background tasks (Agent/Task/Workflow) are still running under
+          // streaming mode — those tasks do NOT survive turn-end teardown and
+          // would otherwise die silently (see runningInQueryTaskIds above).
+          // ═══════════════════════════════════════════════════════════════════════════
+          Stop: [{
+            hooks: [async (_hookInput) => {
+              if (_hookInput.hook_event_name !== 'Stop') {
+                return { continue: true };
+              }
+              const decision = buildStopHookGuardDecision({
+                runningTaskCount: this.runningInQueryTaskIds.size,
+                streamingModeEnabled: isStreamingModeEnabled(),
+                bgChildSessionsFlagEnabled: isBgChildSessionsFlagEnabled(),
+                alreadyFiredThisTurn: this.stopHookGuardFiredThisTurn,
+              });
+              if (!decision.block) {
+                return { continue: true };
+              }
+              this.stopHookGuardFiredThisTurn = true;
+              debug(`[ClaudeAgent] Stop hook guard: blocking turn-end, ${this.runningInQueryTaskIds.size} running task(s)`);
+              return {
+                continue: false,
+                decision: 'block' as const,
+                reason: decision.reason,
+              };
+            }],
+          }],
           };
 
           // Merge internal hooks with user hooks from automations.json
@@ -1790,6 +1851,15 @@ This is a branched conversation. All prior messages in this conversation are par
 
           const events = await this.eventAdapter.adapt(message);
           for (const event of events) {
+            // ORCHA §bg-child-sessions p7 — track in-query background tasks
+            // for the Stop-hook guard. `kind: 'child-session'` backgrounding
+            // (spawn_session) is emitted by SessionManager directly to the
+            // renderer via a separate DTO event, never through this agent's
+            // own `AgentEvent` stream — so `task_backgrounded` here only ever
+            // means a genuinely in-query Agent/Task/Workflow task (the ones
+            // that die at turn-end teardown).
+            applyTaskLifecycleEvent(this.runningInQueryTaskIds, event);
+
             // After source_test (or any session-scoped tool) successfully activates a
             // new source, activateSourceInSessionFn stashes a restart descriptor on the
             // agent. The drain controller captures the descriptor on the first
@@ -2511,6 +2581,14 @@ This is a branched conversation. All prior messages in this conversation are par
 
     parts.push(...contextParts);
 
+    // ORCHA §bg-child-sessions p7 — nudge toward the swarm skill when the raw
+    // user text reads like swarm/role-team orchestration (see prompt-builder's
+    // getSwarmSkillHint for the pattern + on-disk gate).
+    const swarmSkillHint = this.promptBuilder.getSwarmSkillHint(text);
+    if (swarmSkillHint) {
+      parts.push(swarmSkillHint);
+    }
+
     // Add file attachments with stored path info (agent uses Read tool to access content)
     // Text files are NOT embedded inline to prevent context overflow from large files
     if (attachments) {
@@ -2557,6 +2635,12 @@ This is a branched conversation. All prior messages in this conversation are par
 
     for (const part of contextParts) {
       contentBlocks.push({ type: 'text', text: part });
+    }
+
+    // ORCHA §bg-child-sessions p7 — same swarm-skill nudge as buildTextPrompt.
+    const sdkSwarmSkillHint = this.promptBuilder.getSwarmSkillHint(text);
+    if (sdkSwarmSkillHint) {
+      contentBlocks.push({ type: 'text', text: sdkSwarmSkillHint });
     }
 
     // Add attachments - images/PDFs are uploaded inline, text files are path-only

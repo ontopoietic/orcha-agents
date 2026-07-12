@@ -5,6 +5,8 @@
 #   bg-child-keepalive-03: end-to-end background work with shrinking context and observed result
 #   bg-child-keepalive-04: upstream keep-alive regression guard with streaming mode off
 #   bg-child-keepalive-05: honest orphaning of a default-async in-query subagent under streaming (p6 incident)
+#   bg-child-keepalive-06: Stop hook blocks turn-end once while in-query background tasks are still running (p7 incident)
+#   bg-child-keepalive-07: Stop hook never blocks outside its gate (streaming off, flag off, no running tasks)
 #
 # Env-var step convention: the value "unset" means the variable is not set.
 
@@ -72,3 +74,29 @@ Feature: Keep-Alive Resolution
     # streaming mode, so markOrphanedBackgroundTasks early-returned and the
     # entry stayed "running" for 3+ hours — a zombie neither TaskOutput nor
     # TaskStop could resolve.
+
+  Scenario: bg-child-keepalive-06 Stop hook blocks turn-end once while in-query background tasks are still running
+    # Field incident: an agent improvised orchestration via the Workflow tool
+    # (a third spawn path the Step-0 gate doesn't cover) and ended its turn
+    # ~10s later; the in-query task died at teardown with zero indicator.
+    # The Stop hook is the structural catch-all for every such path, not just
+    # Agent/Task/Workflow specifically.
+    Given the app runs with ORCHA_STREAMING_MODE set to "1"
+    And the app runs with ORCHA_BG_CHILD_SESSIONS set to "unset"
+    And a session is open and idle
+    And the session's agent has an in-query background task still running
+    When the model attempts to end its turn
+    Then the Stop hook blocks the turn-end with a reason naming the running task count
+    And the reason mentions "TaskOutput", "TaskStop", and "spawn_session" as ways to resolve it
+    When the model attempts to end its turn a second time in the same turn
+    Then the Stop hook does not block again, even though the task is still running
+
+  Scenario: bg-child-keepalive-07 Stop hook never blocks outside its gate
+    Given a session is open and idle
+    And the session's agent has an in-query background task still running
+    When the model attempts to end its turn with ORCHA_STREAMING_MODE set to "0"
+    Then the Stop hook does not block
+    When the model attempts to end its turn with ORCHA_BG_CHILD_SESSIONS set to "0"
+    Then the Stop hook does not block
+    When the model attempts to end its turn with no running background tasks
+    Then the Stop hook does not block
