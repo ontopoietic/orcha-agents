@@ -391,13 +391,15 @@ export function useSessionSearch({
 
   // --- Data pipeline ---
 
-  // Filter out hidden sessions before any processing
-  const visibleItems = useMemo(() => items.filter(item => !item.hidden), [items])
+  // Hidden-session filtering happens upstream (AppShell's workspaceSessionMetas,
+  // gated by the "Show hidden sessions" toggle) — trust the caller's `items`,
+  // same as isArchived, which this hook filters per-filter-kind rather than as
+  // a blanket pre-step.
 
   // Sort by most recent activity first
   const sortedItems = useMemo(() =>
-    [...visibleItems].sort((a, b) => (b.lastMessageAt || 0) - (a.lastMessageAt || 0)),
-    [visibleItems]
+    [...items].sort((a, b) => (b.lastMessageAt || 0) - (a.lastMessageAt || 0)),
+    [items]
   )
 
   // Filter items by search query or current filter

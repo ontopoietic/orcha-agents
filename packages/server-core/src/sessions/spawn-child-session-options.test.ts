@@ -25,6 +25,25 @@ describe('buildSpawnedChildSessionOptions', () => {
     expect(options.notifyParentOnComplete).toBe(true)
   })
 
+  // bg-child-visibility: hidden is opt-in per spawn, default false, and never
+  // inherited from the parent — a hidden session's own children still show up
+  // in the list unless they explicitly ask to be hidden too.
+  it('defaults hidden to false when the request omits it', () => {
+    const options = buildSpawnedChildSessionOptions({ prompt: 'do work' } as any, parent)
+    expect(options.hidden).toBe(false)
+  })
+
+  it('hides the child when the request explicitly asks for it', () => {
+    const options = buildSpawnedChildSessionOptions({ prompt: 'do work', hidden: true } as any, parent)
+    expect(options.hidden).toBe(true)
+  })
+
+  it('does not inherit hidden from the parent session', () => {
+    const hiddenParent: SpawnParentSession = { ...parent, ...({ hidden: true } as any) }
+    const options = buildSpawnedChildSessionOptions({ prompt: 'do work' } as any, hiddenParent)
+    expect(options.hidden).toBe(false)
+  })
+
   // bg-child-routing-04: rerouted child inherits execution context from the parent
   describe.each([
     ['claude-sonnet-5', 'allow-all'],

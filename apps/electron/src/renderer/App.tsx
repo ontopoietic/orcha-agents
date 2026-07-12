@@ -132,6 +132,7 @@ function handleBackgroundTaskEvent(
     const exists = currentTasks.some(t => t.toolUseId === evt.toolUseId)
     if (!exists) {
       const isWorkflow = evt.kind === 'workflow'
+      const isChildSession = evt.kind === 'child-session'
       store.set(backgroundTasksAtom, [
         ...currentTasks,
         {
@@ -143,6 +144,7 @@ function handleBackgroundTaskEvent(
           intent: evt.intent as string | undefined,
           status: 'running' as const,
           ...(isWorkflow ? { workflowId: evt.workflowId as string | undefined, agentsCompleted: 0 } : {}),
+          ...(isChildSession ? { kind: 'child-session' as const } : {}),
         },
       ])
     }

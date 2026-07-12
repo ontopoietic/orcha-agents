@@ -20,6 +20,8 @@ export interface SpawnChildSessionRequest {
   labels?: string[];
   workingDirectory?: string;
   projectId?: string;
+  /** Keep the child out of the session list/board; still reachable via its pill or a direct link. Not inherited from the parent — always opt-in per spawn. */
+  hidden?: boolean;
 }
 
 /** The subset of the parent `ManagedSession` state a spawned child inherits from. */
@@ -58,5 +60,6 @@ export function buildSpawnedChildSessionOptions(
     projectId: request.projectId ?? parent.projectId,
     parentSessionId: parent.id,
     notifyParentOnComplete: true,
+    hidden: request.hidden ?? false,
   };
 }
