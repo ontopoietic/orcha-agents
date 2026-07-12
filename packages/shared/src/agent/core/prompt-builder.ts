@@ -35,6 +35,21 @@ import type {
 const log = createLogger('prompt-builder');
 
 /**
+ * Matches free-text swarm/role-team orchestration requests for
+ * `getSwarmSkillHint()` — "swarm" or "role team" alone are enough; a bare
+ * role name only counts alongside an orchestration verb (avoids firing on
+ * every unrelated mention of "qa" or "architect").
+ */
+const SWARM_KEYWORD_PATTERN = /\bswarm\b|\brole[- ]team\b/i;
+const SWARM_ROLE_NAME_PATTERN = /\b(coder|qa|specifier|hardener|cleaner|refactorer|architect|conductor)\b/i;
+const SWARM_ORCHESTRATION_VERB_PATTERN = /\b(run|spawn|dispatch|launch|use|orchestrate)\b/i;
+const SWARM_ORCHESTRATION_PATTERN = {
+  test: (text: string): boolean =>
+    SWARM_KEYWORD_PATTERN.test(text) ||
+    (SWARM_ROLE_NAME_PATTERN.test(text) && SWARM_ORCHESTRATION_VERB_PATTERN.test(text)),
+};
+
+/**
  * PromptBuilder provides utilities for building prompts and context blocks.
  *
  * Usage:
@@ -301,6 +316,33 @@ Do NOT guess. Wrong anchors are worse than no anchors. If the user is just explo
     } catch {
       return null;
     }
+  }
+
+  // ============================================================
+  // Swarm Skill Hint (nudges the agent to load the swarm skill instead of
+  // improvising orchestration via Agent/Task/Workflow)
+  // ============================================================
+
+  /**
+   * Build a reminder block when the user's free-text message reads like a
+   * request for swarm/role-team orchestration ("run this with the swarm",
+   * naming a role like coder/qa/specifier, "role team", ...). Plain-text
+   * mentions like this don't trigger the `[skill:...]` prerequisite gate, so
+   * without this hint an agent can improvise ad hoc orchestration (e.g. the
+   * `Workflow` tool, which is background-by-design) instead of loading
+   * `skills/swarm/SKILL.md` and following its checkpoint/handoff discipline.
+   * Returns null when the message doesn't look like an orchestration request,
+   * or when no workspace swarm skill exists on disk.
+   */
+  getSwarmSkillHint(userMessage: string): string | null {
+    if (!userMessage || !SWARM_ORCHESTRATION_PATTERN.test(userMessage)) return null;
+
+    const skillPath = join(this.workspaceRootPath, 'skills', 'swarm', 'SKILL.md');
+    if (!existsSync(skillPath)) return null;
+
+    return `<swarm_skill_hint>
+This request reads like swarm/role-team orchestration. Before improvising with Agent/Task/Workflow tool calls, READ \`skills/swarm/SKILL.md\` in this workspace first and follow it instead of orchestrating ad hoc.
+</swarm_skill_hint>`;
   }
 
   /**
