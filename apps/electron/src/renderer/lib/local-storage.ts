@@ -22,6 +22,7 @@ export const KEYS = {
   collapsedSidebarItems: 'collapsed-sidebar-items',
   chatGroupingMode: 'chat-grouping-mode', // How to group chats: 'date' | 'status'
   collapsedSessionGroups: 'collapsed-session-groups', // Collapsed group keys in session list
+  showHiddenSessions: 'show-hidden-sessions', // Escape hatch: reveal sessions with meta.hidden in the list
 
   // Focus mode
   focusModeEnabled: 'focus-mode-enabled',

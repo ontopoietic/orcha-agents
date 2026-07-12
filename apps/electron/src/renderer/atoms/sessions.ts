@@ -714,6 +714,8 @@ export interface BackgroundTask {
   id: string
   /** Task type. 'workflow' = a fan-out Workflow launch (many sub-agents). */
   type: 'agent' | 'shell' | 'workflow'
+  /** Distinguishes a spawn_session child from other 'agent'-typed background tasks — its `id` is a real session id, so the pill can navigate to it. */
+  kind?: 'child-session'
   /** Tool use ID for correlation with messages */
   toolUseId: string
   /** Workflow run id (wf_...) — set for type 'workflow'; correlates agent-completed updates. */

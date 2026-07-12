@@ -51,7 +51,8 @@ Optional overrides: model, llmConnection, permissionMode, thinkingLevel, enabled
 
 thinkingLevel is silently ignored on non-reasoning models (e.g. gpt-4o, gemini-2.5-flash) — the SDK drops the reasoning param rather than erroring.
 
-The spawned session appears in the session list and runs fire-and-forget.
+The spawned session appears in the session list and runs fire-and-forget, and it also shows as a running/finished pill above this session's input either way.
+Set 'hidden' to true to keep it out of the session list/board — still reachable via that pill or a direct link. Default is false; only hide short-lived helper sessions, not standalone delegated work the user may want to find later.
 Only use 'attachments' for existing file paths on disk — the tool reads them automatically.`,
     {
       help: z.boolean().optional()
@@ -76,6 +77,8 @@ Only use 'attachments' for existing file paths on disk — the tool reads them a
         .describe('Working directory for the new session'),
       projectId: z.string().optional()
         .describe('Workspace project id to bind the new session to. Inherits the project working directory unless overridden.'),
+      hidden: z.boolean().optional()
+        .describe('If true, keep this session out of the session list/board (still reachable via the running/finished pill or a direct link). Default: false.'),
       attachments: z.array(z.object({
         path: z.string().describe('Absolute file path on disk'),
         name: z.string().optional().describe('Display name (defaults to file basename)'),

@@ -102,6 +102,8 @@ export interface SpawnSessionRequest {
   workingDirectory?: string;
   /** Workspace project id to bind the spawned session to */
   projectId?: string;
+  /** Keep the spawned session out of the session list/board; still reachable via its pill or a direct link. Default: false. */
+  hidden?: boolean;
   attachments?: Array<{ path: string; name?: string }>;
 }
 
@@ -1193,6 +1195,7 @@ ${formattedMessages}
         ? expandPath(input.workingDirectory)
         : undefined,
       projectId: input.projectId as string | undefined,
+      hidden: input.hidden as boolean | undefined,
       attachments: input.attachments as SpawnSessionRequest['attachments'],
     };
 

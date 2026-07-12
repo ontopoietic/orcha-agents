@@ -11,6 +11,8 @@ import {
 import { Spinner } from '@craft-agent/ui'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
+import { NavigationContext } from '@/contexts/NavigationContext'
+import { navigate, routes } from '@/lib/navigate'
 import type { BackgroundTask } from './ActiveTasksBar'
 
 /** Terminal data for overlay display */
@@ -64,6 +66,7 @@ export interface TaskActionMenuProps {
 export function TaskActionMenu({ task, sessionId, onKillTask, onInsertMessage, onShowTerminalOverlay, className }: TaskActionMenuProps) {
   const { t } = useTranslation()
   const [open, setOpen] = React.useState(false)
+  const nav = React.useContext(NavigationContext)
 
   const isTerminal = task.status !== 'running'
 
@@ -119,6 +122,14 @@ export function TaskActionMenu({ task, sessionId, onKillTask, onInsertMessage, o
 
   const handleStopTask = () => {
     onKillTask(task.id)
+    setOpen(false)
+  }
+
+  // Child-session tasks are real sessions (task.id is the child's session id) —
+  // the pill is the access path for hidden children, so it must navigate there.
+  const handleOpenSession = () => {
+    if (nav) nav.navigateToSession(task.id)
+    else navigate(routes.view.allSessions(task.id))
     setOpen(false)
   }
 
@@ -225,6 +236,15 @@ export function TaskActionMenu({ task, sessionId, onKillTask, onInsertMessage, o
         </button>
       </DropdownMenuTrigger>
       <StyledDropdownMenuContent align="start" sideOffset={4}>
+        {/* Open Session - Primary action for child-session tasks (the pill is
+            the access path when the child is hidden from the session list) */}
+        {task.kind === 'child-session' && (
+          <StyledDropdownMenuItem onClick={handleOpenSession}>
+            <ArrowUpRight />
+            {t('chat.openSession')}
+          </StyledDropdownMenuItem>
+        )}
+
         {/* View Output - Primary action */}
         <StyledDropdownMenuItem onClick={handleViewOutput}>
           <ArrowUpRight />

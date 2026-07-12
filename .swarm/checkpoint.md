@@ -1,5 +1,138 @@
 # bg-child-sessions — checkpoint
 
+## p8 hidden-children (this session) — FEATURE ROUND, opt-in hidden child sessions
+
+Goal: swarm/role child sessions live as PILLS in the parent chat instead of
+cluttering the session list. Commit `5f9b20e2` on `swarm/p8-hidden-children`
+(branch tip; includes p1–p7 = `f3244b59`).
+
+### Done
+- **Key discovery (saved a rewrite):** `meta.hidden` was NOT dead code — it's a
+  fully-wired-but-never-set field. `AppShell.tsx`'s `workspaceSessionMetas`
+  (line ~1425/1427, the actual source feeding `SessionList`, label/status
+  counts, and `useSessionSearch`) already unconditionally filters `!s.hidden`,
+  as does `NavigationContext.tsx:543` (auto-select/keyboard nav) and
+  `KanbanBoardContainer.tsx:200,250` (board tasks). `CreateSessionOptions.hidden`
+  → `storage.ts`/`SessionManager.createSession` → persisted session metadata
+  was already end-to-end. So requirement #2 ("session list respects it") came
+  for free once the flag is ever set to `true` — the actual gap was 100% on the
+  spawn-time plumbing + the escape hatch + pill navigation.
+- **Opt-in flag threaded end-to-end** (default `false`, NOT inherited from
+  parent — a hidden session's own children are not implicitly hidden):
+  - `packages/shared/src/agent/spawn-session-tool.ts` — new `hidden: z.boolean().optional()`
+    input + updated tool description (mentions the pill/list tradeoff).
+  - `packages/shared/src/agent/base-agent.ts` — `SpawnSessionRequest.hidden?: boolean`;
+    `preExecuteSpawnSession` reads `input.hidden`.
+  - `packages/server-core/src/sessions/spawn-child-session-options.ts` —
+    `SpawnChildSessionRequest.hidden?: boolean`; `buildSpawnedChildSessionOptions`
+    returns `hidden: request.hidden ?? false` (NOT `parent.hidden ?? ...` —
+    intentionally not inherited, per design decision #1).
+  - No DTO change needed — `CreateSessionOptions.hidden` already existed
+    (`packages/shared/src/protocol/dto.ts:144`).
+- **Escape hatch** — "Show hidden sessions" toggle in `AppShell.tsx`, in the
+  same dropdown as the existing "Group" submenu (grouping-mode pattern),
+  persisted via a new `storage.KEYS.showHiddenSessions` localStorage key
+  (mirrors `sidebarVisible`'s persistence pattern, non-workspace-scoped, plain
+  boolean — simpler than the per-view `viewFiltersMap` grouping-mode state
+  since this is a single global boolean, not per-filter-view).
+  - `workspaceSessionMetas`'s filter became `showHiddenSessions || !s.hidden`.
+  - `useSessionSearch.ts` had a SECOND, redundant blanket `!item.hidden` filter
+    on its `items` prop (line 395) that would have silently defeated the
+    toggle (AppShell includes hidden sessions in `items` when the toggle is
+    on, but this hook would strip them right back out). Removed it — the hook
+    now trusts the caller's filtering, same as it already does for
+    `isArchived` (filtered per-filter-kind inline, not as a blanket pre-step).
+    Confirmed `useSessionSearch` has exactly one caller (`SessionList.tsx`), so
+    this is safe.
+  - Did NOT touch `NavigationContext.tsx:543` (auto-select/keyboard next-prev)
+    or `KanbanBoardContainer.tsx` — those are out of the "session list" scope
+    per the mandate; the toggle only affects what `SessionList` renders.
+- **Pill navigation** — `TaskActionMenu.tsx` had a real gap: `kind:'child-session'`
+  tasks fell through to the generic `'agent'` type with zero navigation
+  wiring (only "View Output" / "Stop Task" existed). Added:
+  - `atoms/sessions.ts`: `BackgroundTask.kind?: 'child-session'` (previously
+    ONLY `type: 'agent'|'shell'|'workflow'` existed — `kind` from the p5
+    `task_backgrounded` event was read for the workflow branch but never
+    stored on the task object at all).
+  - `App.tsx`'s `handleBackgroundTaskEvent`: now also stamps
+    `kind: 'child-session'` onto the pushed task when `evt.kind === 'child-session'`.
+  - `TaskActionMenu.tsx`: new "Open session" menu item (shown only when
+    `task.kind === 'child-session'`) that calls `NavigationContext.navigateToSession(task.id)`
+    (falls back to `navigate(routes.view.allSessions(task.id))` when no
+    context, same pattern `BackgroundFinishedChip.tsx` already uses — `task.id`
+    IS the child's real session id for this kind).
+  - `BackgroundFinishedChip.tsx` (the terminal/finished pill) was NOT touched —
+    it already navigates generically by `sessionId` for ANY completed
+    background session via `backgroundFinishedAtom`, not gated by `kind`, so
+    hidden children already worked there. Confirmed by reading the file, not
+    just inferring.
+- **i18n**: `sidebar.showHiddenSessions` and `chat.openSession` added to all 7
+  locale files (`en/de/es/hu/ja/pl/zh-Hans`), alphabetically sorted, parity
+  confirmed via `lint:i18n:parity`/`lint:i18n:sorted` (both pass).
+- **Spec**: added scenarios `bg-child-visibility-05..08` to
+  `specs/bg-child-sessions/bg-child-visibility.feature` (default-visible
+  without hidden, absent-by-default with hidden:true, toggle reveals/hides,
+  pill + direct-nav reachability). Gherkin only — no acceptance
+  parser/runtime work was in scope for this round (conductor mandate said
+  "add scenarios", not implement the pipeline).
+- **Tests**: extended `spawn-child-session-options.test.ts` with 3 new cases
+  (defaults to `false`, explicit `true` override, NOT inherited from a
+  `parent.hidden: true` fixture).
+
+### Gates (all green)
+- `(cd packages/shared && bun run tsc --noEmit)` — 0 errors
+- `(cd packages/server-core && bun run typecheck)` — 0 errors
+- `(cd apps/electron && bun run typecheck)` — 0 errors
+- `(cd packages/shared && bun test src/agent/core)` — 161 pass, 0 fail
+- `(cd packages/server-core && bun test src/sessions)` — 130 pass, 0 fail (18 files;
+  was 125 pass at p5 checkpoint, +5 including the 3 new hidden tests + growth
+  from unrelated intervening work)
+- `bun run lint:i18n:parity` — OK (6 non-EN locales, 1653 keys each)
+- `bun run lint:i18n:sorted` — OK
+
+### Tried & rejected
+- Considered threading `hidden` through `NavigationContext.tsx`'s
+  `filterSessionsByFilter` (auto-select/keyboard nav) and
+  `KanbanBoardContainer.tsx`'s board-task filter too, gated on the same
+  toggle. Rejected: the conductor's design decisions (#2) scope the toggle to
+  "the session list", and auto-select explicitly comments "hidden sessions
+  should never appear in navigation" — conflating that with a user-visible
+  display toggle risked auto-selecting/keyboard-cycling into a hidden swarm
+  helper session, which is a worse UX than the status quo. Left as a possible
+  fast-follow if the user wants "show hidden" to be fully global rather than
+  list-scoped.
+- Considered inheriting `hidden` from `parent.hidden` in
+  `buildSpawnedChildSessionOptions` (mirroring how `model`/`permissionMode`/etc.
+  inherit). Rejected per explicit design decision #1 ("Default FALSE... Do NOT
+  hide all children implicitly") — every spawn is opt-in independently.
+
+### Open questions
+- None blocking. One judgment call flagged above (toggle scoped to session
+  list only, not kanban/auto-select) — flag to the user if they expect "Show
+  hidden sessions" to also reveal them on the kanban board.
+
+### Rebuild implications for the conductor
+**This round TOUCHES RENDERER** (`apps/electron/src/renderer/`): `App.tsx`,
+`atoms/sessions.ts`, `AppShell.tsx`, `TaskActionMenu.tsx`,
+`hooks/useSessionSearch.ts`, `lib/local-storage.ts`. All are component/hook
+logic changes (new state, new filter behavior, new menu item, new event
+field), not pure type-widening like p5's renderer touch — **a renderer bundle
+rebuild is required** before any live/packaged-app re-verification, in
+addition to the usual main-process rebuild for the `packages/shared` and
+`packages/server-core` changes (spawn tool schema, base-agent, SessionManager
+call chain is unchanged but the options builder it calls into changed).
+
+### Next
+- Conductor: rebuild (main + renderer), then live-verify at minimum:
+  (a) a plain `spawn_session` call with no `hidden` still shows in the list,
+  (b) `spawn_session` with `hidden: true` is absent from the list by default
+  but shows as a running pill and a finished pill, both clickable to the
+  child's session, (c) the "Show hidden sessions" toggle in the session
+  list's Group/display dropdown reveals it, (d) opening the hidden child via
+  a direct link/route still renders normally. No further coder work known to
+  be needed for this slice; ready for cleaner/hardener per the swarm
+  six-pack, or straight to merge review if this is being run as a four-pack.
+
 ## p7 stop-guard (this session) — FIX ROUND, three items from a second field incident
 
 Incident: user asked an agent to "run this with the swarm" (plain text — no

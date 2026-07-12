@@ -34,6 +34,7 @@ import {
   MailOpen,
   Anchor,
   FolderKanban,
+  EyeOff,
 } from "lucide-react"
 // SessionStatusIcons no longer used - icons come from dynamic sessionStatuses
 import { SourceAvatar } from "@/components/ui/source-avatar"
@@ -819,6 +820,12 @@ function AppShellContent({
   const [searchActive, setSearchActive] = React.useState(false)
   const [searchQuery, setSearchQuery] = React.useState('')
 
+  // Escape hatch for `meta.hidden` sessions (e.g. background swarm/role child
+  // sessions spawned with hidden:true) — off by default so the list stays tidy.
+  const [showHiddenSessions, setShowHiddenSessions] = React.useState(() => {
+    return storage.get(storage.KEYS.showHiddenSessions, false)
+  })
+
   // Grouping mode for chat list: per-view (stored in viewFiltersMap), forced to 'date' for state sub-views
   const isStateSubView = sessionFilter?.kind === 'state'
 
@@ -1422,11 +1429,12 @@ function AppShellContent({
   const remoteWorkspaceId = activeWorkspace?.remoteServer?.remoteWorkspaceId
   const workspaceSessionMetas = useMemo(() => {
     const metas = Array.from(sessionMetaMap.values())
-    if (!activeWorkspaceId) return metas.filter(s => !s.hidden)
+    const isVisible = (s: SessionMeta) => showHiddenSessions || !s.hidden
+    if (!activeWorkspaceId) return metas.filter(isVisible)
     return metas.filter(s =>
-      !s.hidden && (s.workspaceId === activeWorkspaceId || (remoteWorkspaceId && s.workspaceId === remoteWorkspaceId))
+      isVisible(s) && (s.workspaceId === activeWorkspaceId || (remoteWorkspaceId && s.workspaceId === remoteWorkspaceId))
     )
-  }, [sessionMetaMap, activeWorkspaceId, remoteWorkspaceId])
+  }, [sessionMetaMap, activeWorkspaceId, remoteWorkspaceId, showHiddenSessions])
 
   // Active sessions exclude archived - use this for all counts and filters except archived view
   const activeSessionMetas = useMemo(() => {
@@ -1733,6 +1741,11 @@ function AppShellContent({
   React.useEffect(() => {
     storage.set(storage.KEYS.sidebarVisible, isSidebarVisible)
   }, [isSidebarVisible])
+
+  // Persist "show hidden sessions" toggle to localStorage
+  React.useEffect(() => {
+    storage.set(storage.KEYS.showHiddenSessions, showHiddenSessions)
+  }, [showHiddenSessions])
 
   // Persist focus mode state to localStorage
   React.useEffect(() => {
@@ -3235,6 +3248,12 @@ function AppShellContent({
                               </>
                             )}
 
+                            <StyledDropdownMenuSeparator />
+                            <StyledDropdownMenuItem onClick={() => setShowHiddenSessions(v => !v)}>
+                              <EyeOff className="h-3.5 w-3.5" />
+                              <span className="flex-1">{t("sidebar.showHiddenSessions")}</span>
+                              {showHiddenSessions && <Check className="h-3 w-3 text-muted-foreground" />}
+                            </StyledDropdownMenuItem>
                             <StyledDropdownMenuSeparator />
                             <StyledDropdownMenuItem
                               onClick={() => {
