@@ -236,9 +236,15 @@ function handleBackgroundTaskEvent(
       return
     }
     const currentTasks = store.get(backgroundTasksAtom)
-    if (currentTasks.some(t => t.status === 'running')) {
+    // ORCHA §bg-child-sessions: kind:'child-session' tasks are REAL sessions with
+    // their own subprocess/lifecycle — they survive the parent's turn end by
+    // construction (mirrors the registry exemption in markOrphanedBackgroundTasks).
+    // Their chip ends only via the real task_completed from the SessionManager
+    // watcher. Orphaning them here made the pill vanish seconds after spawn once
+    // p6 started reporting backgroundTasksAlive:false under streaming.
+    if (currentTasks.some(t => t.status === 'running' && t.kind !== 'child-session')) {
       store.set(backgroundTasksAtom, currentTasks.map(t =>
-        t.status === 'running'
+        t.status === 'running' && t.kind !== 'child-session'
           ? { ...t, status: 'orphaned' as const, completedAt: Date.now() }
           : t
       ))
