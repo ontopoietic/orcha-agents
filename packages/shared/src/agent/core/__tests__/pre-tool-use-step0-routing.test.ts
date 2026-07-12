@@ -217,3 +217,70 @@ describe('runPreToolUseChecks > default-async steering reminder (ORCHA §bg-chil
     expect(result.additionalContext).toBeUndefined();
   });
 });
+
+describe('runPreToolUseChecks > Workflow tool joins the default-async reminder (ORCHA §bg-child-sessions p7)', () => {
+  const ORIGINAL_STREAMING = process.env.ORCHA_STREAMING_MODE;
+  const ORIGINAL_FLAG = process.env.ORCHA_BG_CHILD_SESSIONS;
+
+  afterEach(() => {
+    if (ORIGINAL_STREAMING === undefined) delete process.env.ORCHA_STREAMING_MODE;
+    else process.env.ORCHA_STREAMING_MODE = ORIGINAL_STREAMING;
+    if (ORIGINAL_FLAG === undefined) delete process.env.ORCHA_BG_CHILD_SESSIONS;
+    else process.env.ORCHA_BG_CHILD_SESSIONS = ORIGINAL_FLAG;
+  });
+
+  it('emits an additionalContext reminder for a Workflow call under streaming+flag', () => {
+    process.env.ORCHA_STREAMING_MODE = '1';
+    delete process.env.ORCHA_BG_CHILD_SESSIONS;
+
+    const result = runPreToolUseChecks(createInput({
+      toolName: 'Workflow',
+      input: { script: 'export const meta = {}' },
+    }));
+
+    expect(result.type).toBe('allow');
+    if (result.type !== 'allow') return;
+    expect(result.additionalContext).toContain('background-by-design');
+    expect(result.additionalContext).toContain('does not survive turn end');
+  });
+
+  it('never denies Workflow — always allow, even under streaming+flag', () => {
+    process.env.ORCHA_STREAMING_MODE = '1';
+    delete process.env.ORCHA_BG_CHILD_SESSIONS;
+
+    const result = runPreToolUseChecks(createInput({
+      toolName: 'Workflow',
+      input: { script: 'export const meta = {}' },
+    }));
+
+    expect(result.type).toBe('allow');
+  });
+
+  it('does not emit a Workflow reminder when streaming mode is off', () => {
+    process.env.ORCHA_STREAMING_MODE = '0';
+    delete process.env.ORCHA_BG_CHILD_SESSIONS;
+
+    const result = runPreToolUseChecks(createInput({
+      toolName: 'Workflow',
+      input: {},
+    }));
+
+    expect(result.type).toBe('allow');
+    if (result.type !== 'allow') return;
+    expect(result.additionalContext).toBeUndefined();
+  });
+
+  it('does not emit a Workflow reminder when the bg-child-sessions kill switch is set', () => {
+    process.env.ORCHA_STREAMING_MODE = '1';
+    process.env.ORCHA_BG_CHILD_SESSIONS = '0';
+
+    const result = runPreToolUseChecks(createInput({
+      toolName: 'Workflow',
+      input: {},
+    }));
+
+    expect(result.type).toBe('allow');
+    if (result.type !== 'allow') return;
+    expect(result.additionalContext).toBeUndefined();
+  });
+});

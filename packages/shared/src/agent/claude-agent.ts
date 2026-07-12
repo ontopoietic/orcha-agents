@@ -78,7 +78,7 @@ import { type ThinkingLevel, THINKING_TO_EFFORT, getThinkingTokens, DEFAULT_THIN
 import { generateConversationSummary } from './conversation-summary.ts';
 import { isStreamingModeEnabled, streamingTailCoversHistory } from './core/message-provider.ts';
 import { isBgChildSessionsFlagEnabled } from './core/bg-child-sessions.ts';
-import { buildStopHookGuardDecision } from './core/stop-hook-guard.ts';
+import { buildStopHookGuardDecision, applyTaskLifecycleEvent } from './core/stop-hook-guard.ts';
 import type { LoadedSource } from '../sources/types.ts';
 import { sourceNeedsAuthentication } from '../sources/credential-manager.ts';
 import type {
@@ -1858,11 +1858,7 @@ This is a branched conversation. All prior messages in this conversation are par
             // own `AgentEvent` stream — so `task_backgrounded` here only ever
             // means a genuinely in-query Agent/Task/Workflow task (the ones
             // that die at turn-end teardown).
-            if (event.type === 'task_backgrounded') {
-              this.runningInQueryTaskIds.add(event.taskId);
-            } else if (event.type === 'task_completed') {
-              this.runningInQueryTaskIds.delete(event.taskId);
-            }
+            applyTaskLifecycleEvent(this.runningInQueryTaskIds, event);
 
             // After source_test (or any session-scoped tool) successfully activates a
             // new source, activateSourceInSessionFn stashes a restart descriptor on the

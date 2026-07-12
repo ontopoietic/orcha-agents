@@ -53,3 +53,23 @@ export function buildStopHookGuardDecision(input: StopHookGuardInput): StopHookG
       'spawn_session / the task-DAG conductor — then end your turn.',
   };
 }
+
+/**
+ * Pure update step for the per-turn `runningInQueryTaskIds` set that feeds
+ * `buildStopHookGuardDecision`. Mirrors exactly what `claude-agent.ts`'s
+ * `chatImpl` event loop does on each adapted `AgentEvent`: add on
+ * `task_backgrounded`, remove on `task_completed`, ignore everything else.
+ * Mutates `ids` in place (same semantics as `Set.prototype.add`/`delete`)
+ * and returns it, so call sites can use it inline.
+ */
+export function applyTaskLifecycleEvent(
+  ids: Set<string>,
+  event: { type: string; taskId?: string },
+): Set<string> {
+  if (event.type === 'task_backgrounded' && event.taskId) {
+    ids.add(event.taskId);
+  } else if (event.type === 'task_completed' && event.taskId) {
+    ids.delete(event.taskId);
+  }
+  return ids;
+}

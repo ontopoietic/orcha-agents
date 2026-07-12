@@ -6,6 +6,7 @@
 #   bg-child-routing-04: rerouted child inherits execution context from the parent
 #   bg-child-routing-05: synchronous in-turn subagents are unaffected under streaming mode
 #   bg-child-routing-06: kill switch restores upstream background behavior
+#   bg-child-routing-07: the Workflow tool receives the same steering reminder as default-async subagents (p7)
 #
 # Env-var step convention: the value "unset" means the variable is not set.
 
@@ -80,3 +81,17 @@ Feature: Background-Subagent Routing
     When the parent agent attempts a subagent tool call with run_in_background set to "true"
     Then the subagent tool call is "allowed"
     And no new child session is created
+
+  Scenario: bg-child-routing-07 the Workflow tool receives the same steering reminder as default-async subagents (p7)
+    # Field incident: an agent asked to "run this with the swarm" (plain text,
+    # no [skill:...] mention) improvised with the Workflow tool instead of
+    # loading the swarm skill. Workflow is background-by-design — it always
+    # launches in the background and is not a PARENT_TASK_TOOLS entry, so the
+    # p6 default-async reminder never covered it. This is a steering reminder,
+    # not a deny: Workflow must stay usable.
+    Given the app runs with ORCHA_STREAMING_MODE set to "1"
+    And the app runs with ORCHA_BG_CHILD_SESSIONS set to "unset"
+    And a parent session is open and idle
+    When the parent agent attempts a Workflow tool call
+    Then the Workflow tool call is "allowed"
+    And the tool result carries a steering reminder that Workflow is background-by-design and does not survive turn end
