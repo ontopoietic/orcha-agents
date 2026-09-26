@@ -35,7 +35,7 @@ export interface ParsedRoute {
 // Compound Route Types (new format)
 // =============================================================================
 
-export type NavigatorType = 'sessions' | 'sources' | 'skills' | 'automations' | 'projects' | 'settings' | 'ledger' | 'observations'
+export type NavigatorType = 'sessions' | 'sources' | 'skills' | 'automations' | 'projects' | 'settings' | 'observations'
 
 export interface ParsedCompoundRoute {
   /** The navigator type */
@@ -63,7 +63,7 @@ export interface ParsedCompoundRoute {
  * Known prefixes that indicate a compound route
  */
 const COMPOUND_ROUTE_PREFIXES = [
-  'allSessions', 'flagged', 'archived', 'state', 'label', 'view', 'board', 'sources', 'skills', 'automations', 'projects', 'settings', 'ledger', 'observations'
+  'allSessions', 'flagged', 'archived', 'state', 'label', 'view', 'board', 'sources', 'skills', 'automations', 'projects', 'settings', 'observations'
 ]
 
 /**
@@ -228,11 +228,6 @@ export function parseCompoundRoute(route: string): ParsedCompoundRoute | null {
     return null
   }
 
-  // Ledger navigator
-  if (first === 'ledger') {
-    return { navigator: 'ledger', details: null }
-  }
-
   // Observations navigator (per-session observations browser)
   if (first === 'observations') {
     return { navigator: 'observations', details: null }
@@ -328,10 +323,6 @@ export function buildCompoundRoute(parsed: ParsedCompoundRoute): string {
     }
     if (!parsed.details) return base
     return `${base}/automation/${parsed.details.id}`
-  }
-
-  if (parsed.navigator === 'ledger') {
-    return 'ledger'
   }
 
   if (parsed.navigator === 'observations') {
@@ -467,11 +458,6 @@ function convertCompoundToViewRoute(compound: ParsedCompoundRoute): ParsedRoute 
       return { type: 'view', name: 'automations', params: {} }
     }
     return { type: 'view', name: 'automation-info', id: compound.details.id, params: {} }
-  }
-
-  // Ledger
-  if (compound.navigator === 'ledger') {
-    return { type: 'view', name: 'ledger', params: {} }
   }
 
   // Observations
@@ -620,11 +606,6 @@ function convertCompoundToNavigationState(compound: ParsedCompoundRoute): Naviga
       filter: compound.automationFilter,
       details: { type: 'automation', automationId: compound.details.id },
     }
-  }
-
-  // Ledger
-  if (compound.navigator === 'ledger') {
-    return { navigator: 'ledger' }
   }
 
   // Observations
@@ -837,10 +818,6 @@ function navigationStateToCompoundRoute(state: NavigationState): ParsedCompoundR
       automationFilter: state.filter ?? undefined,
       details: state.details ? { type: 'automation', id: state.details.automationId } : null,
     }
-  }
-
-  if (state.navigator === 'ledger') {
-    return { navigator: 'ledger', details: null }
   }
 
   if (state.navigator === 'observations') {

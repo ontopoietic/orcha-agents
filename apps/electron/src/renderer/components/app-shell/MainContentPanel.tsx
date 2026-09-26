@@ -31,7 +31,6 @@ import {
   isSettingsNavigation,
   isSkillsNavigation,
   isAutomationsNavigation,
-  isLedgerNavigation,
   isObservationsNavigation,
   isProjectsNavigation,
 } from '@/contexts/NavigationContext'
@@ -43,7 +42,6 @@ import { SourceInfoPage, ChatPage } from '@/pages'
 import SkillInfoPage from '@/pages/SkillInfoPage'
 import { getSettingsPageComponent } from '@/pages/settings/settings-pages'
 import { AutomationInfoPage } from '../automations/AutomationInfoPage'
-import LedgerDetailPage from '@/pages/LedgerDetailPage'
 import ObservationsDetailPage from '@/pages/ObservationsDetailPage'
 import ProjectInfoPage from '@/pages/ProjectInfoPage'
 import { KanbanBoardContainer } from './kanban/KanbanBoardContainer'
@@ -358,15 +356,6 @@ export function MainContentPanel({
         <div className="flex items-center justify-center h-full text-muted-foreground">
           <p className="text-sm">{t("automations.noAutomationsConfigured")}</p>
         </div>
-      </Panel>
-    )
-  }
-
-  // Ledger navigator - show full ledger detail view
-  if (isLedgerNavigation(navState)) {
-    return wrapWithStoplight(
-      <Panel variant="grow" className={className}>
-        <LedgerDetailPage />
       </Panel>
     )
   }

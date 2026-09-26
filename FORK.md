@@ -18,48 +18,8 @@ Dieses Repository ist ein Fork von [lukilabs/craft-agents-oss](https://github.co
 
 ## Unsere Änderungen
 
-### 1. Ledger UI
-
-#### 1a. Ledger Navigator Panel — Session-Liste
-Wenn die Ledger-Seite aktiv ist, zeigt der Navigator Panel (linke Spalte) die Session-Liste an (wie im Sessions-Tab), damit man schnell zwischen Sessions wechseln kann, ohne erst zurücknavigieren zu müssen.
-
-**Neue Dateien:**
-- `apps/electron/src/renderer/components/SyncHistoryList.tsx` — SyncHistoryList-Komponente (angelegt aber aktuell nicht genutzt; der Navigator zeigt stattdessen SessionList)
-
-**Berührt Upstream-Dateien (Konflikt-Kandidaten):**
-- `apps/electron/src/renderer/components/app-shell/AppShell.tsx` — `+isLedgerNavigation` Import, `+<SessionList key="ledger">` Block im NavigatorPanel (nach dem `isSessionsNavigation`-Block)
-- `apps/electron/src/renderer/components/app-shell/SessionList.tsx` — `+isLedgerNavigation` Import, `currentFilter` gibt `{ kind: "allSessions" }` zurück wenn Ledger-Navigator aktiv (statt `undefined`)
-
-#### 1b. Signal-Titel fett gerendert
-Signal-Summaries (Format `"Titel: Beschreibung"`) zeigen den Teil vor dem ersten `:` in **fett**. Betrifft sowohl den Signals-Tab als auch die Sync-History-Accordion-Einträge.
-
-**Neue Komponente (in bestehender Datei):**
-- `RenderSignalSummary` in `LedgerDetailPage.tsx` — teilt Summary bei `:`, Titel bekommt `font-bold text-foreground`, Rest `text-foreground/70`
-
-**Berührt Upstream-Dateien (Konflikt-Kandidaten):**
-- `apps/electron/src/renderer/pages/LedgerDetailPage.tsx` — `+RenderSignalSummary`, 3x angewendet: Signals-Tab (`signal.summary`), Accordion-Signale (`s.summary`), Accordion-Candidates (`c.title`). Zudem Debug-Logging und verbesserter Empty-State-Text.
-
-#### 1c. Ledger UI Basis
-Echtzeitanzeige des `.orcha-ledger.json` im App-Sidebar und als eigene Detailseite. Zeigt Signale, Kandidaten, Obligations und Sync-History.
-
-**Neue Dateien (kein Upstream-Konflikt):**
-- `apps/electron/src/main/ledger-watcher.ts` — fs.watch auf `.orcha-ledger.json` + `.orcha-sync-history.json`
-- `apps/electron/src/renderer/components/app-shell/LedgerPanel.tsx` — Sidebar-Panel mit Live-Aktivität
-- `apps/electron/src/renderer/pages/LedgerDetailPage.tsx` — Vollbild-Detailseite mit History-Tab
-- `apps/electron/src/shared/ledger-activity.ts` — Typen für LedgerData, SyncHistory, LedgerActivityEvent
-
-**Berührt Upstream-Dateien (Konflikt-Kandidaten):**
-- `apps/electron/src/renderer/components/app-shell/AppShell.tsx` — `+import LedgerPanel`, `+<LedgerPanel />` in Sidebar
-- `apps/electron/src/renderer/components/app-shell/MainContentPanel.tsx` — `+isLedgerNavigation` Route
-- `apps/electron/src/shared/types.ts` — `+ElectronAPI ledger*` Methoden, `+LedgerNavigationState`
-
-**Weitere neue Dateien:**
-- `apps/electron/src/preload/bootstrap.ts` — IPC-Bindings für Ledger
-- `apps/electron/src/renderer/atoms/panel-stack.ts` — Panel-Stack-Atom
-- `apps/electron/src/renderer/contexts/NavigationContext.tsx` — `+isLedgerNavigation`
-- `apps/electron/src/shared/route-parser.ts` — Ledger-Route-Parsing
-- `apps/electron/src/shared/routes.ts` — `+ledger` Route-Definition
-- `apps/electron/src/transport/__tests__/channel-map-parity.test.ts` — IPC-Kanal-Tests
+### 1. ~~Ledger UI~~ — entfernt (2026-09-26)
+Die Orcha-Sync-Ledger-UI (LedgerPanel in der Sidebar, LedgerDetailPage, `ledger`-Route/Navigator, `ledger-watcher.ts` + `ledger:*`-IPC, `ledger-activity.ts`-Typen, `ledgerWorkingDirAtom`) wurde komplett entfernt, weil der Orcha-Sync-Ledger (`.orcha-ledger.json` / `.orcha-sync-history.json`) abgeschafft ist. Damit entfallen alle zugehörigen Upstream-Berührungspunkte (AppShell, SessionList, MainContentPanel, NavigationContext, nav-helpers, route-parser, routes, types, preload, main/index, channel-map-parity). Nummer bewusst beibehalten, damit §-Verweise im Update-Protokoll stabil bleiben. **Nicht betroffen:** der Markdown-Observation-Ledger des Memory-Systems (§6, `mastra-om/parse-ledger.ts` u. a.).
 
 ### 2. PreCompact Hooks
 Ermöglicht Shell-Kommandos vor dem Context-Compaction-Event des Agents. Output wird dem Agent als "reason" zurückgegeben.
@@ -183,7 +143,7 @@ Pipeline: **Observer** (Haiku, extrahiert pro Session Observations als Markdown-
 
 **Semantic Recall (Vektor-Schicht, Juni 2026):** Die Text-Achse von `recall()` nutzt Embedding-Similarity statt nur Token-Overlap. Lokaler Embedder via `@huggingface/transformers` (`Xenova/multilingual-e5-small`, 384 dim, on-device, kein API-Key); per-Session-Cache `data/observations-embeddings.json` neben dem Evidence-Sidecar. Neue Module: `sessions/{embedder,vector-sidecar}.ts`, `recallSemantic()` in `recall-engine.ts`, Backfill `scripts/orcha-embed-observations.ts`. Bewusst KEINE Vektor-DB (Mastras libSQL/F32_BLOB-Pfad): bei Observation-Skala (~10²–10³ Vektoren) reicht Brute-Force-Cosine, null neue native DB-Dependency. Degradiert ohne Embedder automatisch auf Token-Overlap (`ORCHA_EMBED_DISABLE=1`). Modell-Cache: `~/.orcha-agents/models` (dev + paketiert geteilt, offline nach erstem Download). **Packaging (macOS):** `build:copy` (`apps/electron/scripts/copy-assets.ts`) staged ein minimales Embedder-Runtime nach `vendor/embedder/node_modules` (transformers + jinja + onnxruntime-node/-common, sharp-Stub statt nativem libvips, ONNX auf darwin getrimmt, WASM/Maps gepruned → ~79 MB); `electron-builder.yml` `mac.extraResources` merged es nach `app/node_modules`, erreichbar von `dist/main.cjs`. Hardened-Runtime lädt die unsignierte `.node` dank `disable-library-validation` (bereits gesetzt). **Offen:** Win/Linux-Packaging (dort Fallback auf Text-Scoring) und Pi-Subprozess-Backend (Recall im Pi-Bun-Prozess braucht analoges Staging; in-process Claude-Pfad ist abgedeckt).
 
-> **Verhältnis zum Ledger (§1):** Der Observer übernimmt künftig die konversationsbasierte Signal-Extraktion, die zuvor Hauptaufgabe des Ledger/CLI-Sync war (s. orcha-side `~/Developer/orcha`). Ledger bleibt für die git-/artefakt-getriebene Achse; Umbau ist Folgearbeit.
+> **Verhältnis zum Orcha-Sync-Ledger:** Die Ledger-UI (§1) ist seit 2026-09-26 entfernt (Orcha sync-ledger abgeschafft). Der Observer übernimmt die konversationsbasierte Signal-Extraktion. Die Reflector-Bridge in den Orcha-CLI-Ledger (`ORCHA_LEDGER_PROJECT_DIR`, `scripts/orcha-reflect.ts`) ist Backend-Code und wurde beim UI-Rückbau nicht angefasst — Entfernung ist Folgearbeit.
 
 > **Verhältnis zum Upstream-Project-Memory (seit v0.11.0):** v0.11.0 führt ein *eigenes*, orthogonales Memory-Konzept ein — projekt-gebundenes `MEMORY.md` unter `{workspaceRoot}/projects/{slug}/`, agent-kuratiert (via Write/Edit, ~5000-Token-Cap), immer als `<project_context>`-Block via `system.ts` in gebundene Sessions gepusht. Kein Extraktions-Pipeline, kein Embedding. **Injection-Pfade kollidieren nicht:** unser §6-Kern `prompt-builder.ts` (`<session_memory>` + `<relevant_memory>`) ist upstream-unberührt; das Project-Memory sitzt in `system.ts` (statisch/cacheable). Beide koexistieren (Entscheidung beim v0.11.0-Merge: Option A). **Milde Redundanz, kein Korrektheitsproblem:** innerhalb *eines* Projekts subsumiert das kuratierte `MEMORY.md` (push) teilweise unseren anchor-gated Cross-Session-Recall (pull, nur Pointer). **Folgearbeit (bewusst offen):** Cross-Session-Recall projekt-scope-aware machen — same-project überlässt geteiltes Wissen dem `MEMORY.md`, Recall glänzt dann projektübergreifend, wo Upstream nichts abdeckt.
 
@@ -274,6 +234,7 @@ Diese Änderungen liegen im separaten Repository `~/Developer/orcha/` und sind *
 | 2026-07-09 | v0.10.5 | v0.11.0 | **Merge** (`update/v0.11.0`, Backup `backup/main-v0.10.5`). Größtes Upstream-Release seit Fork-Basis: **Projects + Kanban-Board + durable Tasks/Conductor-DAG + Background-Agent-Keep-Alive** — wholesale übernommen (kein Ausblenden). **35 Konflikte**, davon: 3 Lockfile/package.json (→ Upstream-Version + Orcha-Branding + `bun install`), 7 i18n-Locales (Additiv-Union + Branding-Overlay, 21 Blöcke), 5 Tool-Registry/Bindings (`recall`/`set_session_anchors` ∪ `list_background_tasks`), 14 UI-Nav-Shell (Ledger/Observations-Routen ∪ Projects/Kanban-Routen, inkl. exhaustive-switch/Union-Types in `route-parser`/`routes`/`types`/`event-processor`), 2 Protokoll-DTO, 4 Backend. **Harte Dateien (Opus, manuell):** `SessionManager.ts` (Upstream +867/-37 TaskRunner/Conductor vs. Fork Anchor-Methoden — Method-Boundary-Union), `claude-agent.ts` (+272 persistent-input/keep-alive vs. Fork Streaming-Gate — **auto-gemergt, typecheck-verifiziert**), `pi-agent.ts`/`system.ts` (getSystemPrompt +`projectContext`-Param übernommen, Orcha-Branding bewahrt). **Semantik-Fix:** `set_session_status`-Beschreibung auf Upstream-„never-auto-close"-Semantik angeglichen (Kanban). **Upstream-Highlights:** Pi-SDK 0.80.3 (jiti-Uplift, s. Build-Gotcha unten), projekt-gebundenes `MEMORY.md` (§6-Reconciliation-Notiz), NSLocalNetworkUsageDescription-Fix. Validierung: typecheck:all ✓ (alle Pakete inkl. electron), shared **3198/0** (Quellbaum; `anchors.test.ts` + neue `projects/storage`-Tests grün), i18n parity+sorted ✓ (6 Locales, 1651 Keys), electron:build ✓ (Embedder 79M + observer-scripts `orcha-observe/reflect/recall-anchors` gestaged). | Timo + Craft Agent |
 | 2026-07-11 | v0.11.0+fork | v0.11.1 | Trivial-Patch (GPT-5.6 Luna/Terra/Sol, natives Max-Thinking, Pi-SDK 0.80.6 mit Input-Token-Pricing-Tiers). Nur 2 Konflikte: `apps/electron/package.json` (Version 0.11.1 + Orcha-Branding) und `bun.lock` (→ Upstream + `bun install`). Root-`package.json` auto-gemergt (unser isolated-Runner-Fix + Upstream-Versionsbump koexistieren). **jiti-Gotcha erneut zugeschlagen** (Pi-SDK-Bump → nested jiti fehlte) — per dokumentiertem `bun install --force` behoben. Validierung: typecheck:all ✓, shared 3228/0, i18n parity+sorted ✓. | Timo + Craft Agent |
 | 2026-08-06 | v0.11.1+fork (inkl. bg-child-sessions p1–p9) | v0.11.4 | **Merge** (`update/v0.11.4`, Backup `backup/main-v0.11.1+p9`). Nur **5 echte Konflikte**: `apps/electron/package.json` (Version+Branding), `bun.lock` (→ Upstream + `bun install`, kein jiti-Problem), `App.tsx` (2 Hunks: child-session-Chips ∪ Upstream startTime/Dismiss), `TaskActionMenu.tsx` (2 Hunks: Pill-Navigation ∪ Dismiss — Union), `SessionManager.ts` (Import-Union: spawn-child-session-Module ∪ `validateArchiveTarget`). **Semantik-Fang:** Upstream extrahierte das Turn-End-Orphaning in den neuen Helper `markLiveBackgroundTasksOrphaned` (`background-task-chip-state.ts`) — die p8.1-Child-Session-Exemption wäre dabei stillschweigend verloren gegangen; Exemption in den Helper verlegt. **Fork-Test-Drift gefixt (nicht merge-verursacht):** `persistent-input.test.ts` erwartete Keep-Alive-ON bei leerem Env — stale seit p6-Fold (`&& !isStreamingModeEnabled`, Streaming default ON); Tests auf p6-Semantik ausgerichtet. **Upstream-Highlights:** `create_task`- + `archive_session`-Tools (additiv neben `recall` registriert), Claude-SDK 0.3.197→**0.3.220** (⚠️ Post-Build §4 braucht neues natives Binary; Subagent-Nesting-Cap jetzt 1 — tangiert unser spawn_session-Routing NICHT), Opus 4.6 restauriert (`isDeprecatedClaudeOpus46Model` entfernt, One-Shot-Storage-Migration), Workspace-Transfer, Server-Lock-Exe-Verifikation, macOS-Auto-Update-Fix. Validierung: typecheck:all ✓, shared **3273/0** (+ `pre-tool-use-checks.isolated.ts` 79/0), i18n parity+sorted ✓ (6 Locales, 1655 Keys, keine neuen Branding-Strings), electron:build ✓ (Embedder 79M + 3 Observer-Skripte). Durchführung: Swarm (2× Sonnet-Rollen ui-chips/backend + Dirigent). | Timo + Craft Agent |
+| 2026-09-26 | v0.11.4+fork | v0.11.4+fork | Keine (Fork-interner Rückbau). **Ledger-UI entfernt (Orcha sync-ledger abgeschafft)** — §1 gestrichen: 4 Dateien gelöscht (`ledger-watcher.ts`, `LedgerPanel.tsx`, `LedgerDetailPage.tsx`, `ledger-activity.ts`), Ledger-Hunks aus 13 Upstream-Dateien zurückgebaut → weniger Konfliktkandidaten beim nächsten Merge. Observation-Ledger (§6) unverändert. | Timo + Craft Agent |
 
 ---
 

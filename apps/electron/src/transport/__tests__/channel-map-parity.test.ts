@@ -34,11 +34,6 @@ type ApiToChannelMapKeys =
   | 'onTransferProgress' // direct IPC listener — chunk upload progress
   | 'changeLanguage' // direct IPC to main process — syncs i18n language
   | 'getFilePath' // renderer-local — webUtils.getPathForFile, no IPC round-trip
-  | 'ledgerWatch' // direct IPC — ledger watcher
-  | 'ledgerUnwatch' // direct IPC — ledger watcher
-  | 'ledgerRead' // direct IPC — ledger reader
-  | 'ledgerHistory' // direct IPC — sync history reader
-  | 'onLedgerActivity' // direct IPC listener — ledger activity events
   | 'listAnchorables' // direct IPC — orcha CLI bridge for anchor picker
   | 'clearAnchorablesCache' // direct IPC — orcha CLI bridge cache invalidation
   | 'observationWatch' // direct IPC — observation file watcher

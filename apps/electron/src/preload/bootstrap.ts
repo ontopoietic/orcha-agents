@@ -423,27 +423,11 @@ client.onConnectionStateChanged((state) => {
   return () => { ipcRenderer.removeListener('transfer:progress', handler) }
 }
 
-// Ledger watcher — direct IPC (local file system, not routed through WS)
-;(api as ElectronAPI).ledgerWatch = (workingDir: string) =>
-  ipcRenderer.invoke('ledger:watch', workingDir)
-;(api as ElectronAPI).ledgerUnwatch = () =>
-  ipcRenderer.invoke('ledger:unwatch')
-;(api as ElectronAPI).ledgerRead = (workingDir: string) =>
-  ipcRenderer.invoke('ledger:read', workingDir)
-;(api as ElectronAPI).ledgerHistory = (workingDir: string) =>
-  ipcRenderer.invoke('ledger:history', workingDir)
-
 // Orcha CLI bridge — anchor picker data source
 ;(api as ElectronAPI).listAnchorables = (type, workingDir) =>
   ipcRenderer.invoke('orcha:list-anchorables', type, workingDir)
 ;(api as ElectronAPI).clearAnchorablesCache = (type, workingDir) =>
   ipcRenderer.invoke('orcha:clear-anchorables-cache', type, workingDir)
-;(api as ElectronAPI).onLedgerActivity = (callback) => {
-  const handler = (_event: Electron.IpcRendererEvent, activityEvent: unknown) =>
-    callback(activityEvent as import('../shared/ledger-activity').LedgerActivityEvent)
-  ipcRenderer.on('ledger:activity', handler)
-  return () => ipcRenderer.removeListener('ledger:activity', handler)
-}
 
 // Observation watcher — watch meta/observation-watermark.json in session dir
 ;(api as ElectronAPI).observationWatch = (sessionDir: string) =>

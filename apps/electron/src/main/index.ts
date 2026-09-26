@@ -965,31 +965,6 @@ app.whenReady().then(async () => {
         await rebuildMenu()
       })
 
-      // Ledger watcher — observe .orcha-ledger.json in working directory
-      ipcMain.handle('ledger:watch', (event, workingDir: string) => {
-        const { startLedgerWatch } = require('./ledger-watcher') as typeof import('./ledger-watcher')
-        startLedgerWatch(workingDir, (activityEvent) => {
-          if (!event.sender.isDestroyed()) {
-            event.sender.send('ledger:activity', activityEvent)
-          }
-        })
-      })
-
-      ipcMain.handle('ledger:unwatch', () => {
-        const { stopLedgerWatch } = require('./ledger-watcher') as typeof import('./ledger-watcher')
-        stopLedgerWatch()
-      })
-
-      ipcMain.handle('ledger:read', (_event, workingDir: string) => {
-        const { readFullLedger } = require('./ledger-watcher') as typeof import('./ledger-watcher')
-        return readFullLedger(workingDir)
-      })
-
-      ipcMain.handle('ledger:history', (_event, workingDir: string) => {
-        const { readSyncHistory } = require('./ledger-watcher') as typeof import('./ledger-watcher')
-        return readSyncHistory(workingDir)
-      })
-
       // Observation watcher — watch meta/observation-watermark.json in session dir
       ipcMain.handle('observation:watch', (event, sessionDir: string) => {
         const { startObservationWatch } = require('./observation-watcher') as typeof import('./observation-watcher')

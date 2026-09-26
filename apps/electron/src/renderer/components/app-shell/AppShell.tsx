@@ -80,7 +80,6 @@ import { PanelStackContainer } from "./PanelStackContainer"
 import { CompactSessionListFilter } from "./CompactSessionListFilter"
 import type { ChatDisplayHandle } from "./ChatDisplay"
 import { LeftSidebar } from "./LeftSidebar"
-import { LedgerPanel } from "./LedgerPanel"
 import { useSession } from "@/hooks/useSession"
 import { ensureSessionMessagesLoadedAtom } from "@/atoms/sessions"
 import { AppShellProvider, type AppShellContextType } from "@/context/AppShellContext"
@@ -119,7 +118,6 @@ import {
   isSettingsNavigation,
   isSkillsNavigation,
   isAutomationsNavigation,
-  isLedgerNavigation,
   isObservationsNavigation,
   isProjectsNavigation,
   type NavigationState,
@@ -2716,8 +2714,6 @@ function AppShellContent({
                 {/* Agent Tree: Hierarchical list of agents */}
                 {/* Agents section removed */}
                 </div>
-                {/* Ledger Panel — bottom of sidebar, monitors .orcha-ledger.json */}
-                <LedgerPanel />
               </div>
 
             </div>
@@ -3621,14 +3617,14 @@ function AppShellContent({
                 />
               </>
             )}
-            {(isLedgerNavigation(navState) || isObservationsNavigation(navState)) && (
-              /* Ledger / Observations: keep the session list visible for navigation —
-                 these views replace the chat content but the navigator should not
+            {isObservationsNavigation(navState) && (
+              /* Observations: keep the session list visible for navigation —
+                 this view replaces the chat content but the navigator should not
                  go blank. Same render as the chat-side path, just driven by the
                  workspace-wide session metas. */
               <>
                 <SessionList
-                  key={isLedgerNavigation(navState) ? 'ledger' : 'observations'}
+                  key="observations"
                   items={workspaceSessionMetas}
                   onDelete={handleDeleteSession}
                   onFlag={onFlagSession}

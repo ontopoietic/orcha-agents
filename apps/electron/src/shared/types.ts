@@ -268,13 +268,6 @@ export interface ElectronAPI {
   relaunchApp(): Promise<void>
   removeWorkspace(workspaceId: string): Promise<boolean>
 
-  // Ledger watcher — observe .orcha-ledger.json in working directory
-  ledgerWatch(workingDir: string): Promise<void>
-  ledgerUnwatch(): Promise<void>
-  ledgerRead(workingDir: string): Promise<import('./ledger-activity').LedgerData | null>
-  ledgerHistory(workingDir: string): Promise<import('./ledger-activity').SyncHistory>
-  onLedgerActivity(callback: (event: import('./ledger-activity').LedgerActivityEvent) => void): () => void
-
   // Observation watcher — watch meta/observation-watermark.json in session dir
   observationWatch(sessionDir: string): Promise<void>
   observationUnwatch(): Promise<void>
@@ -921,14 +914,6 @@ export interface AutomationsNavigationState {
   rightSidebar?: RightSidebarPanel
 }
 
-/**
- * Ledger navigation state
- */
-export interface LedgerNavigationState {
-  navigator: 'ledger'
-  rightSidebar?: RightSidebarPanel
-}
-
 export interface ObservationsNavigationState {
   navigator: 'observations'
   rightSidebar?: RightSidebarPanel
@@ -952,7 +937,6 @@ export type NavigationState =
   | SettingsNavigationState
   | SkillsNavigationState
   | AutomationsNavigationState
-  | LedgerNavigationState
   | ObservationsNavigationState
   | ProjectsNavigationState
 
@@ -975,10 +959,6 @@ export const isSkillsNavigation = (
 export const isAutomationsNavigation = (
   state: NavigationState
 ): state is AutomationsNavigationState => state.navigator === 'automations'
-
-export const isLedgerNavigation = (
-  state: NavigationState
-): state is LedgerNavigationState => state.navigator === 'ledger'
 
 export const isObservationsNavigation = (
   state: NavigationState
@@ -1022,9 +1002,6 @@ export const getNavigationStateKey = (state: NavigationState): string => {
   if (state.navigator === 'settings') {
     if (state.subpage === null) return 'settings'
     return `settings:${state.subpage}`
-  }
-  if (state.navigator === 'ledger') {
-    return 'ledger'
   }
   if (state.navigator === 'observations') {
     return 'observations'
@@ -1073,8 +1050,7 @@ export const parseNavigationStateKey = (key: string): NavigationState | null => 
     return { navigator: 'automations', details: null }
   }
 
-  // Handle ledger / observations (workspace- / session-wide views with no key params)
-  if (key === 'ledger') return { navigator: 'ledger' }
+  // Handle observations (session-wide view with no key params)
   if (key === 'observations') return { navigator: 'observations' }
 
   // Handle projects

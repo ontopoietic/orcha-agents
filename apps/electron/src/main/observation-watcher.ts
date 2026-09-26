@@ -5,7 +5,7 @@
  * Emits IPC events when the observer runs (file created or updated),
  * enabling the renderer to show a live "observed" badge.
  *
- * Pattern follows ledger-watcher.ts: directory watch + debounce.
+ * Pattern: directory watch + debounce.
  */
 
 import { watch, readFileSync, existsSync } from 'fs'

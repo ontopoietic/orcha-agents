@@ -25,7 +25,7 @@ import { useSessionActions } from "@/hooks/useSessionActions"
 import { useEntityListInteractions } from "@/hooks/useEntityListInteractions"
 import { useFocusZone } from "@/hooks/keyboard"
 import { useEscapeInterrupt } from "@/context/EscapeInterruptContext"
-import { useNavigation, useNavigationState, routes, isSessionsNavigation, isLedgerNavigation, isObservationsNavigation } from "@/contexts/NavigationContext"
+import { useNavigation, useNavigationState, routes, isSessionsNavigation, isObservationsNavigation } from "@/contexts/NavigationContext"
 import { useFocusContext } from "@/context/FocusContext"
 import { sendToWorkspaceAtom, type SessionMeta } from "@/atoms/sessions"
 import type { ViewConfig } from "@craft-agent/shared/views"
@@ -170,12 +170,12 @@ export function SessionList({
   const flatLabels = useMemo(() => flattenLabels(labels), [labels])
 
   // Get current filter from navigation state (for preserving context in tab routes)
-  // When the focused panel is on the workspace-level Ledger or per-session
-  // Observations view, the session list still needs SOMETHING to show.
+  // When the focused panel is on the per-session Observations view, the
+  // session list still needs SOMETHING to show.
   // Fall back to the allSessions filter so the navigator never goes blank.
   const currentFilter = isSessionsNavigation(navState)
     ? navState.filter
-    : (isLedgerNavigation(navState) || isObservationsNavigation(navState))
+    : isObservationsNavigation(navState)
       ? { kind: "allSessions" as const }
       : undefined
 

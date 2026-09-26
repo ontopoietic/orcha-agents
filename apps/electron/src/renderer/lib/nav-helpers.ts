@@ -32,11 +32,10 @@ export function isDetailNavState(navState: NavigationState | null): boolean {
     case 'automations':
     case 'projects':
       return navState.details !== null
-    case 'ledger':
     case 'observations':
-      // Orcha fork: flat full-page views with no detail drill-down — the
-      // session list stays visible as the navigator (see AppShell), so these
-      // are never in "detail" (content-only) mode.
+      // Orcha fork: flat full-page view with no detail drill-down — the
+      // session list stays visible as the navigator (see AppShell), so it
+      // is never in "detail" (content-only) mode.
       return false
   }
 }
