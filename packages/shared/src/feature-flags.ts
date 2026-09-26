@@ -59,6 +59,29 @@ export function isEmbeddedServerEnabled(): boolean {
   return false;
 }
 
+/**
+ * Runtime-evaluated check for Pages sharing (Cloudflare publication).
+ *
+ * Server-evaluated: the renderer learns it via `pages:getShareCapabilities`,
+ * never from its own process.env. Gates publish/update only — unpublish stays
+ * available regardless, so disabling the flag never strands a published page.
+ *
+ * Upstream defaults to ENABLED as of 2026-08-27 (the Cloudflare publication
+ * Worker is deployed and verified live). Publishing sends the page bundle to
+ * Craft's infrastructure (https://thecraftagents.com/p/api).
+ *
+ * ORCHA fork: defaults to DISABLED — Orcha pages must not be published to
+ * Craft's servers (same rationale as the disabled auto-update feed). The Share
+ * UI is hidden and publish/republish throw PAGE_SHARING_DISABLED; unpublish
+ * stays available. Opt in explicitly with CRAFT_FEATURE_PAGES_SHARING=1
+ * (optionally pointing CRAFT_PAGES_SHARE_API_URL at an own Worker).
+ */
+export function isPagesSharingEnabled(): boolean {
+  const override = parseBooleanEnv(getEnv('CRAFT_FEATURE_PAGES_SHARING'));
+  if (override !== undefined) return override;
+  return false;
+}
+
 export const FEATURE_FLAGS = {
   /** Enable Opus 4.7 fast mode (speed:"fast" + beta header). 6x pricing. */
   fastMode: false,
@@ -86,5 +109,14 @@ export const FEATURE_FLAGS = {
    */
   get embeddedServer(): boolean {
     return isEmbeddedServerEnabled();
+  },
+  /**
+   * Enable Pages sharing (publish to Cloudflare).
+   *
+   * ORCHA fork: defaults to DISABLED (upstream: enabled). Opt in with
+   * CRAFT_FEATURE_PAGES_SHARING=1.
+   */
+  get pagesSharing(): boolean {
+    return isPagesSharingEnabled();
   },
 } as const;

@@ -162,7 +162,7 @@ export interface ISessionManager {
   // ---------------------------------------------------------------------------
 
   setPendingPlanExecution(sessionId: string, planPath: string, draftInputSnapshot?: string): Promise<void>
-  markPendingPlanExecutionDispatched(sessionId: string): Promise<void>
+  markPendingPlanExecutionDispatched(sessionId: string): Promise<boolean>
   clearPendingPlanExecution(sessionId: string): Promise<void>
   getPendingPlanExecution(sessionId: string): { planPath: string; draftInputSnapshot?: string; awaitingCompaction: boolean; executionDispatched: boolean } | null
   markCompactionComplete(sessionId: string): Promise<void>
@@ -247,6 +247,13 @@ export interface ISessionManager {
    * Workaround for Bun's fs.watch on Linux not detecting atomic renames.
    */
   notifyConfigFileChange(workspaceRootPath: string, relativePath: string): void
+
+  /**
+   * Request a (re)capture of a page's preview poster. No-op unless a capturer
+   * was injected (Electron main only); headless/WebUI hosts fall back to the
+   * placeholder tile.
+   */
+  enqueuePageThumbnail(workspaceId: string, workspaceRootPath: string, slug: string): void
 
   // ---------------------------------------------------------------------------
   // Server-level observability

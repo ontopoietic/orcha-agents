@@ -2,6 +2,8 @@
  * Message types for conversations
  */
 
+import type { ContextUsageSnapshot } from './context-usage.ts';
+
 /**
  * Message roles for display (runtime)
  */
@@ -295,8 +297,8 @@ export interface Message {
   hidden?: boolean;
   // Turn ID: Correlation ID from the API's message.id, groups all messages in an assistant turn
   turnId?: string;
-  // Status type for special status messages (e.g., compacting)
-  statusType?: 'compacting' | 'compaction_complete';
+  // Status type for special status messages (retrying is transient renderer state)
+  statusType?: 'compacting' | 'compaction_complete' | 'retrying';
   // Info level for info messages (determines icon/color)
   infoLevel?: 'info' | 'warning' | 'error' | 'success';
   // Error-specific fields (for typed errors with diagnostics)
@@ -374,8 +376,8 @@ export interface StoredMessage {
   // Turn grouping - critical for TurnCard rendering after reload
   isIntermediate?: boolean;
   turnId?: string;
-  // Status type for compaction messages (persisted for reload)
-  statusType?: 'compacting' | 'compaction_complete';
+  // Status type (retry progress is not persisted by the session manager)
+  statusType?: 'compacting' | 'compaction_complete' | 'retrying';
   // Info level for info messages (persisted for reload)
   infoLevel?: 'info' | 'warning' | 'error' | 'success';
   // Error display fields
@@ -429,6 +431,9 @@ export interface TokenUsage {
   costUsd: number;
   cacheReadTokens?: number;
   cacheCreationTokens?: number;
+  contextWindow?: number;
+  /** Current occupancy, separate from cumulative/billable counters. */
+  contextUsage?: ContextUsageSnapshot;
 }
 
 /**
@@ -548,8 +553,12 @@ export interface AgentEventUsage {
  * turnId: Correlation ID from the API's message.id, groups all events in an assistant turn
  */
 export type AgentEvent =
+  // Failed assistant output is discarded before a retry can produce more text.
+  | { type: 'text_discard'; turnId: string }
+  | { type: 'retry'; phase: 'backoff'; message: string }
+  | { type: 'retry'; phase: 'active' | 'end' }
   | { type: 'status'; message: string }
-  | { type: 'info'; message: string }
+  | { type: 'info'; message: string; compactionTrigger?: 'manual' | 'auto' }
   | { type: 'text_delta'; text: string; turnId?: string; parentToolUseId?: string }
   | { type: 'text_complete'; text: string; isIntermediate?: boolean; turnId?: string; parentToolUseId?: string; sdkMessageId?: string }
   | { type: 'pi_turn_anchor'; sdkMessageId: string; sdkTurnAnchor: string }
@@ -582,7 +591,9 @@ export type AgentEvent =
   | { type: 'shell_killed'; shellId: string; turnId?: string }
   | { type: 'source_activated'; sourceSlug: string; originalMessage: string }
   | { type: 'usage_update'; usage: Pick<AgentEventUsage, 'inputTokens' | 'contextWindow'> }
-  | { type: 'steer_undelivered'; message: string };
+  | { type: 'context_usage'; contextUsage: ContextUsageSnapshot }
+  | { type: 'compaction_failed' }
+  | { type: 'steer_undelivered'; message: string; messageId?: string };
 
 /**
  * Generate a unique message ID

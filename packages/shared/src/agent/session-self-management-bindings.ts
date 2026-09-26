@@ -1,7 +1,8 @@
 /**
  * Session Self-Management Bindings
  *
- * Attaches 6 session management properties to a SessionToolContext using
+ * Attaches the session-scoped tool properties (session management, tasks,
+ * messaging, pages) to a SessionToolContext using
  * Object.defineProperty with non-memoized lazy getters. Each access resolves
  * the callback from the session-scoped tool callback registry at call time,
  * so late merges and callback replacements are immediately visible without
@@ -25,8 +26,8 @@ import { recall, recallSemantic, resolvePointer } from '../sessions/recall-engin
 /**
  * Attach session self-management bindings to a SessionToolContext.
  *
- * Defines lazy getters for: setSessionLabels, setSessionStatus,
- * getSessionInfo, listSessions, resolveLabels, resolveStatus.
+ * Defines lazy getters for the session-management callbacks (labels, status,
+ * archive, list/info, resolve helpers), messaging, createTask, and pages.
  *
  * @param context - The SessionToolContext to augment (mutated in place)
  * @param sessionId - The session ID for registry lookup and getSessionInfo defaulting
@@ -184,6 +185,14 @@ export function attachSessionSelfManagementBindings(
   Object.defineProperty(context, 'createTask', {
     get() {
       return getSessionScopedToolCallbacks(sessionId)?.createTaskFn;
+    },
+    configurable: true,
+    enumerable: true,
+  });
+
+  Object.defineProperty(context, 'pages', {
+    get() {
+      return getSessionScopedToolCallbacks(sessionId)?.pages;
     },
     configurable: true,
     enumerable: true,

@@ -34,6 +34,11 @@ import {
 import type { LabelConfig } from '@craft-agent/shared/labels'
 import { parseMentions } from '@/lib/mentions'
 import { RichTextInput, type RichTextInputHandle } from '@/components/ui/rich-text-input'
+import { useInputAvailableHeight } from '@/hooks/useInputAvailableHeight'
+import { getComposerMaxHeight } from './composer-height'
+import { getContextDisplay, getContextDisplayLabels, type ContextStatus } from './context-display'
+import { createPendingPlanDispatcher } from './pending-plan-dispatch'
+import { scrollFocusedCaretIntoView } from '@/lib/scroll-focused-caret'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@craft-agent/ui'
 import {
   DropdownMenu,
@@ -86,7 +91,6 @@ import { WorkingDirectorySelector, formatPathForDisplay } from './WorkingDirecto
 import { CompactPermissionModeSelector } from './CompactPermissionModeSelector'
 import { CompactModelSelector } from './CompactModelSelector'
 import {
-  formatTokenCount,
   groupConnectionsByProvider,
   stripPiPrefixForDisplay,
 } from './model-picker-helpers'
@@ -165,6 +169,8 @@ export interface FreeFormInputProps {
   onAttachmentsChange?: (attachments: FileAttachment[]) => void
   /** When true, removes container styling (shadow, bg, rounded) - used when wrapped by InputContainer */
   unstyled?: boolean
+  /** Total height budget, including actions; supplied by InputContainer when wrapped. */
+  maxHeight?: number
   /** Callback when component height changes (for external animation sync) */
   onHeightChange?: (height: number) => void
   /** Callback when focus state changes */
@@ -203,14 +209,7 @@ export interface FreeFormInputProps {
   /** Whether the session is empty (no messages yet) - affects context badge prominence */
   isEmptySession?: boolean
   /** Context status for showing compaction indicator and token usage */
-  contextStatus?: {
-    /** True when SDK is actively compacting the conversation */
-    isCompacting?: boolean
-    /** Input tokens used so far in this session */
-    inputTokens?: number
-    /** Model's context window size in tokens */
-    contextWindow?: number
-  }
+  contextStatus?: ContextStatus
   /** Follow-up annotations shown as context chips above the input */
   followUpItems?: FollowUpInputItem[]
   /** Callback when user clicks a follow-up chip body */
@@ -278,6 +277,7 @@ export function FreeFormInput({
   onAttachmentsChange,
   unstyled = false,
   onHeightChange,
+  maxHeight,
   onFocusChange,
   sources = [],
   enabledSourceSlugs = [],
@@ -564,7 +564,6 @@ export function FreeFormInput({
   const [loadingCount, setLoadingCount] = React.useState(0)
   const [sourceDropdownOpen, setSourceDropdownOpen] = React.useState(false)
   const [isFocused, setIsFocused] = React.useState(false)
-  const [inputMaxHeight, setInputMaxHeight] = React.useState(540)
   const [modelDropdownOpen, setModelDropdownOpen] = React.useState(false)
 
   // Input settings (loaded from config)
@@ -595,19 +594,11 @@ export function FreeFormInput({
   // Double-Esc interrupt: show warning overlay on first Esc, interrupt on second
   const { showEscapeOverlay } = useEscapeInterrupt()
 
-  // Calculate max height: min(66% of window height, 540px)
-  React.useEffect(() => {
-    const updateMaxHeight = () => {
-      const maxFromWindow = Math.floor(window.innerHeight * 0.66)
-      setInputMaxHeight(Math.min(maxFromWindow, 540))
-    }
-    updateMaxHeight()
-    window.addEventListener('resize', updateMaxHeight)
-    return () => window.removeEventListener('resize', updateMaxHeight)
-  }, [])
-
   const dragCounterRef = React.useRef(0)
   const containerRef = React.useRef<HTMLDivElement>(null)
+  const contentScrollRef = React.useRef<HTMLDivElement>(null)
+  const availableHeight = useInputAvailableHeight(containerRef, maxHeight === undefined)
+  const composerMaxHeight = maxHeight ?? getComposerMaxHeight(availableHeight, 'freeform')
   const sourceButtonRef = React.useRef<HTMLButtonElement>(null)
   const fileInputRef = React.useRef<HTMLInputElement>(null)
 
@@ -692,136 +683,78 @@ export function FreeFormInput({
     return () => window.removeEventListener('craft:approve-plan', handleApprovePlan as EventListener)
   }, [sessionId, permissionMode, onPermissionModeChange, onSubmit, consumeInputDraftSnapshot])
 
-  // Listen for craft:approve-plan-with-compact events (Accept & Compact option)
-  // This compacts the conversation first, then executes the plan.
-  // The pending state is persisted to survive page reloads (CMD+R).
-  React.useEffect(() => {
-    const handleApprovePlanWithCompact = async (e: CustomEvent<PlanApprovalEventDetail>) => {
-      // Only handle if this event is for our session
-      if (e.detail?.sessionId && e.detail.sessionId !== sessionId) {
-        return
-      }
+  // Live completion and reload recovery share one persisted-state dispatcher.
+  // Register its listener before the approval listener can send /compact.
+  const processingRef = React.useRef(isProcessing)
+  processingRef.current = isProcessing
+  const requestPendingPlanRef = React.useRef<(() => void) | null>(null)
 
-      const planPath = e.detail?.planPath
-      const shouldIncludeDraft = e.detail?.includeDraftInput !== false
-      const draftInputSnapshot = shouldIncludeDraft ? consumeInputDraftSnapshot() : ''
-
-      // Switch to allow-all (Auto) mode if in Explore mode
-      if (permissionMode === 'safe') {
-        onPermissionModeChange?.('allow-all')
-      }
-
-      // Persist the pending plan execution state BEFORE sending /compact.
-      // This allows reload recovery if CMD+R happens during compaction.
-      if (sessionId) {
-        await window.electronAPI.sessionCommand(sessionId, {
-          type: 'setPendingPlanExecution',
-          planPath: planPath ?? '',
-          draftInputSnapshot,
-        })
-      }
-
-      // Send /compact to trigger compaction
-      onSubmit('/compact', undefined)
-
-      // Set up a one-time listener for compaction complete.
-      // This handles the normal case (no reload during compaction).
-      const handleCompactionComplete = async (compactEvent: CustomEvent<{ sessionId?: string }>) => {
-        // Only handle if this is for our session
-        if (compactEvent.detail?.sessionId !== sessionId) {
-          return
-        }
-
-        // Remove the listener (one-time use)
-        window.removeEventListener('craft:compaction-complete', handleCompactionComplete as unknown as EventListener)
-
-        const executionMessage = buildPlanApprovalMessage({
-          planPath,
-          draftInput: draftInputSnapshot,
-        })
-        onSubmit(executionMessage, undefined)
-
-        // Clear the pending state since we just sent the execution message
-        if (sessionId) {
-          await window.electronAPI.sessionCommand(sessionId, {
-            type: 'clearPendingPlanExecution',
-          })
-        }
-      }
-
-      window.addEventListener('craft:compaction-complete', handleCompactionComplete as unknown as EventListener)
-    }
-
-    window.addEventListener('craft:approve-plan-with-compact', handleApprovePlanWithCompact as unknown as EventListener)
-    return () => window.removeEventListener('craft:approve-plan-with-compact', handleApprovePlanWithCompact as unknown as EventListener)
-  }, [sessionId, permissionMode, onPermissionModeChange, onSubmit, consumeInputDraftSnapshot])
-
-  // Reload recovery: Check for pending plan execution on mount.
-  // If the page reloaded after compaction completed (awaitingCompaction = false),
-  // we need to send the plan execution message that was interrupted by the reload.
-  // Also listen for compaction-complete in case CMD+R happened during compaction.
   React.useEffect(() => {
     if (!sessionId) return
-
-    let hasExecuted = false
-
-    const isExpectedReconnectError = (error: unknown): boolean => {
-      const message = error instanceof Error ? error.message : String(error)
-      return message.includes('Connection closed')
-        || message.includes('Client disconnected')
-        || message.includes('transport')
-        || message.includes('socket')
-    }
-
-    const executePendingPlan = async () => {
-      if (hasExecuted) return
-
-      try {
-        const pending = await window.electronAPI.getPendingPlanExecution(sessionId)
-        if (!pending || pending.awaitingCompaction || pending.executionDispatched) return
-
-        // Mark dispatched before sending so reload recovery does not double-submit
-        // the same plan if onSubmit succeeds but cleanup fails during a reconnect.
-        await window.electronAPI.sessionCommand(sessionId, {
-          type: 'markPendingPlanExecutionDispatched',
-        })
-
-        // Compaction completed but we never sent the execution message (page reloaded).
-        // Send it now and clear the pending state.
-        hasExecuted = true
-        const executionMessage = buildPlanApprovalMessage({
-          planPath: pending.planPath,
-          draftInput: pending.draftInputSnapshot,
-        })
-        onSubmit(executionMessage, undefined)
-
-        await window.electronAPI.sessionCommand(sessionId, {
-          type: 'clearPendingPlanExecution',
-        })
-      } catch (error) {
-        if (!isExpectedReconnectError(error)) {
+    const dispatcher = createPendingPlanDispatcher({
+      isBusy: () => processingRef.current,
+      load: () => window.electronAPI.getPendingPlanExecution(sessionId),
+      claim: () => window.electronAPI.sessionCommand(sessionId, { type: 'markPendingPlanExecutionDispatched' }),
+      submit: pending => onSubmit(buildPlanApprovalMessage({
+        planPath: pending.planPath,
+        draftInput: pending.draftInputSnapshot,
+      }), undefined),
+      clear: () => window.electronAPI.sessionCommand(sessionId, { type: 'clearPendingPlanExecution' }),
+    })
+    const request = () => {
+      void dispatcher.request().catch(error => {
+        const message = error instanceof Error ? error.message : String(error)
+        if (!/Connection closed|Client disconnected|transport|socket/.test(message)) {
           console.error('[FreeFormInput] Failed to resume pending plan execution:', error)
         }
-      }
+      })
     }
-
-    // Check immediately on mount (handles case where compaction already completed)
-    executePendingPlan()
-
-    // Also listen for compaction-complete in case CMD+R happened during compaction.
-    // When compaction finishes after reload, this listener will trigger execution.
-    const handleCompactionComplete = async (e: CustomEvent<{ sessionId: string }>) => {
-      if (e.detail?.sessionId !== sessionId) return
-      // Small delay to ensure markCompactionComplete has been called
-      await new Promise(resolve => setTimeout(resolve, 100))
-      executePendingPlan()
+    const handleCompactionComplete = (event: Event) => {
+      if ((event as CustomEvent<{ sessionId?: string }>).detail?.sessionId === sessionId) request()
     }
-
-    window.addEventListener('craft:compaction-complete', handleCompactionComplete as unknown as EventListener)
+    requestPendingPlanRef.current = request
+    window.addEventListener('craft:compaction-complete', handleCompactionComplete)
+    request()
     return () => {
-      window.removeEventListener('craft:compaction-complete', handleCompactionComplete as unknown as EventListener)
+      window.removeEventListener('craft:compaction-complete', handleCompactionComplete)
+      if (requestPendingPlanRef.current === request) requestPendingPlanRef.current = null
+      dispatcher.dispose()
     }
   }, [sessionId, onSubmit])
+
+  // Completion may be published while the host is finishing the current turn.
+  // Its idle transition is a second wakeup, not a timing-based guess.
+  React.useEffect(() => {
+    if (!isProcessing) requestPendingPlanRef.current?.()
+  }, [isProcessing, sessionId])
+
+  React.useEffect(() => {
+    if (!sessionId) return
+    let preparing = false
+    const handleApprovePlanWithCompact = async (event: CustomEvent<PlanApprovalEventDetail>) => {
+      if (!shouldHandleScopedInputEvent({ sessionId, isFocusedPanel, targetSessionId: event.detail?.sessionId })) return
+      if (preparing || processingRef.current) return
+      preparing = true
+      try {
+        const draftInputSnapshot = event.detail?.includeDraftInput !== false ? consumeInputDraftSnapshot() : ''
+        if (permissionMode === 'safe') onPermissionModeChange?.('allow-all')
+        // Persist first. Only actual successful manual compaction changes this
+        // readiness; failure/automatic compaction events never authorize a send.
+        await window.electronAPI.sessionCommand(sessionId, {
+          type: 'setPendingPlanExecution',
+          planPath: event.detail?.planPath ?? '',
+          draftInputSnapshot,
+        })
+        onSubmit('/compact', undefined)
+      } catch (error) {
+        console.error('[FreeFormInput] Failed to start plan compaction:', error)
+      } finally {
+        preparing = false
+      }
+    }
+    window.addEventListener('craft:approve-plan-with-compact', handleApprovePlanWithCompact as unknown as EventListener)
+    return () => window.removeEventListener('craft:approve-plan-with-compact', handleApprovePlanWithCompact as unknown as EventListener)
+  }, [sessionId, isFocusedPanel, permissionMode, onPermissionModeChange, onSubmit, consumeInputDraftSnapshot])
 
   // Listen for craft:focus-input events (restore focus after popover/dropdown closes)
   React.useEffect(() => {
@@ -1568,18 +1501,25 @@ export function FreeFormInput({
     && !!effectiveConnectionDetails
     && isCompatProvider(effectiveConnectionDetails.providerType)
     && !modelSupportsImages(effectiveConnectionDetails, currentModel)
+  const contextDisplay = getContextDisplay(contextStatus, getModelContextWindow(currentModel))
+  const contextLabels = getContextDisplayLabels(contextDisplay, t)
+
+  React.useLayoutEffect(() => {
+    if (contentScrollRef.current) scrollFocusedCaretIntoView(contentScrollRef.current)
+  }, [composerMaxHeight, attachments, followUpItems, showVisionWarning, isCollapsedInCompact])
 
   return (
     <form onSubmit={handleSubmit}>
       <div
         ref={containerRef}
         className={cn(
-          'overflow-hidden transition-all',
+          'flex flex-col min-h-0 overflow-hidden transition-colors',
           // Container styling - only when not wrapped by InputContainer
           !unstyled && 'rounded-[16px] shadow-middle',
           !unstyled && 'bg-background',
           isDraggingOver && 'ring-2 ring-foreground ring-offset-2 ring-offset-background bg-foreground/5'
         )}
+        style={{ maxHeight: composerMaxHeight }}
         onDragEnter={handleDragEnter}
         onDragLeave={handleDragLeave}
         onDragOver={handleDragOver}
@@ -1648,6 +1588,9 @@ export function FreeFormInput({
           />
         )}
 
+        {/* Text and ancillary content share one scroll region. Keeping actions
+            outside it reserves their measured flex height, even with many chips. */}
+        <div ref={contentScrollRef} className="min-h-0 overflow-y-auto overscroll-contain" data-composer-content>
         {/* Pre-flight image-support warning — only for pi_compat connections
             where the renderer can both detect text-only models and offer to
             flip the per-model supportsImages override on the spot. */}
@@ -1774,15 +1717,16 @@ export function FreeFormInput({
           skills={skills}
           sources={sources}
           workspaceId={workspaceSlug}
-          className="pl-5 pr-4 pt-4 pb-3 overflow-y-auto min-h-[88px]"
-          style={{ maxHeight: inputMaxHeight }}
+          className="pl-5 pr-4 pt-4 pb-3 min-h-[88px]"
           data-tutorial="chat-input"
           spellCheck={spellCheck}
         />
         )}
 
-        {/* Bottom Row: Controls - wrapped in relative container for status slot overlay */}
-        <div className="relative">
+        </div>
+
+        {/* Bottom Row: Controls - never shrinks into the scrolling draft region. */}
+        <div className="relative shrink-0" data-composer-actions>
           {/* Status slot overlay - escape interrupt (highest priority), browser status, etc. */}
           <ToolbarStatusSlot
             showEscapeOverlay={isProcessing && showEscapeOverlay}
@@ -2380,20 +2324,25 @@ export function FreeFormInput({
                 </>
               )}
 
-              {/* Context usage footer - only show when we have token data */}
-              {contextStatus?.inputTokens != null && contextStatus.inputTokens > 0 && (
+              {/* Context usage footer - snapshot-aware occupancy, not cumulative billing. */}
+              {contextDisplay.visible && (
                 <>
                   <StyledDropdownMenuSeparator className="my-1" />
                   <div className="px-2 py-1.5 select-none">
-                    <div className="flex items-center justify-between text-xs text-muted-foreground">
-                      <span>{t('chat.context')}</span>
-                      <span className="flex items-center gap-1.5">
-                        {contextStatus.isCompacting && (
-                          <Spinner className="h-3 w-3" />
+                    <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
+                      <span>{contextLabels.window}</span>
+                      <span className="flex min-w-0 items-center gap-1.5 text-right">
+                        {contextStatus?.isCompacting && (
+                          <Spinner className="h-3 w-3 shrink-0" />
                         )}
-                        {t('chat.tokensUsed', { displayCount: formatTokenCount(contextStatus.inputTokens) })}
+                        <span>{contextLabels.usage}</span>
                       </span>
                     </div>
+                    {(contextLabels.percent || contextLabels.qualifier) && (
+                      <div className="mt-0.5 text-[10px] text-foreground/40">
+                        {[contextLabels.percent, contextLabels.qualifier].filter(Boolean).join(' · ')}
+                      </div>
+                    )}
                   </div>
                 </>
               )}
@@ -2401,42 +2350,21 @@ export function FreeFormInput({
           </DropdownMenu>
           )}
 
-          {/* 5.5 Context Usage Badge - persistent token-usage indicator next to the model selector.
-              Always visible once token data is available, regardless of fill level. Switches to a
-              tinted warning style (and stays click-to-compact) once it nears the compaction threshold. */}
-          {(() => {
-            // Calculate usage percentage based on compaction threshold (~77.5% of context window),
-            // not the full context window - this gives users meaningful warnings before compaction kicks in.
-            // SDK triggers compaction at ~155k tokens for a 200k context window.
-            // Falls back to known per-model context window when SDK hasn't reported usage yet.
-            const effectiveContextWindow = contextStatus?.contextWindow || getModelContextWindow(currentModel)
-            const compactionThreshold = effectiveContextWindow
-              ? Math.round(effectiveContextWindow * 0.775)
-              : null
-            const usagePercent = contextStatus?.inputTokens && compactionThreshold
-              ? Math.min(99, Math.round((contextStatus.inputTokens / compactionThreshold) * 100))
-              : null
-
-            // Persistent: render as soon as we have a usage figure, no matter how full.
-            if (usagePercent === null) return null
-
+          {/* 5.5 Context Usage Badge (Orcha fork: persistent — always visible once usage data exists,
+              tinted warning style from 80%). Data/labels come from upstream's snapshot-aware
+              getContextDisplay (truthful percent, may exceed 100%; compaction requires canCompact). */}
+          {contextDisplay.visible && contextDisplay.percent !== null && (() => {
             const isCompacting = !!contextStatus?.isCompacting
-            // Tinted warning style once we approach the compaction threshold; subtle/muted below that.
-            const isWarning = usagePercent >= 80 && !isCompacting
-
-            const handleCompactClick = () => {
-              if (!isProcessing) {
-                onSubmit('/compact', [])
-              }
-            }
-
+            const isWarning = contextDisplay.showWarning
             return (
               <Tooltip>
                 <TooltipTrigger asChild>
                   <button
                     type="button"
-                    onClick={handleCompactClick}
-                    disabled={isProcessing}
+                    onClick={() => {
+                      if (!isProcessing && contextDisplay.canCompact) onSubmit('/compact', [])
+                    }}
+                    disabled={isProcessing || !contextDisplay.canCompact}
                     className={cn(
                       "inline-flex items-center h-6 px-2 text-[12px] font-medium rounded-[6px] select-none cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed",
                       isWarning
@@ -2449,16 +2377,17 @@ export function FreeFormInput({
                     } as React.CSSProperties : undefined}
                   >
                     {isCompacting && <Spinner className="h-3 w-3 mr-1" />}
-                    {usagePercent}%
+                    {contextDisplay.percent}%
                   </button>
                 </TooltipTrigger>
-                <TooltipContent side="top">
-                  {isCompacting
-                    ? `${usagePercent}% context used — compacting…`
-                    : isProcessing
-                    ? `${usagePercent}% context used — wait for current operation`
-                    : `${usagePercent}% context used — click to compact`
-                  }
+                <TooltipContent side="top" className="max-w-[260px]">
+                  <div className="space-y-0.5">
+                    <div>{contextLabels.window}: {contextLabels.usage}</div>
+                    {contextLabels.qualifier && <div className="text-foreground/60">{contextLabels.qualifier}</div>}
+                    {contextDisplay.canCompact && (
+                      <div>{isProcessing ? t('chat.contextUsage.waitToCompact') : t('chat.contextUsage.compact')}</div>
+                    )}
+                  </div>
                 </TooltipContent>
               </Tooltip>
             )

@@ -41,11 +41,12 @@ import type { Workspace } from '../config/storage.ts';
 
 // Event adapter
 import { PiEventAdapter } from './backend/pi/event-adapter.ts';
+import type { PiCompactResult } from './backend/pi/protocol.ts';
 import { EventQueue } from './backend/event-queue.ts';
 
 // System prompt for Craft Agent context
 import { getSystemPrompt } from '../prompts/system.ts';
-import { getCoAuthorPreference } from '../config/preferences.ts';
+import { formatPreferencesForPrompt, getCoAuthorPreference } from '../config/preferences.ts';
 import { loadProjectById, getProjectAssetsPath, listProjectAssets, getProjectMemoryPath, loadProjectMemory } from '../projects/storage.ts';
 import type { ProjectPromptContext } from '../projects/types.ts';
 
@@ -149,6 +150,12 @@ function mapBrowserToolErrorCode(code: string): string | null {
   }
 }
 
+interface PendingEphemeralRequest<T> {
+  resolve(value: T): void;
+  reject(error: Error): void;
+  timeout: ReturnType<typeof setTimeout>;
+}
+
 /**
  * Backend implementation using the Pi coding agent SDK via subprocess.
  *
@@ -191,6 +198,14 @@ export class PiAgent extends BaseAgent {
   private subprocessErrorRepeatCount = 0;
   private static readonly MAX_IDENTICAL_SUBPROCESS_ERRORS = 3;
 
+  // Pinned system-prompt components. Claude already pins these for SDK resume
+  // consistency; Pi gets the same behavior so preferences/project context do
+  // not silently mutate the cached system prefix mid-session.
+  private pinnedPreferencesPrompt: string | null = null;
+  private pinnedIncludeCoAuthoredBy: boolean | null = null;
+  private pinnedProjectContext: ProjectPromptContext | null = null;
+  private promptDriftNotified = false;
+
   /**
    * Look up the bound project (if any) and return a snapshot for system-prompt injection.
    * Mirrors ClaudeAgent.resolveProjectContext — safe to call on every turn since the
@@ -227,6 +242,13 @@ export class PiAgent extends BaseAgent {
   private resetSubprocessErrorDedup(): void {
     this.lastSubprocessError = null;
     this.subprocessErrorRepeatCount = 0;
+  }
+
+  private clearPinnedPromptSnapshot(): void {
+    this.pinnedPreferencesPrompt = null;
+    this.pinnedIncludeCoAuthoredBy = null;
+    this.pinnedProjectContext = null;
+    this.promptDriftNotified = false;
   }
 
   // Ring buffer of recent subprocess stderr. Always on (independent of CRAFT_DEBUG)
@@ -270,19 +292,13 @@ export class PiAgent extends BaseAgent {
     reject: (error: Error) => void;
   }> = new Map();
 
-  // Pending mini completions (correlation map for subprocess mini_completion_result)
-  private pendingMiniCompletions: Map<string, {
-    resolve: (text: string | null) => void;
-    reject: (error: Error) => void;
-  }> = new Map();
+  // Pending utility requests own their timeout handles so every terminal path
+  // (result, error, timeout, exit, teardown) can release the timer immediately.
+  private pendingMiniCompletions = new Map<string, PendingEphemeralRequest<string | null>>();
 
-  // Pending llm_query calls (correlation map for subprocess llm_query_result).
   // Separate from pendingMiniCompletions because the payload shape differs:
   // queryLlm returns a full LLMQueryResult, not just text.
-  private pendingLlmQueries: Map<string, {
-    resolve: (result: LLMQueryResult) => void;
-    reject: (error: Error) => void;
-  }> = new Map();
+  private pendingLlmQueries = new Map<string, PendingEphemeralRequest<LLMQueryResult>>();
 
   // Pending ensure_session_ready requests (branch preflight handshake)
   private pendingEnsureSessionReady: Map<string, {
@@ -290,9 +306,12 @@ export class PiAgent extends BaseAgent {
     reject: (error: Error) => void;
   }> = new Map();
 
+  // Invalidates a manual compact continuation if stop/dispose wins its await.
+  private compactionEpoch = 0;
+
   // Pending compact requests (manual compaction RPC)
   private pendingCompactions: Map<string, {
-    resolve: (result: { summary: string; firstKeptEntryId: string; tokensBefore: number } | null) => void;
+    resolve: (result: PiCompactResult) => void;
     reject: (error: Error) => void;
   }> = new Map();
 
@@ -370,13 +389,15 @@ export class PiAgent extends BaseAgent {
       this.adapter.setSessionDir(join(config.workspace.rootPath, 'sessions', config.session.id));
     }
 
-    // Wire the adapter's async overflow fallback into the event queue. The
-    // fallback fires when the SDK doesn't emit a compaction_start after a
-    // held overflow agent_end (e.g. _overflowRecoveryAttempted was already
-    // true). It runs outside adaptEvent() so it can't yield through the
-    // generator — instead, it calls these callbacks to enqueue the buffered
-    // error and terminate the iterator.
-    this.adapter.setOverflowFallbackHandlers(
+    // Wire the adapter's async recovery fallbacks into the event queue. They
+    // fire when the SDK doesn't follow through on a recovery it announced:
+    // no compaction_start after a held overflow agent_end (e.g.
+    // _overflowRecoveryAttempted was already true), or no auto_retry_start /
+    // retried agent_start after an agent_end { willRetry: true }. They run
+    // outside adaptEvent() so they can't yield through the generator —
+    // instead, they call these callbacks to enqueue the parked error and
+    // terminate the iterator.
+    this.adapter.setRecoveryFallbackHandlers(
       (event) => this.eventQueue.enqueue(event),
       () => this.eventQueue.complete(),
     );
@@ -794,7 +815,7 @@ export class PiAgent extends BaseAgent {
       try {
         if (piAuthProvider === 'github-copilot') {
           // Copilot: refresh the short-lived Copilot token using the GitHub access token
-          const { refreshGitHubCopilotToken } = await import('@earendil-works/pi-ai/oauth');
+          const { refreshGitHubCopilotToken } = await import('../auth/github-copilot.ts');
           const newCreds = await refreshGitHubCopilotToken(stored.refreshToken);
           await credentialManager.setLlmOAuth(slug, {
             accessToken: newCreds.access,
@@ -953,11 +974,11 @@ export class PiAgent extends BaseAgent {
         break;
 
       case 'llm_query_result': {
-        // Response to an llm_query request
+        // Response to an llm_query request. A result arriving after host timeout
+        // has no pending entry and is intentionally ignored.
         const id = msg.id as string;
-        const pending = this.pendingLlmQueries.get(id);
+        const pending = this.takePendingEphemeral(this.pendingLlmQueries, id);
         if (pending) {
-          this.pendingLlmQueries.delete(id);
           const result = msg.result as LLMQueryResult | null;
           if (result) {
             pending.resolve(result);
@@ -1019,28 +1040,35 @@ export class PiAgent extends BaseAgent {
           });
         }
 
-        // Reject any pending mini completions so errors propagate immediately.
-        // mini_completion_error is an internal utility-path failure (title/summarization)
-        // and should not surface as a user-visible chat error.
-        for (const [id, pending] of this.pendingMiniCompletions) {
-          pending.reject(new Error(rawMessage));
-          this.pendingMiniCompletions.delete(id);
-        }
+        const requestId = typeof msg.id === 'string' ? msg.id : undefined;
 
-        // Same treatment for pending llm_query calls. llm_query_error is also an
-        // internal utility-path code (call_llm): the dual-emit from the subprocess
-        // means a targeted `llm_query_result` is sent alongside this generic `error`
-        // to reject the specific pending promise — this loop is the defensive cleanup
-        // for queries that never got a targeted result (subprocess crash, etc.).
-        for (const [id, pending] of this.pendingLlmQueries) {
-          pending.reject(new Error(rawMessage));
-          this.pendingLlmQueries.delete(id);
-        }
-
-        if (errorCode === 'mini_completion_error' || errorCode === 'llm_query_error') {
-          this.debug(`Ignoring ${errorCode} subprocess error in chat stream`);
+        // Utility errors are request-scoped. A late error for a timed-out query
+        // must not reject another concurrent query that is still healthy.
+        if (errorCode === 'mini_completion_error') {
+          if (requestId) {
+            this.takePendingEphemeral(this.pendingMiniCompletions, requestId)
+              ?.reject(new Error(rawMessage));
+          } else {
+            // Compatibility fallback for an older subprocess without error ids.
+            this.rejectPendingEphemeralMap(this.pendingMiniCompletions, new Error(rawMessage));
+          }
+          this.debug('Ignoring mini_completion_error subprocess error in chat stream');
           break;
         }
+        if (errorCode === 'llm_query_error') {
+          if (requestId) {
+            this.takePendingEphemeral(this.pendingLlmQueries, requestId)
+              ?.reject(new Error(rawMessage));
+          } else {
+            // Compatibility fallback for an older subprocess without error ids.
+            this.rejectPendingEphemeralMap(this.pendingLlmQueries, new Error(rawMessage));
+          }
+          this.debug('Ignoring llm_query_error subprocess error in chat stream');
+          break;
+        }
+
+        // An unscoped subprocess failure invalidates all outstanding utility work.
+        this.rejectAllPendingEphemeral(new Error(rawMessage));
 
         // Reject pending ensure_session_ready requests (used by branch preflight)
         for (const [id, pending] of this.pendingEnsureSessionReady) {
@@ -1105,6 +1133,10 @@ export class PiAgent extends BaseAgent {
 
     // Detect session MCP tool completions (same pattern as in-process version)
     const eventType = event.type as string;
+    // Manual /compact uses an RPC-owned generator rather than the event queue.
+    // Its SDK end arrives before compact_result; only the correlated response
+    // may report success (including after a timeout/stop discarded the request).
+    if (eventType === 'compaction_end' && event.reason === 'manual') return;
     let adaptedEvent = event;
 
     if (eventType === 'tool_execution_start') {
@@ -1170,12 +1202,13 @@ export class PiAgent extends BaseAgent {
       this.eventQueue.enqueue(agentEvent);
     }
 
-    // Turn-completion is now adapter-driven so overflow recovery can hold the
-    // queue open across the SDK's compaction → agent.continue() sequence
-    // (see PiEventAdapter overflow state machine). The adapter returns true
-    // when the queue should terminate — either on a normal agent_end with no
-    // recovery in flight, or on a compaction_end failure that drains a held
-    // overflow.
+    // Turn-completion is adapter-driven so overflow recovery and the SDK's
+    // auto-retry can hold the queue open across compaction → agent.continue()
+    // and agent_end { willRetry } → backoff → agent.continue() sequences (see
+    // the PiEventAdapter state machines). The adapter returns true when the
+    // queue should terminate — a normal agent_end with no recovery in flight,
+    // a compaction_end failure that drains a held overflow, or a cancelled
+    // auto-retry.
     if (this.adapter.shouldCompleteQueue(eventType === 'agent_end')) {
       this.eventQueue.complete();
     }
@@ -1627,17 +1660,40 @@ export class PiAgent extends BaseAgent {
     // Callbacks already handled by executeSessionTool() — no-op.
   }
 
+  private takePendingEphemeral<T>(
+    map: Map<string, PendingEphemeralRequest<T>>,
+    id: string,
+  ): PendingEphemeralRequest<T> | undefined {
+    const pending = map.get(id);
+    if (!pending) return undefined;
+    map.delete(id);
+    clearTimeout(pending.timeout);
+    return pending;
+  }
+
+  private rejectPendingEphemeralMap<T>(
+    map: Map<string, PendingEphemeralRequest<T>>,
+    error: Error,
+  ): void {
+    for (const [id, pending] of map) {
+      map.delete(id);
+      clearTimeout(pending.timeout);
+      pending.reject(error);
+    }
+  }
+
+  private rejectAllPendingEphemeral(error: Error): void {
+    this.rejectPendingEphemeralMap(this.pendingMiniCompletions, error);
+    this.rejectPendingEphemeralMap(this.pendingLlmQueries, error);
+  }
+
   /**
    * Handle mini_completion_result from subprocess.
    */
   private handleMiniCompletionResult(msg: Record<string, unknown>): void {
     const id = msg.id as string;
     const text = msg.text as string | null;
-    const pending = this.pendingMiniCompletions.get(id);
-    if (pending) {
-      this.pendingMiniCompletions.delete(id);
-      pending.resolve(text);
-    }
+    this.takePendingEphemeral(this.pendingMiniCompletions, id)?.resolve(text);
   }
 
   /**
@@ -1674,7 +1730,7 @@ export class PiAgent extends BaseAgent {
 
     const raw = msg.result as Record<string, unknown> | undefined;
     if (!raw) {
-      pending.resolve(null);
+      pending.reject(new Error('Compaction returned no result'));
       return;
     }
 
@@ -1682,6 +1738,9 @@ export class PiAgent extends BaseAgent {
       summary: String(raw.summary || ''),
       firstKeptEntryId: String(raw.firstKeptEntryId || ''),
       tokensBefore: Number(raw.tokensBefore || 0),
+      estimatedTokensAfter: raw.estimatedTokensAfter as PiCompactResult['estimatedTokensAfter'],
+      contextUsage: raw.contextUsage as PiCompactResult['contextUsage'],
+      compactionSettings: raw.compactionSettings as PiCompactResult['compactionSettings'],
     });
   }
 
@@ -1743,19 +1802,11 @@ export class PiAgent extends BaseAgent {
       this.eventQueue.complete();
     }
 
-    // Reject pending mini completions with error (not null) so callers
-    // get a meaningful error instead of silently returning "no response"
+    // Reject utility calls and clear their deadline timers.
     const exitReason = signal ? `signal ${signal}` : `code ${code}`;
-    for (const [, pending] of this.pendingMiniCompletions) {
-      pending.reject(new Error(`Pi subprocess exited unexpectedly (${exitReason})`));
-    }
-    this.pendingMiniCompletions.clear();
-
-    // Reject pending llm_query calls (call_llm in-flight during subprocess crash)
-    for (const [, pending] of this.pendingLlmQueries) {
-      pending.reject(new Error(`Pi subprocess exited unexpectedly (${exitReason})`));
-    }
-    this.pendingLlmQueries.clear();
+    this.rejectAllPendingEphemeral(
+      new Error(`Pi subprocess exited unexpectedly (${exitReason})`),
+    );
 
     // Reject pending ensure_session_ready requests
     for (const [, pending] of this.pendingEnsureSessionReady) {
@@ -1823,8 +1874,10 @@ export class PiAgent extends BaseAgent {
   /**
    * Ask subprocess to compact the active session context.
    */
-  private async requestCompact(customInstructions?: string): Promise<{ summary: string; firstKeptEntryId: string; tokensBefore: number } | null> {
+  private async requestCompact(customInstructions?: string): Promise<PiCompactResult> {
+    const epoch = this.compactionEpoch;
     await this.ensureSubprocess();
+    if (epoch !== this.compactionEpoch) throw new Error('Compaction aborted');
 
     const id = `compact-${++this.rpcIdCounter}`;
     // GPT-backed Pi compactions on large conversations can legitimately take 60-120s
@@ -1832,7 +1885,7 @@ export class PiAgent extends BaseAgent {
     // cases; truly hung subprocesses are caught by the stdio death watchdog.
     const timeoutMs = 300_000;
 
-    return new Promise<{ summary: string; firstKeptEntryId: string; tokensBefore: number } | null>((resolve, reject) => {
+    return new Promise<PiCompactResult>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pendingCompactions.delete(id);
         reject(new Error(`compact timed out after ${Math.floor(timeoutMs / 1000)}s`));
@@ -1958,6 +2011,8 @@ export class PiAgent extends BaseAgent {
     options?: ChatOptions
   ): AsyncGenerator<AgentEvent> {
     let message = messageParam;
+    const compactMatch = message.trim().match(/^\/compact(?:\s+([\s\S]+))?$/i);
+    const compactEpoch = this.compactionEpoch;
     // Reset state for new turn
     this._isProcessing = true;
     this.abortReason = undefined;
@@ -1996,6 +2051,7 @@ export class PiAgent extends BaseAgent {
           this.piSessionId = null;
           this.killSubprocess();
           this.clearSessionForRecovery();
+          this.clearPinnedPromptSnapshot();
 
           const recoveryContext = this.buildRecoveryContext();
           if (recoveryContext) {
@@ -2009,34 +2065,57 @@ export class PiAgent extends BaseAgent {
         }
       }
 
-      const trimmedMessage = message.trim();
-      const compactMatch = trimmedMessage.match(/^\/compact(?:\s+([\s\S]+))?$/i);
       if (compactMatch) {
+        if (compactEpoch !== this.compactionEpoch) throw new Error('Compaction aborted');
         const customInstructions = compactMatch[1]?.trim() || undefined;
         const compactResult = await this.requestCompact(customInstructions);
-        if (compactResult) {
-          yield {
-            type: 'info',
-            message: `Compacted context to fit within limits (from ~${compactResult.tokensBefore.toLocaleString()} tokens)`,
-          };
-        } else {
-          yield { type: 'info', message: 'Compacted context to fit within limits' };
-        }
+        if (compactEpoch !== this.compactionEpoch) throw new Error('Compaction aborted');
+        this.resetPrerequisiteState();
+        yield* this.adapter.adaptContextUsage(compactResult, true, compactResult.estimatedTokensAfter);
+        // A consumer can stop between yielded occupancy and success.
+        if (compactEpoch !== this.compactionEpoch) throw new Error('Compaction aborted');
+        yield {
+          type: 'info',
+          message: `Compacted context to fit within limits (from ~${compactResult.tokensBefore.toLocaleString()} tokens)`,
+          compactionTrigger: 'manual',
+        };
         yield { type: 'complete' };
         return;
       }
 
-      // Build system prompt
-      const projectContext = this.resolveProjectContext();
+      // Build system prompt from a pinned session snapshot. Pi folds stable
+      // blocks into its cached system prefix, so changing these mid-session
+      // would silently churn cache and diverge from Claude's behavior.
+      const currentPreferencesPrompt = formatPreferencesForPrompt();
+      const currentIncludeCoAuthoredBy = getCoAuthorPreference();
+      const currentProjectContext = this.resolveProjectContext();
+
+      if (this.pinnedPreferencesPrompt === null) {
+        this.pinnedPreferencesPrompt = currentPreferencesPrompt;
+        this.pinnedIncludeCoAuthoredBy = currentIncludeCoAuthoredBy;
+        this.pinnedProjectContext = currentProjectContext;
+      } else {
+        const preferencesDrifted = currentPreferencesPrompt !== this.pinnedPreferencesPrompt;
+        const coAuthorDrifted = currentIncludeCoAuthoredBy !== this.pinnedIncludeCoAuthoredBy;
+        const projectDrifted = JSON.stringify(currentProjectContext) !== JSON.stringify(this.pinnedProjectContext);
+        if ((preferencesDrifted || coAuthorDrifted || projectDrifted) && !this.promptDriftNotified) {
+          yield {
+            type: 'info',
+            message: 'Note: System prompt context changed since this session started. Start a new session to apply preference or project-memory changes.',
+          };
+          this.promptDriftNotified = true;
+        }
+      }
+
       const systemPrompt = getSystemPrompt(
-        undefined, // pinnedPreferencesPrompt
+        this.pinnedPreferencesPrompt ?? undefined,
         this.config.debugMode,
         this.config.workspace.rootPath,
         this.config.session?.workingDirectory,
         this.config.systemPromptPreset,
         'Orcha Agents Backend', // backendName
-        getCoAuthorPreference(), // respect user's includeCoAuthoredBy preference (#576)
-        projectContext ?? undefined,
+        this.pinnedIncludeCoAuthoredBy ?? undefined,
+        this.pinnedProjectContext ?? undefined,
       );
 
       // Build context from sources
@@ -2152,7 +2231,9 @@ export class PiAgent extends BaseAgent {
         return;
       }
     } catch (error) {
+      if (compactMatch) yield { type: 'compaction_failed' };
       if (error instanceof Error && error.message.includes('abort')) {
+        if (compactMatch) yield { type: 'complete' };
         if (this.abortReason === AbortReason.PlanSubmitted) {
           return;
         }
@@ -2279,6 +2360,7 @@ export class PiAgent extends BaseAgent {
   }
 
   async abort(reason?: string): Promise<void> {
+    this.cancelPendingCompactions();
     // Fire Stop hook event (fire-and-forget)
     this.emitAutomationEvent('Stop', { hook_event_name: 'Stop' });
 
@@ -2297,6 +2379,7 @@ export class PiAgent extends BaseAgent {
   }
 
   forceAbort(reason: AbortReason): void {
+    this.cancelPendingCompactions();
     // Fire Stop hook event (fire-and-forget)
     this.emitAutomationEvent('Stop', { hook_event_name: 'Stop' });
 
@@ -2317,6 +2400,12 @@ export class PiAgent extends BaseAgent {
 
     // Signal turn complete to wake up any waiting consumers
     this.eventQueue.complete();
+
+    // Drop any held overflow/auto-retry recovery state. On abort the SDK
+    // cancels an in-flight retry backoff (auto_retry_end "Retry cancelled")
+    // and emits no further agent_end, so a stale hold would leak into the
+    // next turn and keep its queue open.
+    this.adapter.resetRecoveryState();
 
     // Clear bridge cache for aborted turn.
     this.preToolMetadataByCallId.clear();
@@ -2412,6 +2501,9 @@ export class PiAgent extends BaseAgent {
    * Used before an idle runtime restart so we don't leave transient children behind.
    */
   private async killSubprocessGracefully(timeoutMs = 2_000): Promise<void> {
+    this.cancelPendingCompactions();
+    this.rejectAllPendingEphemeral(new Error('Pi subprocess stopped'));
+
     const child = this.subprocess;
     if (!child) {
       this.killSubprocess();
@@ -2459,7 +2551,7 @@ export class PiAgent extends BaseAgent {
     this.subprocessReadyResolve = null;
     this.callbackPort = 0;
     this.preToolMetadataByCallId.clear();
-    this.adapter.resetOverflowState();
+    this.adapter.resetRecoveryState();
 
     if (result) {
       this.debug(`Pi subprocess ${pid ?? '(unknown pid)'} stopped for restart: code=${result.code}, signal=${result.signal}`);
@@ -2471,7 +2563,18 @@ export class PiAgent extends BaseAgent {
   /**
    * Kill the subprocess and clean up resources.
    */
+  private cancelPendingCompactions(): void {
+    this.compactionEpoch++;
+    for (const pending of this.pendingCompactions.values()) {
+      pending.reject(new Error('Compaction aborted'));
+    }
+    this.pendingCompactions.clear();
+  }
+
   private killSubprocess(): void {
+    this.cancelPendingCompactions();
+    this.rejectAllPendingEphemeral(new Error('Pi subprocess stopped'));
+
     if (this.readline) {
       this.readline.close();
       this.readline = null;
@@ -2493,9 +2596,9 @@ export class PiAgent extends BaseAgent {
     this.callbackPort = 0;
     this.preToolMetadataByCallId.clear();
 
-    // Clear any in-flight overflow-recovery state so a stale fallback timer
-    // doesn't fire on a torn-down adapter.
-    this.adapter.resetOverflowState();
+    // Clear any in-flight overflow/auto-retry recovery state so a stale
+    // fallback timer doesn't fire on a torn-down adapter.
+    this.adapter.resetRecoveryState();
   }
 
   // ============================================================
@@ -2512,23 +2615,20 @@ export class PiAgent extends BaseAgent {
 
     const id = `mini-${++this.rpcIdCounter}`;
     const resultPromise = new Promise<string | null>((resolve, reject) => {
-      this.pendingMiniCompletions.set(id, { resolve, reject });
+      const timeout = setTimeout(() => {
+        const pending = this.takePendingEphemeral(this.pendingMiniCompletions, id);
+        if (!pending) return;
+
+        this.debug(`[runMiniCompletion] Timed out after ${LLM_QUERY_TIMEOUT_MS / 1000}s`);
+        this.send({ type: 'cancel_ephemeral_query', id });
+        pending.resolve(null);
+      }, LLM_QUERY_TIMEOUT_MS);
+      this.pendingMiniCompletions.set(id, { resolve, reject, timeout });
     });
 
     this.send({ type: 'mini_completion', id, prompt });
 
-    // Keep this aligned with the subprocess-side queryLlm timeout.
-    const timeout = new Promise<string | null>((resolve) => {
-      setTimeout(() => {
-        if (this.pendingMiniCompletions.has(id)) {
-          this.pendingMiniCompletions.delete(id);
-          this.debug(`[runMiniCompletion] Timed out after ${LLM_QUERY_TIMEOUT_MS / 1000}s`);
-          resolve(null);
-        }
-      }, LLM_QUERY_TIMEOUT_MS);
-    });
-
-    const text = await Promise.race([resultPromise, timeout]);
+    const text = await resultPromise;
     this.debug(`[runMiniCompletion] Result: ${text ? `"${text.slice(0, 200)}"` : 'null'}`);
     return text;
   }
@@ -2550,22 +2650,18 @@ export class PiAgent extends BaseAgent {
 
     const id = `llm-${++this.rpcIdCounter}`;
     const resultPromise = new Promise<LLMQueryResult>((resolve, reject) => {
-      this.pendingLlmQueries.set(id, { resolve, reject });
+      const timeout = setTimeout(() => {
+        const pending = this.takePendingEphemeral(this.pendingLlmQueries, id);
+        if (!pending) return;
+
+        this.send({ type: 'cancel_ephemeral_query', id });
+        pending.reject(new Error(`queryLlm timed out after ${LLM_QUERY_TIMEOUT_MS / 1000}s`));
+      }, LLM_QUERY_TIMEOUT_MS);
+      this.pendingLlmQueries.set(id, { resolve, reject, timeout });
     });
 
     this.send({ type: 'llm_query', id, request });
-
-    // Keep this aligned with the subprocess-side queryLlm timeout.
-    const timeout = new Promise<LLMQueryResult>((_, reject) => {
-      setTimeout(() => {
-        if (this.pendingLlmQueries.has(id)) {
-          this.pendingLlmQueries.delete(id);
-          reject(new Error(`queryLlm timed out after ${LLM_QUERY_TIMEOUT_MS / 1000}s`));
-        }
-      }, LLM_QUERY_TIMEOUT_MS);
-    });
-
-    return Promise.race([resultPromise, timeout]);
+    return resultPromise;
   }
 
   // ============================================================

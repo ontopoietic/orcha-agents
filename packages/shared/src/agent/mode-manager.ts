@@ -34,6 +34,7 @@ import {
   type PowerShellValidationResult,
   type PowerShellValidationReason,
 } from './powershell-validator.ts';
+import { sanitizePromptLine } from '../prompts/prompt-sanitize.ts';
 import {
   type PermissionMode,
   type ModeConfig,
@@ -1774,7 +1775,7 @@ export function isApiEndpointAllowed(
  */
 const ALWAYS_ALLOWED_TOOLS = new Set([
   'Read', 'Glob', 'Grep',           // File reading
-  'Task', 'TaskOutput',             // Agent orchestration
+  'Task',                           // Agent orchestration (TaskOutput was removed in Claude Code 2.1.269)
   'WebFetch', 'WebSearch',          // Web research
   'TodoWrite',                      // Task tracking
   'SubmitPlan',                     // Plan submission
@@ -2004,11 +2005,6 @@ export function shouldAllowToolInMode(
 
   // Handle MCP tools - allow read-only, block write operations
   if (toolName.startsWith('mcp__')) {
-    // Always allow documentation tools (read-only, always available)
-    if (toolName.startsWith('mcp__craft-agents-docs__')) {
-      return { allowed: true };
-    }
-
     // Handle session-scoped tools - derive safe-mode behavior from canonical session-tools-core metadata
     if (toolName.startsWith('mcp__session__')) {
       const safeAllowedSessionTools = getSessionSafeAllowedToolNames({
@@ -2141,7 +2137,8 @@ export function formatSessionState(
 
   // Use canonical user-facing mode tokens to avoid terminology drift.
   const modeName = toCanonicalPermissionMode(diagnostics.permissionMode);
-  let result = `<session_state>\nsessionId: ${sessionId}\npermissionMode: ${modeName}`;
+  const sessionStateTags = ['session_state'] as const;
+  let result = `<session_state>\nsessionId: ${sanitizePromptLine(sessionId, sessionStateTags)}\npermissionMode: ${modeName}`;
 
   if (diagnostics.transitionDisplay) {
     result += `\nmodeTransition: ${diagnostics.transitionDisplay}`;
@@ -2163,12 +2160,12 @@ export function formatSessionState(
 
   // Always include plans folder path so agent knows where plans are stored
   if (options?.plansFolderPath) {
-    result += `\nplansFolderPath: ${options.plansFolderPath}`;
+    result += `\nplansFolderPath: ${sanitizePromptLine(options.plansFolderPath, sessionStateTags)}`;
   }
 
   // Include data folder path so agent knows where transform_data output goes
   if (options?.dataFolderPath) {
-    result += `\ndataFolderPath: ${options.dataFolderPath}`;
+    result += `\ndataFolderPath: ${sanitizePromptLine(options.dataFolderPath, sessionStateTags)}`;
   }
 
   result += '\n</session_state>';

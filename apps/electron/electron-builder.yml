@@ -76,7 +76,7 @@ extraMetadata:
 # Auto-update: disabled for fork — upstream URL would overwrite with original app
 # publish:
 #   provider: generic
-#   url: https://agents.craft.do/electron/latest
+#   url: https://thecraftagents.com/electron/latest
 
 # Disable ASAR to avoid decompression overhead and click delays
 asar: false

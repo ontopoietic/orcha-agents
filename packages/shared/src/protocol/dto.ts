@@ -12,6 +12,7 @@ import type {
   ContentBadge,
   ToolDisplayMeta,
   AnnotationV1,
+  ContextUsageSnapshot,
   PermissionRequest as BasePermissionRequest,
 } from '@craft-agent/core/types'
 import type { PermissionMode } from '../agent/mode-types'
@@ -97,6 +98,7 @@ export interface Session {
     cacheCreationTokens?: number
     /** Model's context window size in tokens (from SDK modelUsage) */
     contextWindow?: number
+    contextUsage?: ContextUsageSnapshot
   }
   /** When true, session is hidden from session list (e.g., mini edit sessions) */
   hidden?: boolean
@@ -381,6 +383,9 @@ export interface PermissionModeState {
 
 // turnId: Correlation ID from the API's message.id, groups all events in an assistant turn
 export type SessionEvent =
+  | { type: 'text_discard'; sessionId: string; turnId: string }
+  | { type: 'retry'; sessionId: string; phase: 'backoff'; message: string }
+  | { type: 'retry'; sessionId: string; phase: 'active' | 'end' }
   | { type: 'text_delta'; sessionId: string; delta: string; turnId?: string }
   | { type: 'text_complete'; sessionId: string; text: string; isIntermediate?: boolean; turnId?: string; parentToolUseId?: string; timestamp?: number; messageId?: string }
   | { type: 'tool_start'; sessionId: string; toolName: string; toolUseId: string; toolInput: Record<string, unknown>; toolIntent?: string; toolDisplayName?: string; toolDisplayMeta?: ToolDisplayMeta; turnId?: string; parentToolUseId?: string; timestamp?: number }
@@ -426,7 +431,7 @@ export type SessionEvent =
   | { type: 'auth_request'; sessionId: string; message: Message; request: SharedAuthRequest }
   | { type: 'auth_completed'; sessionId: string; requestId: string; success: boolean; cancelled?: boolean; error?: string }
   | { type: 'source_activated'; sessionId: string; sourceSlug: string; originalMessage: string }
-  | { type: 'usage_update'; sessionId: string; tokenUsage: { inputTokens: number; contextWindow?: number } }
+  | { type: 'usage_update'; sessionId: string; tokenUsage: Pick<NonNullable<Session['tokenUsage']>, 'inputTokens' | 'contextWindow' | 'contextUsage'> }
   | { type: 'message_annotations_updated'; sessionId: string; messageId: string; annotations: AnnotationV1[] }
   | { type: 'working_directory_error'; sessionId: string; error: string }
 
@@ -779,6 +784,7 @@ export interface ClaudeOAuthResult {
 export type TestAutomationAction =
   | { type: 'prompt'; prompt: string; llmConnection?: string; model?: string; thinkingLevel?: ThinkingLevel }
   | { type: 'webhook'; url: string; method?: string; headers?: Record<string, string>; bodyFormat?: 'json' | 'form' | 'raw'; body?: unknown; captureResponse?: boolean; auth?: { type: 'basic'; username: string; password: string } | { type: 'bearer'; token: string } }
+  | { type: 'script'; script: string; args?: string[]; runtime?: 'bun' | 'node' | 'python3'; timeoutMs?: number; page?: string }
 
 export interface TestAutomationPayload {
   workspaceId: string
@@ -794,6 +800,7 @@ export interface TestAutomationPayload {
 export type TestAutomationActionResult =
   | { type: 'prompt'; success: boolean; stderr?: string; sessionId?: string; duration: number }
   | { type: 'webhook'; success: boolean; url: string; statusCode: number; error?: string; duration: number }
+  | { type: 'script'; success: boolean; script: string; exitCode: number | null; stdout?: string; error?: string; duration: number }
 
 export interface TestAutomationResult {
   actions: TestAutomationActionResult[]

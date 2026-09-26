@@ -13,6 +13,8 @@ export type {
   StoredConfig,
 } from './workspace.ts';
 
+export type { ContextUsageSnapshot } from './context-usage.ts';
+
 // Session types
 export type {
   Session,
@@ -64,4 +66,24 @@ export type {
   SessionProcessingStatus,
   ActiveSessionInfo,
 } from './server.ts';
+
+// Page types (workspace-scoped mini dashboards)
+export type {
+  PageKind,
+  PageScriptRuntime,
+  PageRefreshSpec,
+  PageRefreshStatus,
+  PageSeriesPoint,
+  PageDataSnapshot,
+  PageActionHttpMethod,
+  PageActionDescriptor,
+  PageActionGrant,
+  PageRenderLease,
+  PageActionInvocation,
+  PageActionRequest,
+  PageActionResult,
+  PageShareInfo,
+  PageThumbnailInfo,
+  PageConfig,
+} from './page.ts';
 

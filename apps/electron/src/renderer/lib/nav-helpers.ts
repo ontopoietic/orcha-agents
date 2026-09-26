@@ -19,6 +19,8 @@ import type { NavigationState } from '../../shared/types'
  * - sessions: a session is selected
  * - settings: a subpage is selected (bare `settings` route → false)
  * - sources / skills / automations: a detail item is selected
+ * - pages: always — both the library grid and a page render in the content
+ *   panel (pages has no navigator list to fall back to)
  */
 export function isDetailNavState(navState: NavigationState | null): boolean {
   if (!navState) return false
@@ -37,5 +39,7 @@ export function isDetailNavState(navState: NavigationState | null): boolean {
       // session list stays visible as the navigator (see AppShell), so it
       // is never in "detail" (content-only) mode.
       return false
+    case 'pages':
+      return true
   }
 }

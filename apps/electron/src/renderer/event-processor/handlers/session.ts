@@ -26,6 +26,7 @@ import type {
   CredentialRequestEvent,
   PlanSubmittedEvent,
   StatusEvent,
+  RetryEvent,
   InfoEvent,
   InterruptedEvent,
   TitleGeneratedEvent,
@@ -45,7 +46,7 @@ import type {
   Effect,
 } from '../types'
 import type { Message } from '../../../shared/types'
-import { generateMessageId, appendMessage } from '../helpers'
+import { generateMessageId, appendMessage, clearRetryStatus } from '../helpers'
 
 /**
  * Handle complete - agent loop finished
@@ -57,7 +58,7 @@ export function handleComplete(
   state: SessionState,
   event: CompleteEvent
 ): ProcessResult {
-  const { session } = state
+  const session = clearRetryStatus(state.session)
 
   // Fail-safe: mark any non-terminal tools as complete.
   // Catches 'executing' (normal) and 'backgrounded' (spurious — e.g. foreground Agent
@@ -105,7 +106,12 @@ export function handleComplete(
         isProcessing: false,
         currentStatus: undefined,  // Clear any lingering status
         // Update tokenUsage from complete event (for real-time context counter updates)
-        tokenUsage: event.tokenUsage ?? session.tokenUsage,
+        tokenUsage: event.tokenUsage ? {
+          ...event.tokenUsage,
+          // Cumulative/legacy results may omit occupancy. Omission is not a
+          // context reset and must not erase a newer post-compaction snapshot.
+          contextUsage: event.tokenUsage.contextUsage ?? session.tokenUsage?.contextUsage,
+        } : session.tokenUsage,
         // Update hasUnread flag from main process (state machine for NEW badge)
         // Only update if explicitly provided - undefined means "don't change"
         ...(event.hasUnread !== undefined && { hasUnread: event.hasUnread }),
@@ -123,7 +129,7 @@ export function handleError(
   state: SessionState,
   event: ErrorEvent
 ): ProcessResult {
-  const { session } = state
+  const session = clearRetryStatus(state.session)
 
   // Fail-safe: Mark any running tools as failed
   const messagesWithFailedTools = session.messages.map(m =>
@@ -160,7 +166,7 @@ export function handleTypedError(
   state: SessionState,
   event: TypedErrorEvent
 ): ProcessResult {
-  const { session } = state
+  const session = clearRetryStatus(state.session)
 
   // Fail-safe: Mark any running tools as failed
   const messagesWithFailedTools = session.messages.map(m =>
@@ -199,6 +205,36 @@ export function handleTypedError(
         currentStatus: undefined,  // Clear any lingering status
       },
       streaming: null,
+    },
+    effects: [],
+  }
+}
+
+/**
+ * Retry progress is transient, not transcript history. Only SDK lifecycle
+ * events may end backoff — a delayed token/tool event is not proof of recovery.
+ */
+export function handleRetry(state: SessionState, event: RetryEvent): ProcessResult {
+  const session = clearRetryStatus(state.session)
+  if (event.phase !== 'backoff') {
+    return { state: { session, streaming: state.streaming }, effects: [] }
+  }
+
+  // Replace prior progress rather than accumulating a running row per attempt.
+  const retryMessage: Message = {
+    id: generateMessageId(),
+    role: 'status',
+    statusType: 'retrying',
+    content: event.message,
+    timestamp: Date.now(),
+  }
+  return {
+    state: {
+      session: {
+        ...appendMessage(session, retryMessage),
+        currentStatus: { message: event.message, statusType: 'retrying' },
+      },
+      streaming: state.streaming,
     },
     effects: [],
   }
@@ -1002,7 +1038,8 @@ export function handleUsageUpdate(
     costUsd: session.tokenUsage?.costUsd ?? 0,
     ...(session.tokenUsage?.cacheReadTokens !== undefined && { cacheReadTokens: session.tokenUsage.cacheReadTokens }),
     ...(session.tokenUsage?.cacheCreationTokens !== undefined && { cacheCreationTokens: session.tokenUsage.cacheCreationTokens }),
-    ...(event.tokenUsage.contextWindow && { contextWindow: event.tokenUsage.contextWindow }),
+    contextWindow: event.tokenUsage.contextWindow ?? session.tokenUsage?.contextWindow,
+    contextUsage: event.tokenUsage.contextUsage ?? session.tokenUsage?.contextUsage,
   }
 
   return {

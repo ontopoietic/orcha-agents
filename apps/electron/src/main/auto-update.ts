@@ -2,7 +2,7 @@
  * Auto-update module using electron-updater
  *
  * Handles checking for updates, downloading, and installing via the standard
- * electron-updater library. Updates are served from https://agents.craft.do/electron/latest
+ * electron-updater library. Updates are served from https://thecraftagents.com/electron/latest
  * using the generic provider (YAML manifests + binaries on R2/S3).
  *
  * Platform behavior:
@@ -154,7 +154,7 @@ function broadcastDownloadProgress(progress: number): void {
 
 // ─── Configure electron-updater ───────────────────────────────────────────────
 
-// Fork: auto-update is disabled — the upstream update server (agents.craft.do)
+// Fork: auto-update is disabled — the upstream update server (thecraftagents.com)
 // would overwrite this fork with the original app. Updates are managed manually.
 const FORK_AUTO_UPDATE_DISABLED = true
 

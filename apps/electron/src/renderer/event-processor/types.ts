@@ -5,7 +5,11 @@
  * All agent events flow through a single pure function for consistent state transitions.
  */
 
-import type { Session, Message, PermissionRequest, CredentialRequest, TypedError, PermissionMode, SessionStatus, AuthRequest, ToolDisplayMeta } from '../../shared/types'
+import type { Session, SessionEvent, Message, PermissionRequest, CredentialRequest, TypedError, PermissionMode, SessionStatus, AuthRequest, ToolDisplayMeta } from '../../shared/types'
+
+/** Explicit SDK retry boundaries; keep their transport shape authoritative. */
+export type TextDiscardEvent = Extract<SessionEvent, { type: 'text_discard' }>
+export type RetryEvent = Extract<SessionEvent, { type: 'retry' }>
 
 /**
  * Streaming state for a session - replaces streamingTextRef
@@ -514,16 +518,15 @@ export interface SourceActivatedEvent {
 export interface UsageUpdateEvent {
   type: 'usage_update'
   sessionId: string
-  tokenUsage: {
-    inputTokens: number
-    contextWindow?: number
-  }
+  tokenUsage: Pick<NonNullable<Session['tokenUsage']>, 'inputTokens' | 'contextWindow' | 'contextUsage'>
 }
 
 /**
  * Union of all agent events
  */
 export type AgentEvent =
+  | TextDiscardEvent
+  | RetryEvent
   | TextDeltaEvent
   | TextCompleteEvent
   | ToolStartEvent

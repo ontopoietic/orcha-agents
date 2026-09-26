@@ -7,6 +7,7 @@ import { app, BrowserWindow, dialog, ipcMain, nativeImage, nativeTheme, shell } 
 import { createHash, randomUUID } from 'crypto'
 import { hostname, homedir } from 'os'
 import * as Sentry from '@sentry/electron/main'
+// (Fork: redaction helpers only used by the disabled Sentry hook below — import omitted)
 
 // Sentry is DISABLED for the Orcha Agents fork.
 // The upstream project (Craft Agents) uses Sentry for error tracking,
@@ -22,27 +23,18 @@ Sentry.init({
   release: app.getVersion(),
   enabled: !!process.env.SENTRY_ELECTRON_INGEST_URL,
 
+  // Scrub sensitive data before sending to Sentry.
+  // Shared logic in @craft-agent/shared/utils redaction.ts (also used by the
+  // renderer hook and the Pages action audit log) — keep semantics there.
   beforeSend(event) {
     if (event.request?.headers) {
-      const sensitiveHeaders = ['authorization', 'cookie', 'x-api-key']
-      for (const header of sensitiveHeaders) {
-        if (event.request.headers[header]) {
-          event.request.headers[header] = '[REDACTED]'
-        }
-      }
+      redactSensitiveHeadersInPlace(event.request.headers)
     }
 
     if (event.breadcrumbs) {
       for (const breadcrumb of event.breadcrumbs) {
         if (breadcrumb.data) {
-          for (const key of Object.keys(breadcrumb.data)) {
-            const lowerKey = key.toLowerCase()
-            if (lowerKey.includes('token') || lowerKey.includes('key') ||
-                lowerKey.includes('secret') || lowerKey.includes('password') ||
-                lowerKey.includes('credential') || lowerKey.includes('auth')) {
-              breadcrumb.data[key] = '[REDACTED]'
-            }
-          }
+          redactSensitiveKeysInPlace(breadcrumb.data)
         }
       }
     }
@@ -78,6 +70,7 @@ import { join, delimiter } from 'path'
 import { existsSync, readFileSync } from 'fs'
 import { RPC_CHANNELS } from '@craft-agent/shared/protocol'
 import { SessionManager, setSessionPlatform, setSessionRuntimeHooks } from '@craft-agent/server-core/sessions'
+import { PageThumbnailer } from './page-thumbnailer'
 import { registerAllRpcHandlers } from './handlers/index'
 import { registerCoreRpcHandlers, cleanupSessionFileWatchForClient } from '@craft-agent/server-core/handlers/rpc'
 import type { PlatformServices } from '../runtime/platform'
@@ -683,6 +676,16 @@ app.whenReady().then(async () => {
         createSessionManager: () => {
           const sm = new SessionManager()
           sm.setBrowserPaneManager(browserPaneManager!)
+          // Page preview posters: offscreen capture is Electron-main-only. On
+          // capture, nudge the watcher so the pages:changed push carries the
+          // fresh thumbnail pointer to open grids.
+          const pageThumbnailer = new PageThumbnailer({
+            log: (m) => mainLog.info(m),
+            onCaptured: ({ workspaceRootPath, slug }) => {
+              sm.notifyConfigFileChange(workspaceRootPath, `pages/${slug}/page.json`)
+            },
+          })
+          sm.setPageThumbnailer((req) => pageThumbnailer.enqueue(req))
           return sm
         },
         bindRpcServer: (sm, server) => sm.setRpcServer(server),
