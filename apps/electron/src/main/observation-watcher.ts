@@ -406,9 +406,7 @@ export async function runObserverNow(sessionDir: string): Promise<string> {
 /**
  * Run the L2 reflector script manually. Condenses the observations.json
  * file in-place when token estimate exceeds threshold (40k by default,
- * or any size when ORCHA_REFLECT_FORCE=1 is set). Bridges high-salience
- * condensed entries to the Orcha-CLI ledger if ORCHA_LEDGER_PROJECT_DIR
- * resolves to a project directory.
+ * or any size when ORCHA_REFLECT_FORCE=1 is set).
  *
  * Returns stdout on success, throws on failure.
  */

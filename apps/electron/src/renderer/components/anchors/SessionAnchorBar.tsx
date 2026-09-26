@@ -234,7 +234,7 @@ export function SessionAnchorBar({ sessionId, workingDir, sessionDir, addLabelKe
                       'text-foreground hover:bg-foreground/5',
                       'disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent',
                     )}
-                    title="L2 condensation: combine related observations, drop superseded ones, bridge high/medium to Orcha-Ledger"
+                    title="L2 condensation: combine related observations, drop superseded ones"
                   >
                     Reflect & condense (L2)
                   </button>

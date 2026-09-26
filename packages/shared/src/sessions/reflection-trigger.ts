@@ -4,9 +4,9 @@
  *
  * Pairs with observation-trigger.ts (which fires the L1 Observer at 30k
  * raw-conversation tokens). Observer condenses raw turns → observations;
- * Reflector condenses old observations → denser L2 items + bridge to the
- * Orcha-CLI ledger. Without this auto-trigger, observations.md/.json grow
- * unboundedly until manual "Reflect & condense" is clicked in the UI.
+ * Reflector condenses old observations → denser L2 items. Without this
+ * auto-trigger, observations.md/.json grow unboundedly until manual
+ * "Reflect & condense" is clicked in the UI.
  *
  * Env vars:
  *   ORCHA_REFLECTOR_THRESHOLD_OBSERVATIONS default 60 (primary: top-level

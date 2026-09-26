@@ -15,8 +15,6 @@
  *      untouched as a tail buffer
  *   5. Rebuild observations.md (preserving survivor lines verbatim, rendering
  *      condensed L2 entries fresh) + rewrite observations-evidence.json
- *   6. Optionally bridge high-salience condensed items as RawSignals into
- *      the Orcha-CLI ledger via `orcha signal add-many --from-json`
  *
  * CLI:
  *   npx tsx scripts/orcha-reflect.ts [<sessionDir>]
@@ -40,7 +38,6 @@ import {
   copyFileSync,
 } from 'node:fs';
 import { join, dirname } from 'node:path';
-import { spawnSync } from 'node:child_process';
 import {
   resolveExtractor as resolveExtractorBase,
   callExtractor as callExtractorBase,
@@ -476,109 +473,6 @@ function estimateTokens(items: ObservationSignal[]): number {
 }
 
 // ============================================================================
-// Bridge to Orcha-CLI ledger (optional)
-// ============================================================================
-
-function findOrchaProjectDir(): string | null {
-  const explicit = process.env.ORCHA_LEDGER_PROJECT_DIR;
-  if (explicit) {
-    const expanded = explicit.replace(/^~/, process.env.HOME || '~');
-    return existsSync(expanded) ? expanded : null;
-  }
-  const home = process.env.HOME;
-  if (!home) return null;
-  const guess = join(home, 'Developer', 'orcha');
-  if (existsSync(join(guess, '.orcha-ledger.json')) || existsSync(join(guess, 'packages', 'cli'))) {
-    return guess;
-  }
-  return null;
-}
-
-function bridgeToOrchaLedger(
-  sessionDir: string,
-  sessionId: string,
-  condensed: ObservationSignal[],
-): { bridged: number; reason: string } {
-  if (process.env.ORCHA_REFLECTOR_DISABLE_BRIDGE === '1') {
-    return { bridged: 0, reason: 'bridge disabled (ORCHA_REFLECTOR_DISABLE_BRIDGE=1)' };
-  }
-  const orchaDir = findOrchaProjectDir();
-  if (!orchaDir) {
-    return { bridged: 0, reason: 'no orcha project dir found (set ORCHA_LEDGER_PROJECT_DIR)' };
-  }
-
-  // Bridge only high + medium (skip low — Mastra-aligned signal/noise)
-  const bridgeable = condensed.filter(
-    (c) => c.salience === 'high' || c.salience === 'medium',
-  );
-  if (bridgeable.length === 0) {
-    return { bridged: 0, reason: 'no high/medium items to bridge' };
-  }
-
-  const dataDir = join(sessionDir, 'data');
-  if (!existsSync(dataDir)) mkdirSync(dataDir, { recursive: true });
-  const batchPath = join(dataDir, 'orcha-bridge-batch.json');
-
-  const payload = {
-    signals: bridgeable.map((c) => ({
-      summary: c.summary,
-      source: 'conversation',
-      salience: c.salience,
-      anchorRefs: anchorIdsOnly(c.anchorRefs),
-      conversation: {
-        sessionId,
-        excerpt: c.conversation?.excerpt ?? '',
-        actor: normalizeActor(c.conversation?.actor),
-        messageRange: c.conversation?.messageRange,
-      },
-    })),
-  };
-  writeFileSync(batchPath, JSON.stringify(payload, null, 2), 'utf-8');
-
-  const cliEntry = join(orchaDir, 'packages', 'cli', 'src', 'index.ts');
-  if (!existsSync(cliEntry)) {
-    return { bridged: 0, reason: `orcha CLI not at ${cliEntry}` };
-  }
-
-  const result = spawnSync(
-    'pnpm',
-    ['dlx', 'tsx', cliEntry, 'signal', 'add-many', '--from-json', batchPath],
-    { cwd: orchaDir, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] },
-  );
-
-  if (result.status === 0 || result.status === 2) {
-    // 0 = all good, 2 = partial (some bad entries) — both "wrote some"
-    return {
-      bridged: bridgeable.length,
-      reason: `orcha signal add-many → ${(result.stderr || result.stdout || '').trim().split('\n').slice(0, 2).join(' | ')}`,
-    };
-  }
-  return {
-    bridged: 0,
-    reason: `bridge subprocess failed (exit ${result.status}): ${(result.stderr || '').slice(0, 200)}`,
-  };
-}
-
-function anchorIdsOnly(anchors: unknown): string[] | undefined {
-  if (!Array.isArray(anchors)) return undefined;
-  const ids: string[] = [];
-  for (const a of anchors) {
-    if (typeof a === 'string') ids.push(a);
-    else if (a && typeof a === 'object') {
-      const obj = a as Record<string, unknown>;
-      if (typeof obj.id === 'string') ids.push(obj.id);
-    }
-  }
-  return ids.length > 0 ? ids : undefined;
-}
-
-function normalizeActor(a: unknown): 'user' | 'assistant' | undefined {
-  if (a === 'user') return 'user';
-  if (a === 'assistant' || a === 'agent') return 'assistant';
-  return undefined;
-}
-
-// ============================================================================
 // Mastra-style Reflector (vendored prompts, escalating compression retry)
 // ============================================================================
 
@@ -926,15 +820,11 @@ async function main(): Promise<void> {
   };
   writeFileSync(reflectWatermarkPath, JSON.stringify(newWatermark, null, 2), 'utf-8');
 
-  // Bridge condensed pivotal/question items to Orcha-CLI ledger
-  const bridge = bridgeToOrchaLedger(expandedDir, sessionIdForOutput, condensedSignals);
-
   console.log(
     `Reflector: condensed ${candidates.length} → ${condensedSignals.length} (${parsed.drop.length} dropped, ${survivingFromCandidates.length} kept).\n` +
       `  Source: ${loadedFrom}\n` +
       `  Token estimate: ${tokenEstimate}\n` +
       `  Tail buffer (untouched): ${tail.length}\n` +
-      `  Bridge: ${bridge.bridged} → ${bridge.reason}\n` +
       `  Backup: ${backupPath}\n` +
       `  Output: ${mdPath} (+ evidence sidecar)`,
   );

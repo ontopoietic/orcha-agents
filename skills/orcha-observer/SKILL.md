@@ -1,17 +1,19 @@
 ---
 name: orcha-observer
 description: |
-  Observe the current session's conversation and extract structured signals
-  into the Orcha ledger. Run before compaction or when the conversation has
-  accumulated significant context that should be preserved.
+  Observe the current session's conversation and extract structured
+  observations into the session's observation memory. Run before compaction
+  or when the conversation has accumulated significant context that should
+  be preserved.
 icon: 👁
 ---
 
 # Orcha Observer — Inline Observation Skill
 
 You are observing a running conversation to extract structured signals before
-they are lost to context compaction. Your observations are written to the
-Orcha ledger as persistent, searchable memory.
+they are lost to context compaction. Your observations are appended to the
+session's observation memory (`data/observations.mastra.md`), which the
+prompt-builder, Reflector and cross-session Recall read.
 
 ## Core Rules (adapted from Mastra OM)
 
@@ -63,22 +65,15 @@ Every observation gets one of three salience markers:
    - Summary (concise, precise verb)
    - Whether it's a state change (overwrites previous observation)
 
-4. **Write signals to ledger** — Use `orcha signal add` or directly edit
-   `.orcha-ledger.json` in the session's working directory. Each signal:
-   ```json
-   {
-     "source": "conversation",
-     "summary": "🔴 USER STATED: Project uses pnpm, not npm",
-     "salience": "pivotal",
-     "anchorRefs": [...session anchors...],
-     "conversation": {
-       "sessionId": "...",
-       "messageRange": {"from": "msg-...", "to": "msg-..."},
-       "excerpt": "...",
-       "actor": "user"
-     }
-   }
+4. **Append observations** — Append new bullets to
+   `data/observations.mastra.md` in the session directory, following the
+   canonical Markdown format (`packages/shared/src/sessions/observation-format.md`):
    ```
+   # 2026-05-11
+   - 🔴 17:38 User stated: project uses pnpm, not npm
+   ```
+   Never rewrite or repeat existing bullets — the file is append-only
+   (condensation is the Reflector's job).
 
 5. **Update the watermark** — Write the last processed message ID and
    timestamp to `observation-watermark.json`.
@@ -110,12 +105,14 @@ Observation complete:
 - 🔴 3 pivotal assertions
 - 🟡 1 open question
 - 🟢 5 context observations
-- Total signals written: 9
+- Total observations written: 9
 - Watermark updated to: msg-...
 ```
 
 ## Anchor Attribution
 
 If the session has anchors (check session metadata), ALL observations
-MUST include those anchors in `anchorRefs`. This scopes the observations
-to the relevant Orcha artifacts for later aggregation.
+MUST carry those anchors as `anchorRefs` in the evidence sidecar
+(`data/observations-evidence.json`, see `observation-format.md`).
+This scopes the observations to the relevant Orcha artifacts for later
+aggregation and recall.
