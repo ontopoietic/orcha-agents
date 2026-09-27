@@ -17,34 +17,121 @@ export interface SessionListRow {
 }
 
 export interface ChildPartition {
-  /** parentId → children (sorted by lastMessageAt desc). Only parents present in `items`. */
+  /** anchorId → nested children (sorted by lastMessageAt desc). Anchor = nearest ancestor present in `items`. */
   childrenByParent: Map<string, SessionMeta[]>
   /** ids of all items that render nested under a parent (never as top-level rows) */
   nestedChildIds: Set<string>
 }
 
+/** Lookup for session metadata by id (full meta map, incl. archived/hidden/filtered-out). */
+export type SessionMetaLookup = (id: string) => SessionMeta | undefined
+
 /**
- * Partition `items` into nested children (parentSessionId resolves to another
- * item in the same list view) and everything else. Children whose parent is
- * missing from the view (deleted, archived-out, other workspace) are NOT
- * treated as nested — they fall back to normal top-level handling (orphans).
+ * Walk up the `parentSessionId` chain of `item` (resolving intermediate
+ * ancestors through `lookup`, i.e. the FULL session meta map — archived,
+ * hidden and filtered-out sessions included) and return the id of the nearest
+ * ancestor for which `isInView(id)` is true. Returns undefined when no ancestor
+ * in the chain is in the view, or when `item` itself is part of a parent cycle
+ * (so a cycle can never make all of its members disappear as nested rows).
  */
-export function buildChildPartition(items: SessionMeta[]): ChildPartition {
-  const itemIds = new Set(items.map(i => i.id))
+export function findNearestVisibleAncestor(
+  item: SessionMeta,
+  isInView: (id: string) => boolean,
+  lookup: SessionMetaLookup,
+): string | undefined {
+  const seen = new Set<string>([item.id])
+  let pid = item.parentSessionId
+  while (pid) {
+    // Cycle reached before any in-view ancestor → treat as top-level.
+    if (seen.has(pid)) return undefined
+    seen.add(pid)
+    if (isInView(pid)) {
+      // Guard: an in-view ancestor that (transitively) points back to `item`
+      // would nest both under each other. Detect by continuing the walk.
+      if (chainReaches(pid, item.id, lookup)) return undefined
+      return pid
+    }
+    pid = lookup(pid)?.parentSessionId
+  }
+  return undefined
+}
+
+/** True when walking up from `startId` reaches `targetId` (cycle-safe). */
+function chainReaches(startId: string, targetId: string, lookup: SessionMetaLookup): boolean {
+  const seen = new Set<string>()
+  let cur: string | undefined = startId
+  while (cur && !seen.has(cur)) {
+    if (cur === targetId) return true
+    seen.add(cur)
+    cur = lookup(cur)?.parentSessionId
+  }
+  return false
+}
+
+/**
+ * Partition `items` into nested children and everything else. An item nests
+ * under its NEAREST ancestor that is present in `items` — intermediate
+ * ancestors that are missing from the view (archived, hidden, filtered out)
+ * are skipped by resolving them through `lookup` (the full session meta map).
+ * Only when no ancestor of the chain is in the view does the item fall back to
+ * normal top-level handling (orphan). `lookup` defaults to `items` itself
+ * (direct-parent-only behaviour).
+ */
+export function buildChildPartition(items: SessionMeta[], lookup?: SessionMetaLookup): ChildPartition {
+  const itemsById = new Map(items.map(i => [i.id, i]))
+  const resolve: SessionMetaLookup = lookup ?? (id => itemsById.get(id))
+  const isInView = (id: string) => itemsById.has(id)
   const childrenByParent = new Map<string, SessionMeta[]>()
   const nestedChildIds = new Set<string>()
   for (const item of items) {
-    const pid = item.parentSessionId
-    if (!pid || pid === item.id || !itemIds.has(pid)) continue
-    const arr = childrenByParent.get(pid) ?? []
+    if (!item.parentSessionId) continue
+    const anchorId = findNearestVisibleAncestor(item, isInView, resolve)
+    if (!anchorId) continue
+    const arr = childrenByParent.get(anchorId) ?? []
     arr.push(item)
-    childrenByParent.set(pid, arr)
+    childrenByParent.set(anchorId, arr)
     nestedChildIds.add(item.id)
   }
   for (const arr of childrenByParent.values()) {
     arr.sort((a, b) => (b.lastMessageAt || 0) - (a.lastMessageAt || 0))
   }
   return { childrenByParent, nestedChildIds }
+}
+
+/**
+ * Index of direct children by parent id over the FULL meta collection (not
+ * just the current view) — input for {@link hasProcessingDescendant}.
+ */
+export function buildDescendantIndex(allMetas: Iterable<SessionMeta>): Map<string, SessionMeta[]> {
+  const index = new Map<string, SessionMeta[]>()
+  for (const meta of allMetas) {
+    const pid = meta.parentSessionId
+    if (!pid || pid === meta.id) continue
+    const arr = index.get(pid) ?? []
+    arr.push(meta)
+    index.set(pid, arr)
+  }
+  return index
+}
+
+/**
+ * True when ANY descendant of `rootId` (any depth, following parentSessionId
+ * through the full meta map — including descendants whose intermediate
+ * parents are archived/hidden) is currently processing. Cycle-safe.
+ */
+export function hasProcessingDescendant(rootId: string, childIndex: Map<string, SessionMeta[]>): boolean {
+  const seen = new Set<string>([rootId])
+  const stack = [rootId]
+  while (stack.length > 0) {
+    const id = stack.pop()!
+    for (const kid of childIndex.get(id) ?? []) {
+      if (seen.has(kid.id)) continue
+      seen.add(kid.id)
+      if (kid.isProcessing) return true
+      stack.push(kid.id)
+    }
+  }
+  return false
 }
 
 /**

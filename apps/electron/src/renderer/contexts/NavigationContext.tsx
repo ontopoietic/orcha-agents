@@ -76,6 +76,7 @@ import {
   DEFAULT_NAVIGATION_STATE,
 } from '../../shared/types'
 import { sessionMetaMapAtom, updateSessionMetaAtom, type SessionMeta } from '@/atoms/sessions'
+import { findNearestVisibleAncestor } from '@/components/app-shell/session-list-nesting'
 import { sourcesAtom } from '@/atoms/sources'
 import { skillsAtom } from '@/atoms/skills'
 import {
@@ -539,20 +540,12 @@ export function NavigationProvider({
   const filterSessionsByFilter = useCallback(
     (filter: SessionFilter): SessionMeta[] => {
       // First filter out hidden sessions - they should never appear in any view
-      // ORCHA §bg-child-sessions (p9): nested child sessions (parent present in
-      // the same workspace scope) are also excluded — they render nested in the
-      // list but must never be auto-selected (e.g. when the selection advances
-      // after deleting the active session), mirroring the hidden treatment.
       const inWorkspace = sessionMetas.filter(
         s => !workspaceId || s.workspaceId === workspaceId
       )
-      const inWorkspaceIds = new Set(inWorkspace.map(s => s.id))
-      const visibleSessions = inWorkspace.filter(s => {
-        if (s.parentSessionId && s.parentSessionId !== s.id && inWorkspaceIds.has(s.parentSessionId)) return false
-        return !s.hidden
-      })
+      const visibleSessions = inWorkspace.filter(s => !s.hidden)
 
-      return visibleSessions.filter((session) => {
+      const matched = visibleSessions.filter((session) => {
         switch (filter.kind) {
           case 'allSessions':
             return session.isArchived !== true
@@ -575,8 +568,19 @@ export function NavigationProvider({
             return false
         }
       })
+
+      // ORCHA §bg-child-sessions (p9) / §session-nesting: sessions that render
+      // nested in the list (any ancestor — resolved through the full meta map,
+      // skipping archived/hidden intermediates — is itself in this view) must
+      // never be auto-selected as a top-level item. Mirrors the list's
+      // nearest-visible-ancestor nesting exactly.
+      const matchedIds = new Set(matched.map(s => s.id))
+      const lookup = (id: string) => sessionMetaMap.get(id)
+      return matched.filter(s =>
+        !s.parentSessionId || !findNearestVisibleAncestor(s, id => matchedIds.has(id), lookup)
+      )
     },
-    [sessionMetas, workspaceId, labelConfigs]
+    [sessionMetas, sessionMetaMap, workspaceId, labelConfigs]
   )
 
   const getFirstSessionId = useCallback(

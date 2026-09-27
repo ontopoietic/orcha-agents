@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from "react"
 import { useTranslation } from "react-i18next"
-import { useSetAtom } from "jotai"
+import { useAtomValue, useSetAtom } from "jotai"
 import { isToday, isYesterday, format, startOfDay } from "date-fns"
 import { getDateLocale } from "@craft-agent/shared/i18n"
 import { useAction } from "@/actions"
@@ -27,11 +27,19 @@ import { useFocusZone } from "@/hooks/keyboard"
 import { useEscapeInterrupt } from "@/context/EscapeInterruptContext"
 import { useNavigation, useNavigationState, routes, isSessionsNavigation, isObservationsNavigation } from "@/contexts/NavigationContext"
 import { useFocusContext } from "@/context/FocusContext"
-import { sendToWorkspaceAtom, type SessionMeta } from "@/atoms/sessions"
+import { sendToWorkspaceAtom, sessionMetaMapAtom, type SessionMeta } from "@/atoms/sessions"
 import type { ViewConfig } from "@craft-agent/shared/views"
 import type { SessionStatusId, SessionStatus } from "@/config/session-status-config"
 import { buildCollapsedGroupsScopeSuffix } from "@/utils/session-list-collapse"
-import { buildChildPartition, emitRowWithChildren, type SessionListRow } from "./session-list-nesting"
+import {
+  buildChildPartition,
+  buildDescendantIndex,
+  emitRowWithChildren,
+  findNearestVisibleAncestor,
+  hasProcessingDescendant,
+  type SessionListRow,
+  type SessionMetaLookup,
+} from "./session-list-nesting"
 
 // ORCHA §bg-child-sessions (p9): nested child-session row model + pure helpers
 // live in session-list-nesting.ts (unit-tested there).
@@ -242,11 +250,25 @@ export function SessionList({
     })
   }, [])
 
-  // ORCHA §bg-child-sessions (p9): child sessions whose parent is present in the
-  // current list view render nested (collapsed by default) under the parent row.
-  // Children of missing / out-of-view parents fall back to top-level rows.
+  // ORCHA §bg-child-sessions (p9): child sessions render nested (collapsed by
+  // default) under their NEAREST ancestor present in the current list view.
+  // Intermediate ancestors that are out of view (archived, hidden, filtered)
+  // are resolved through the full session meta map and skipped (§session-nesting).
+  // Only children with no in-view ancestor at all fall back to top-level rows.
+  const allSessionMetas = useAtomValue(sessionMetaMapAtom)
   const itemsById = useMemo(() => new Map(items.map(i => [i.id, i])), [items])
-  const { childrenByParent, nestedChildIds } = useMemo(() => buildChildPartition(items), [items])
+  const lookupMeta = useCallback<SessionMetaLookup>(
+    (id) => itemsById.get(id) ?? allSessionMetas.get(id),
+    [itemsById, allSessionMetas],
+  )
+  const { childrenByParent, nestedChildIds } = useMemo(() => buildChildPartition(items, lookupMeta), [items, lookupMeta])
+  // ORCHA §session-nesting: recursive "working" indicator — a row shows it when
+  // ANY descendant (any depth, via the full meta map) is processing.
+  const descendantIndex = useMemo(() => {
+    const merged = new Map(allSessionMetas)
+    for (const item of items) merged.set(item.id, item)
+    return buildDescendantIndex(merged.values())
+  }, [allSessionMetas, items])
 
   // ORCHA §bg-child-sessions (p9): per-parent expansion state, persisted to
   // localStorage (default: collapsed). Search mode auto-expands matched parents
@@ -325,10 +347,11 @@ export function SessionList({
       // via a child are injected at the child's rank. Matched children are
       // collected across both result groups so a parent is rendered once,
       // with all of its matched children beneath it.
-      const resolveParent = (item: SessionMeta): SessionMeta | undefined =>
-        item.parentSessionId && item.parentSessionId !== item.id
-          ? itemsById.get(item.parentSessionId)
-          : undefined
+      // ORCHA §session-nesting: anchor = nearest ancestor present in the view.
+      const resolveParent = (item: SessionMeta): SessionMeta | undefined => {
+        const anchorId = findNearestVisibleAncestor(item, id => itemsById.has(id), lookupMeta)
+        return anchorId ? itemsById.get(anchorId) : undefined
+      }
 
       const childMatchesByParent = new Map<string, SessionMeta[]>()
       for (const item of [...matchingFilterItems, ...otherResultItems]) {
@@ -710,7 +733,7 @@ export function SessionList({
     }
 
     return withNestedChildren(orderedGroups)
-  }, [isSearchMode, matchingFilterItems, otherResultItems, flatItems, groupingMode, sessionStatuses, projects, collapsedGroupsMeta, t, childrenByParent, expandedParents, itemsById])
+  }, [isSearchMode, matchingFilterItems, otherResultItems, flatItems, groupingMode, sessionStatuses, projects, collapsedGroupsMeta, t, childrenByParent, expandedParents, itemsById, lookupMeta])
 
   const flatRows = rowData.rows
 
@@ -1013,7 +1036,7 @@ export function SessionList({
               childCount={row.childCount}
               isChildrenExpanded={row.isExpanded}
               onToggleChildren={row.hasChildren && !isSearchMode ? () => toggleParentExpanded(row.item.id) : undefined}
-              hasWorkingChild={row.hasChildren ? (childrenByParent.get(row.item.id)?.some(c => c.isProcessing) ?? false) : false}
+              hasWorkingChild={row.hasChildren ? hasProcessingDescendant(row.item.id, descendantIndex) : false}
             />
           )
         }}
