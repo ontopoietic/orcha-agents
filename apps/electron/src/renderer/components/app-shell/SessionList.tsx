@@ -36,6 +36,7 @@ import {
   buildDescendantIndex,
   emitRowWithChildren,
   findNearestVisibleAncestor,
+  getRowActivityIndicator,
   hasProcessingDescendant,
   type SessionListRow,
   type SessionMetaLookup,
@@ -1017,6 +1018,15 @@ export function SessionList({
         renderItem={(row, _indexInGroup, isFirstInGroup) => {
           const flatIndex = rowIndexMap.get(row.item.id) ?? 0
           const rowProps = interactions.getRowProps(row, flatIndex)
+          // ORCHA §session-nesting: descendant activity on the chip (collapsed
+          // parent) or, for rows without visible children, in the row's own
+          // spinner slot (running descendant archived / out of view).
+          const activity = getRowActivityIndicator({
+            isProcessing: row.item.isProcessing,
+            hasChildren: row.hasChildren,
+            isExpanded: row.isExpanded,
+            descendantProcessing: hasProcessingDescendant(row.item.id, descendantIndex),
+          })
           return (
             <SessionItem
               item={row.item}
@@ -1036,7 +1046,8 @@ export function SessionList({
               childCount={row.childCount}
               isChildrenExpanded={row.isExpanded}
               onToggleChildren={row.hasChildren && !isSearchMode ? () => toggleParentExpanded(row.item.id) : undefined}
-              hasWorkingChild={row.hasChildren ? hasProcessingDescendant(row.item.id, descendantIndex) : false}
+              hasWorkingChild={activity === 'chip'}
+              hasWorkingDescendant={activity === 'row'}
             />
           )
         }}

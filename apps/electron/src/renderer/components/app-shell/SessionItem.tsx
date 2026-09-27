@@ -59,6 +59,8 @@ export interface SessionItemProps {
   onToggleChildren?: () => void
   /** Any nested child session is currently processing — shown on the collapsed chip */
   hasWorkingChild?: boolean
+  /** ORCHA §session-nesting: a descendant without a row in the view (archived/filtered) is processing — shown in the row's own spinner slot */
+  hasWorkingDescendant?: boolean
 }
 
 export function SessionItem({
@@ -76,6 +78,7 @@ export function SessionItem({
   isChildrenExpanded,
   onToggleChildren,
   hasWorkingChild,
+  hasWorkingDescendant,
 }: SessionItemProps) {
   const { t } = useTranslation()
   const ctx = useSessionListContext()
@@ -234,11 +237,11 @@ export function SessionItem({
           <div className={cn(
             "flex items-center justify-center overflow-hidden gap-1",
             "transition-all duration-200 ease-out",
-            (item.isProcessing || hasUnreadMeta(item) || item.lastMessageRole === 'plan' || hasPendingPrompt)
+            (item.isProcessing || hasWorkingDescendant || hasUnreadMeta(item) || item.lastMessageRole === 'plan' || hasPendingPrompt)
               ? "opacity-100 ml-0"
               : "!w-0 opacity-0 -ml-[10px]"
           )}>
-            {item.isProcessing && <Spinner className="text-[10px]" />}
+            {(item.isProcessing || hasWorkingDescendant) && <Spinner className="text-[10px]" />}
             {hasUnreadMeta(item) && (
               <svg className="text-accent h-3.5 w-3.5" viewBox="0 0 25 24" fill="currentColor">
                 <g transform="translate(1.748, 0.7832)">

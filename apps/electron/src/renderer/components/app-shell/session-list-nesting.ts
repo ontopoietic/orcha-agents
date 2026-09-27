@@ -135,6 +135,29 @@ export function hasProcessingDescendant(rootId: string, childIndex: Map<string, 
 }
 
 /**
+ * Where a row shows descendant activity (ORCHA §session-nesting):
+ * - 'chip': collapsed row with nested children → spinner on the child-count chip
+ * - 'row':  row WITHOUT nested children whose running descendant has no row in
+ *           the view (e.g. archived / filtered out) → the row's own spinner slot
+ *           (same visual as the row's own processing state); suppressed when the
+ *           row itself is processing (already spinning)
+ * - 'none': nothing processing below, or the row is expanded (visible children
+ *           carry their own indicators)
+ */
+export type RowActivityIndicator = 'none' | 'chip' | 'row'
+
+export function getRowActivityIndicator(opts: {
+  isProcessing?: boolean
+  hasChildren?: boolean
+  isExpanded?: boolean
+  descendantProcessing: boolean
+}): RowActivityIndicator {
+  if (!opts.descendantProcessing) return 'none'
+  if (opts.hasChildren) return opts.isExpanded ? 'none' : 'chip'
+  return opts.isProcessing ? 'none' : 'row'
+}
+
+/**
  * Expand a top-level row into [parentRow, ...nestedChildRows] according to the
  * expansion state. Recursive so grandchildren nest one level deeper; `seen`
  * guards against cycles and duplicate emission across groups.

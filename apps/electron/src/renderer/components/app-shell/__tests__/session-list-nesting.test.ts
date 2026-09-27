@@ -5,6 +5,7 @@ import {
   buildDescendantIndex,
   emitRowWithChildren,
   findNearestVisibleAncestor,
+  getRowActivityIndicator,
   hasProcessingDescendant,
   type SessionListRow,
 } from '../session-list-nesting'
@@ -176,6 +177,46 @@ describe('hasProcessingDescendant', () => {
       makeSession('b', { parentSessionId: 'a' }),
     ])
     expect(hasProcessingDescendant('a', index)).toBe(false)
+  })
+})
+
+describe('getRowActivityIndicator', () => {
+  it('shows nothing when no descendant is processing', () => {
+    expect(getRowActivityIndicator({ descendantProcessing: false })).toBe('none')
+    expect(getRowActivityIndicator({ hasChildren: true, descendantProcessing: false })).toBe('none')
+  })
+
+  it('uses the child-count chip for collapsed rows with visible children', () => {
+    expect(getRowActivityIndicator({ hasChildren: true, isExpanded: false, descendantProcessing: true })).toBe('chip')
+  })
+
+  it('leaves expanded rows to their visible children', () => {
+    expect(getRowActivityIndicator({ hasChildren: true, isExpanded: true, descendantProcessing: true })).toBe('none')
+  })
+
+  it('uses the row spinner when the running descendant has no row in the view', () => {
+    // conductor → orch (archived, not in view) → node (processing, archived/filtered):
+    // conductor has no visible children, so there is no chip to carry the spinner.
+    const all = [
+      makeSession('conductor'),
+      makeSession('orch', { parentSessionId: 'conductor', isArchived: true }),
+      makeSession('node', { parentSessionId: 'orch', isArchived: true, isProcessing: true }),
+    ]
+    const view = [all[0]!]
+    const { childrenByParent } = buildChildPartition(view, id => all.find(s => s.id === id))
+    const rows: SessionListRow[] = []
+    emitRowWithChildren({ item: view[0]! }, 0, childrenByParent, () => false, rows, new Set())
+    expect(rows[0]!.hasChildren).toBeUndefined()
+    expect(getRowActivityIndicator({
+      isProcessing: rows[0]!.item.isProcessing,
+      hasChildren: rows[0]!.hasChildren,
+      isExpanded: rows[0]!.isExpanded,
+      descendantProcessing: hasProcessingDescendant('conductor', buildDescendantIndex(all)),
+    })).toBe('row')
+  })
+
+  it('does not double up when the row itself is already processing', () => {
+    expect(getRowActivityIndicator({ isProcessing: true, descendantProcessing: true })).toBe('none')
   })
 })
 
