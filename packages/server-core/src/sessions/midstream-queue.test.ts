@@ -207,6 +207,118 @@ describe('mid-stream queue runtime invariants', () => {
     expect(events.filter(e => e.type === 'user_message' && e.status === 'queued').map(e => e.message.id)).toEqual(acceptedIds)
   })
 
+  // ORCHA regression (steer-delivery, 2026-09-27): live smoke test on the
+  // default claude-max connection (providerType 'anthropic', no explicit
+  // midStreamBehavior). "Wort: APFEL" / "Wort: BIRNE" sent during Bash #1 were
+  // queued instead of steered, so the model never saw them at the Bash #2 tool
+  // boundary and they were replayed as follow-up turns afterwards.
+  function steeringClaudeAgent(options: { liveQuery: boolean }) {
+    const agent = Object.create(ClaudeAgent.prototype) as any
+    agent.pendingSteers = new PendingSteers()
+    agent.currentQuery = options.liveQuery ? { interrupt: async () => {} } : null
+    agent.currentQueryAbortController = options.liveQuery ? new AbortController() : null
+    agent.debug = () => {}
+    agent.getModel = () => 'claude-sonnet-5'
+    agent.setAllSources = () => {}
+    agent.getSessionId = () => 'offline-sdk'
+    agent.chat = agent.chatImpl.bind(agent)
+    // The production PendingSteers wrapper around a plain "allow" PreToolUse result.
+    const toolBoundary = agent.pendingSteers.wrapHook(async () => ({ continue: true }))
+    const bash = async () => ((await toolBoundary(
+      { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_use_id: 'tool', tool_input: { command: 'sleep 8' } }, 'tool', {},
+    )) as any).hookSpecificOutput?.additionalContext as string | undefined
+    return { agent, bash }
+  }
+
+  function wireHost(managed: any, agent: any) {
+    managed.sdkSessionId = 'offline-sdk'
+    managed.agent = agent
+    ;(sm as any).getOrCreateAgent = async () => agent
+    ;(sm as any).persistSession = () => {}
+    ;(sm as any).flushSession = async () => {}
+    const stopped = mock(async () => { managed.isProcessing = false })
+    ;(sm as any).onProcessingStopped = stopped
+    const events: any[] = []
+    sm.setEventSink((_channel, _target, event) => events.push(event))
+    return { stopped, events }
+  }
+
+  it('default Claude connection steers mid-turn sends into the next tool boundary, in order, exactly once', async () => {
+    spyOn(backendFactory, 'resolveSessionConnection').mockReturnValue({ providerType: 'anthropic' } as any)
+    const managed = buildSession('default-claude-steer')
+    const { agent, bash } = steeringClaudeAgent({ liveQuery: true })
+    const contexts: Array<string | undefined> = []
+    agent.chatTurn = async function* () {
+      contexts.push(await bash()) // Bash #1 starts
+      await sm.sendMessage(managed.id, 'Wort: APFEL')
+      await sm.sendMessage(managed.id, 'Wort: BIRNE')
+      contexts.push(await bash()) // Bash #2 — first boundary after the sends
+      contexts.push(await bash()) // Bash #3
+      yield { type: 'complete' }
+    }
+    const { stopped, events } = wireHost(managed, agent)
+    await sm.sendMessage(managed.id, 'run sleep 8 three times, then list my words')
+
+    expect(contexts[0]).toBeUndefined()
+    expect(contexts[1]).toContain('Message 1:\nWort: APFEL')
+    expect(contexts[1]).toContain('Message 2:\nWort: BIRNE')
+    expect(contexts[1]!.indexOf('APFEL')).toBeLessThan(contexts[1]!.indexOf('BIRNE'))
+    expect(contexts[2]).toBeUndefined()
+    // Delivered in-turn → nothing left to replay as follow-up turns.
+    expect(managed.messageQueue).toEqual([])
+    expect(stopped).toHaveBeenCalledTimes(1)
+    expect(managed.wasInterrupted).not.toBe(true)
+    const midStream = events.filter(e => e.type === 'user_message' && e.message.content.startsWith('Wort:'))
+    expect(midStream.map(e => e.status)).toEqual(['accepted', 'accepted'])
+  })
+
+  it('accepts a steer sent before the SDK query exists and keeps steering the rest of the turn', async () => {
+    spyOn(backendFactory, 'resolveSessionConnection').mockReturnValue({ providerType: 'anthropic' } as any)
+    const managed = buildSession('prequery-steer')
+    const { agent, bash } = steeringClaudeAgent({ liveQuery: false })
+    const forceAbort = spyOn(agent, 'forceAbort')
+    const contexts: Array<string | undefined> = []
+    agent.chatTurn = async function* () {
+      // Prompt building (observations/recall/tail) — no query() yet.
+      await sm.sendMessage(managed.id, 'Wort: APFEL')
+      agent.currentQuery = { interrupt: async () => {} }
+      agent.currentQueryAbortController = new AbortController()
+      contexts.push(await bash())
+      await sm.sendMessage(managed.id, 'Wort: BIRNE')
+      contexts.push(await bash())
+      yield { type: 'complete' }
+    }
+    const { stopped } = wireHost(managed, agent)
+    await sm.sendMessage(managed.id, 'task')
+
+    expect(forceAbort).not.toHaveBeenCalled()
+    expect(agent.currentQueryAbortController.signal.aborted).toBe(false)
+    expect(contexts[0]).toContain('Wort: APFEL')
+    expect(contexts[0]).not.toContain('BIRNE')
+    expect(contexts[1]).toContain('Wort: BIRNE')
+    expect(contexts[1]).not.toContain('APFEL')
+    expect(managed.messageQueue).toEqual([])
+    expect(managed.wasInterrupted).not.toBe(true)
+    expect(stopped).toHaveBeenCalledTimes(1)
+  })
+
+  it('a steer that finds no tool boundary is replayed exactly once, with no interruption marker', async () => {
+    spyOn(backendFactory, 'resolveSessionConnection').mockReturnValue({ providerType: 'anthropic' } as any)
+    const managed = buildSession('no-boundary')
+    const { agent } = steeringClaudeAgent({ liveQuery: true })
+    agent.chatTurn = async function* () {
+      await sm.sendMessage(managed.id, 'Wort: APFEL')
+      await sm.sendMessage(managed.id, 'Wort: BIRNE')
+      yield { type: 'complete' }
+    }
+    wireHost(managed, agent)
+    await sm.sendMessage(managed.id, 'answer without tools')
+    expect(managed.messageQueue.map(p => p.message)).toEqual(['Wort: APFEL', 'Wort: BIRNE'])
+    expect(managed.messages.filter(m => m.content === 'Wort: BIRNE')).toHaveLength(1)
+    expect(managed.messages.filter(m => m.content.startsWith('Wort:')).every(m => m.isQueued)).toBe(true)
+    expect(managed.wasInterrupted).not.toBe(true)
+  })
+
   it.each(['complete', 'error'])('ignores a trailing %s from a handed-off turn after a newer turn starts', async terminal => {
     const managed = buildSession('handoff-new-turn')
     managed.sdkSessionId = 'offline-sdk'

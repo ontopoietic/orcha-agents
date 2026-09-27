@@ -464,16 +464,20 @@ export function isPiProvider(providerType: LlmProviderType): boolean {
 /**
  * Default mid-stream send behavior for a given provider type.
  *
- * - 'anthropic' → 'queue': Claude's emulated steer (PreToolUse hook injection)
- *   has a real failure mode — if no tool fires before the turn ends, the steer
- *   becomes `steer_undelivered` and gets re-queued anyway, paying for the
- *   original turn's tokens for nothing. Default to queue for predictability.
- * - 'pi' / 'pi_compat' → 'steer': Pi's native `.steer()` is non-destructive
- *   (delivers after the current tool finishes, keeps full context). No
- *   downside to defaulting to immediate steering.
+ * ORCHA fork: 'steer' for every provider (upstream defaults 'anthropic' to
+ * 'queue'). Upstream's rationale — an emulated Claude steer that finds no tool
+ * boundary becomes `steer_undelivered` — no longer costs anything since the
+ * v0.13.4 `PendingSteers` queue: undelivered steers are recovered exactly once
+ * into the host queue WITHOUT aborting the turn, i.e. the worst case equals
+ * 'queue'. The best case delivers the message at the next tool boundary of the
+ * running turn, which is what users expect when they type while the agent works.
+ * Users can still pick 'queue' per connection (Settings → AI).
+ *
+ * - 'anthropic' → 'steer': PreToolUse-hook injection via PendingSteers.
+ * - 'pi' / 'pi_compat' → 'steer': Pi's native `.steer()`.
  */
-export function defaultMidStreamBehavior(providerType: LlmProviderType): MidStreamBehavior {
-  return providerType === 'anthropic' ? 'queue' : 'steer';
+export function defaultMidStreamBehavior(_providerType: LlmProviderType): MidStreamBehavior {
+  return 'steer';
 }
 
 /**

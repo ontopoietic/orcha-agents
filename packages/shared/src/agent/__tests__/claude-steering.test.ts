@@ -95,6 +95,27 @@ describe('Claude steering delivery', () => {
     expect(agent.takePendingSteers()).toEqual([{ message: 'new turn', messageId: 'new' }]);
   });
 
+  // ORCHA regression: a steer during prompt building (no query() yet) must not
+  // pause the queue — upstream's forceAbort there made every later steer of the
+  // same turn abort the live query.
+  it('accepts steers before the query exists while the turn owns the queue; rejects between turns', async () => {
+    const agent = fakeAgent();
+    agent.currentQuery = null;
+    agent.currentQueryAbortController = null;
+    const forceAbort = mock(() => {});
+    agent.forceAbort = forceAbort;
+    expect(agent.redirect('between turns')).toBe(false);
+    expect(forceAbort).toHaveBeenCalledTimes(1);
+    agent.pendingSteers.begin();
+    expect(agent.redirect('early', { messageId: 'early' })).toBe(true);
+    agent.currentQuery = { interrupt: mock(async () => {}) };
+    expect(agent.redirect('later', { messageId: 'later' })).toBe(true);
+    expect(forceAbort).toHaveBeenCalledTimes(1);
+    const result = await agent.pendingSteers.wrapHook(async () => ({ continue: true }))(input, 'tool', {}) as any;
+    expect(result.hookSpecificOutput.additionalContext).toContain('Message 1:\nearly');
+    expect(result.hookSpecificOutput.additionalContext).toContain('Message 2:\nlater');
+  });
+
   it('recovers A/B/C before complete via the production Claude chatImpl wrapper', async () => {
     const agent = fakeAgent();
     agent.chatTurn = async function* (): AsyncGenerator<AgentEvent> {

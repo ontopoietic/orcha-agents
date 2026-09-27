@@ -2925,13 +2925,18 @@ This is a branched conversation. All prior messages in this conversation are par
    * session layer can re-queue the message.
    */
   override redirect(message: string, metadata?: RedirectMetadata): boolean {
-    if (!this.currentQuery || !this.currentQueryAbortController) {
-      // Not actively streaming — fall back to abort + queue
-      this.forceAbort(AbortReason.Redirect);
-      return false;
-    }
+    // ORCHA fork: the PendingSteers queue is active for the whole foreground
+    // turn (runTurn → pause), including the prompt-building phase before
+    // `query()` exists (observations, recall, conversation tail, MCP setup —
+    // seconds in this fork). Upstream bails out there with forceAbort(), which
+    // PAUSES the queue for the rest of the turn: the message gets queued with
+    // a bogus "interrupted" marker and every later steer in the same turn hits
+    // enqueue()=false → forceAbort() → the live turn is killed. Accepting the
+    // steer while the turn owns the queue is safe: the first PreToolUse hook
+    // delivers it, otherwise runTurn recovers it via steer_undelivered.
     this.debug(`Steering mid-stream: "${message.slice(0, 100)}"`);
     if (this.pendingSteers.enqueue({ message, ...metadata })) return true;
+    // No foreground turn owns the queue (between turns / after handoff or stop).
     this.forceAbort(AbortReason.Redirect);
     return false;
   }

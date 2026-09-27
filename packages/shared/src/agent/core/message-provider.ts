@@ -239,6 +239,14 @@ function renderAllEntries(
     if (watermarkId && watermarkRawIndex < 0 && parsed.id === watermarkId) {
       watermarkRawIndex = i;
     }
+    // A user message still marked `isQueued` has NOT been handed to the model
+    // yet: it waits in the host's messageQueue (queue-mode send, failed or
+    // undelivered steer, hidden bg-result nudge) and will be sent as its OWN
+    // turn prompt later. Rendering it here would leak it into an earlier turn's
+    // context, so the model answers it there AND again when it is replayed
+    // (observed: "Wort: BIRNE" answered twice). It enters the tail only after
+    // processNextQueuedMessage clears the flag.
+    if (parsed.type === 'user' && parsed.isQueued === true) continue;
     const rendered = renderMessage(parsed, maxCharsPerMessage);
     if (!rendered) continue;
     entries.push({ text: rendered, length: rendered.length, rawIndex: i });

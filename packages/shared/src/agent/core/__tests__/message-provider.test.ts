@@ -245,6 +245,48 @@ describe('buildConversationTail', () => {
     });
   });
 
+  // ORCHA regression (steer-delivery, 2026-09-27): queued mid-turn sends are
+  // persisted immediately (isQueued: true) but replayed one-by-one as their own
+  // turns. The replay turn for "APFEL" rendered the still-queued "BIRNE" into
+  // its tail, the model answered both, and then answered "BIRNE" again when it
+  // was replayed ("Notiert: BIRNE (zweite Nennung)").
+  describe('queued (not yet delivered) user messages', () => {
+    const transcript = (apfelQueued: boolean) => [
+      { id: SESSION_ID, anchors: [] },
+      { id: 'task', type: 'user', content: 'run sleep 8 three times, then list my words' },
+      { id: 't1', type: 'tool', toolName: 'Bash', toolResult: 'done' },
+      { id: 'apfel', type: 'user', content: 'Wort: APFEL', isQueued: apfelQueued },
+      { id: 'birne', type: 'user', content: 'Wort: BIRNE', isQueued: true },
+      { id: 't2', type: 'tool', toolName: 'Bash', toolResult: 'done' },
+      { id: 'final', type: 'assistant', content: 'Alle drei sleep-Aufrufe fertig.' },
+    ];
+
+    it('excludes every still-queued user message from the tail', () => {
+      writeJsonl(transcript(true));
+      const tail = buildConversationTail(SESSION_ID, WORKSPACE)!;
+      expect(tail.block).toContain('[user] run sleep 8 three times');
+      expect(tail.block).toContain('[assistant] Alle drei sleep-Aufrufe fertig.');
+      expect(tail.block).not.toContain('APFEL');
+      expect(tail.block).not.toContain('BIRNE');
+    });
+
+    it('replaying APFEL does not leak the later queued BIRNE into that turn', () => {
+      writeJsonl(transcript(false)); // processNextQueuedMessage cleared APFEL's flag
+      const tail = buildConversationTail(SESSION_ID, WORKSPACE)!;
+      expect(tail.block).toContain('[user] Wort: APFEL');
+      expect(tail.block).not.toContain('BIRNE');
+    });
+
+    it('keeps the watermark coverage signal when the watermark precedes queued messages', () => {
+      writeJsonl(transcript(true));
+      writeWatermarkFile('t1');
+      const tail = buildConversationTail(SESSION_ID, WORKSPACE)!;
+      expect(tail.coversFromWatermark).toBe(true);
+      expect(tail.block).toContain('[tool:Bash] done');
+      expect(tail.block).not.toContain('BIRNE');
+    });
+  });
+
   it('survives corrupted lines without throwing', () => {
     mkdirSync(SESSION_DIR, { recursive: true });
     const content = [
