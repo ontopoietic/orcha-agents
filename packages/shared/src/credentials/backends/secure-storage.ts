@@ -1,7 +1,14 @@
 /**
  * Secure Storage Backend
  *
- * Stores credentials in an encrypted file at ~/.craft-agent/credentials.enc
+ * Stores credentials in an encrypted file at CONFIG_DIR/credentials.enc
+ * (fork: ~/.orcha-agents/credentials.enc — upstream hardcoded ~/.craft-agent,
+ * which made the fork share credentials with the original app; see FORK.md §3).
+ *
+ * The encryption key does NOT depend on the file's directory (machine UUID +
+ * 'craft-agent-v2' tag + per-file salt from the header), so a credentials.enc
+ * copied between directories on the same machine stays decryptable. Keep the
+ * derivation strings unchanged — they are key material, not paths.
  * Uses AES-256-GCM for authenticated encryption.
  *
  * Encryption key is derived from OS-native hardware UUID using PBKDF2:
@@ -34,15 +41,16 @@ import {
 import { execSync } from 'child_process';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync } from 'fs';
 import { hostname, userInfo, homedir } from 'os';
-import { join, dirname } from 'path';
+import { join } from 'path';
+
+import { CONFIG_DIR } from '../../config/paths.ts';
 
 import type { CredentialBackend } from './types.ts';
 import type { CredentialId, StoredCredential } from '../types.ts';
 import { credentialIdToAccount, accountToCredentialId } from '../types.ts';
 
-// File location
-const CREDENTIALS_DIR = join(homedir(), '.craft-agent');
-const CREDENTIALS_FILE = join(CREDENTIALS_DIR, 'credentials.enc');
+// File location (fork: derived from CONFIG_DIR, never ~/.craft-agent)
+export const CREDENTIALS_FILE_NAME = 'credentials.enc';
 
 // File format constants
 const MAGIC_BYTES = Buffer.from('CRAFT01\0');
@@ -115,6 +123,15 @@ export class SecureStorageBackend implements CredentialBackend {
   private cachedStore: CredentialStore | null = null;
   private encryptionKey: Buffer | null = null;
   private salt: Buffer | null = null;
+
+  private readonly credentialsDir: string;
+  private readonly credentialsFile: string;
+
+  /** @param options.dir - override the credentials directory (tests); defaults to CONFIG_DIR */
+  constructor(options: { dir?: string } = {}) {
+    this.credentialsDir = options.dir ?? CONFIG_DIR;
+    this.credentialsFile = join(this.credentialsDir, CREDENTIALS_FILE_NAME);
+  }
 
   async isAvailable(): Promise<boolean> {
     // File backend is always available - we can always write to filesystem
@@ -199,11 +216,11 @@ export class SecureStorageBackend implements CredentialBackend {
     // Return cached store if available
     if (this.cachedStore) return this.cachedStore;
 
-    if (!existsSync(CREDENTIALS_FILE)) return null;
+    if (!existsSync(this.credentialsFile)) return null;
 
     let fileData: Buffer;
     try {
-      fileData = readFileSync(CREDENTIALS_FILE);
+      fileData = readFileSync(this.credentialsFile);
     } catch {
       return null;
     }
@@ -280,8 +297,8 @@ export class SecureStorageBackend implements CredentialBackend {
 
   private saveStoreSync(store: CredentialStore): void {
     // Ensure directory exists
-    if (!existsSync(CREDENTIALS_DIR)) {
-      mkdirSync(CREDENTIALS_DIR, { recursive: true, mode: 0o700 });
+    if (!existsSync(this.credentialsDir)) {
+      mkdirSync(this.credentialsDir, { recursive: true, mode: 0o700 });
     }
 
     // Use existing salt or generate new one
@@ -312,7 +329,7 @@ export class SecureStorageBackend implements CredentialBackend {
     const fileData = Buffer.concat([header, iv, authTag, ciphertext]);
 
     // Write with restrictive permissions (owner read/write only)
-    writeFileSync(CREDENTIALS_FILE, fileData, { mode: 0o600 });
+    writeFileSync(this.credentialsFile, fileData, { mode: 0o600 });
     this.cachedStore = store;
   }
 
@@ -350,8 +367,8 @@ export class SecureStorageBackend implements CredentialBackend {
   private handleCorruptedFile(): void {
     // Delete corrupted file - user will need to re-enter credentials
     try {
-      if (existsSync(CREDENTIALS_FILE)) {
-        unlinkSync(CREDENTIALS_FILE);
+      if (existsSync(this.credentialsFile)) {
+        unlinkSync(this.credentialsFile);
       }
     } catch {
       // Ignore deletion errors

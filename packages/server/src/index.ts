@@ -26,7 +26,6 @@
  */
 
 import { join } from 'node:path'
-import { homedir } from 'node:os'
 import { readFileSync, existsSync } from 'node:fs'
 import { version as packageVersion } from '../package.json'
 import { enableDebug } from '@craft-agent/shared/utils/debug'
@@ -35,6 +34,8 @@ import { validateSession, createWebuiHandler, nodeHttpAdapter } from '@craft-age
 import type { WebuiHandler } from '@craft-agent/server-core/webui'
 import { getCredentialManager } from '@craft-agent/shared/credentials'
 import { getWorkspaces } from '@craft-agent/shared/config'
+import { getMessagingDir } from '@craft-agent/shared/config/paths'
+import { runIsolationMigration } from '@craft-agent/shared/config/isolation-migration'
 import { createMessagingBootstrap, type MessagingBootstrapHandle } from '@craft-agent/messaging-gateway'
 
 // --generate-token: print a crypto-random token and exit
@@ -62,6 +63,10 @@ process.on('unhandledRejection', (reason) => {
 if (process.env.CRAFT_DEBUG === 'true' || process.env.CRAFT_DEBUG === '1') {
   enableDebug()
 }
+
+// Orcha Agents fork: one-time isolation migration from ~/.craft-agent
+// (read-only source) into CONFIG_DIR, before credentials/messaging are used.
+runIsolationMigration({ log: (m) => console.log(`[server] ${m}`) })
 
 function parseOptionalBooleanEnv(name: string, value: string | undefined): boolean | undefined {
   if (value == null || value.trim() === '') return undefined
@@ -211,7 +216,7 @@ const instance = await (async () => {
           sessionManager,
           credentialManager: getCredentialManager(),
           getMessagingDir: (wsId: string) =>
-            join(homedir(), '.craft-agent', 'workspaces', wsId, 'messaging'),
+            getMessagingDir(wsId),
           // Headless has no legacy messaging dir — workspaces start clean.
           whatsapp: {
             workerEntry: waWorkerEntry,

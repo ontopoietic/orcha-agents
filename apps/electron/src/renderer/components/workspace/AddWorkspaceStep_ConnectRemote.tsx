@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next"
 import { ArrowLeft, CheckCircle, XCircle, Plus } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { slugify } from "@/lib/slugify"
+import { APP_CONFIG_DIR_NAME } from "@/lib/app-config-dir"
 import { Input } from "../ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select"
 import { AddWorkspaceContainer, AddWorkspaceStepHeader, AddWorkspacePrimaryButton, AddWorkspaceSecondaryButton } from "./primitives"
@@ -147,7 +148,7 @@ export function AddWorkspaceStep_ConnectRemote({
     }
 
     if (!homeDir) return
-    const defaultBasePath = `${homeDir}/.craft-agent/workspaces`
+    const defaultBasePath = `${homeDir}/${APP_CONFIG_DIR_NAME}/workspaces` // Fork: upstream ~/.craft-agent/workspaces
 
     if (isCreateNew || isFreshServer) {
       // Create new workspace on remote server via direct RPC, then connect locally

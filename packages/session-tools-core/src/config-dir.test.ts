@@ -23,10 +23,8 @@ describe('config-dir (fork)', () => {
     expect(docDisplayPath('pages.md')).toBe('~/.orcha-agents/docs/pages.md');
   });
 
-  it('defaults to ~/.orcha-agents when no config exists', () => {
+  it('defaults to ~/.orcha-agents and never falls back to ~/.craft-agent', () => {
     delete process.env.CRAFT_CONFIG_DIR;
-    // Under a temp HOME (test convention) neither dir has a config.json.
-    const dir = getAppConfigDir();
-    expect([`${homedir()}/.orcha-agents`, `${homedir()}/.craft-agent`]).toContain(dir);
+    expect(getAppConfigDir()).toBe(`${homedir()}/.orcha-agents`);
   });
 });

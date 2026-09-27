@@ -11,18 +11,13 @@
  * Keep both in sync.
  */
 
-import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-/** Absolute path of the app config dir (CRAFT_CONFIG_DIR → ~/.orcha-agents → ~/.craft-agent → ~/.orcha-agents). */
+/** Absolute path of the app config dir (CRAFT_CONFIG_DIR → ~/.orcha-agents; never ~/.craft-agent). */
 export function getAppConfigDir(): string {
   if (process.env.CRAFT_CONFIG_DIR) return process.env.CRAFT_CONFIG_DIR;
-  const orcha = join(homedir(), '.orcha-agents');
-  if (existsSync(join(orcha, 'config.json'))) return orcha;
-  const craft = join(homedir(), '.craft-agent');
-  if (existsSync(join(craft, 'config.json'))) return craft;
-  return orcha;
+  return join(homedir(), '.orcha-agents');
 }
 
 /** Collapse the user's home dir prefix to `~` for display in prompts/tool descriptions. */

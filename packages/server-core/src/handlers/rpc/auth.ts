@@ -1,6 +1,6 @@
 import { unlink } from 'fs/promises'
 import { join } from 'path'
-import { homedir } from 'os'
+import { CONFIG_DIR } from '@craft-agent/shared/config/paths'
 import { RPC_CHANNELS } from '@craft-agent/shared/protocol'
 import { getCredentialManager } from '@craft-agent/shared/credentials'
 import type { RpcServer } from '@craft-agent/server-core/transport'
@@ -13,6 +13,34 @@ export const HANDLED_CHANNELS = [
   RPC_CHANNELS.auth.SHOW_DELETE_SESSION_CONFIRMATION,
   RPC_CHANNELS.credentials.HEALTH_CHECK,
 ] as const
+
+/**
+ * Logout: clear all stored credentials and the app config file.
+ *
+ * Mirrors upstream's intent (reset auth + config) but scoped to THIS app's
+ * config dir. Fork: upstream hardcoded `~/.craft-agent/config.json`, so an
+ * Orcha logout wiped the original Craft Agents app's config. The credential
+ * manager's store is CONFIG_DIR/credentials.enc, so deleting its entries
+ * only touches Orcha's own credentials.
+ */
+export async function performLogout(opts: {
+  credentialManager: Pick<ReturnType<typeof getCredentialManager>, 'list' | 'delete'>
+  configDir?: string
+}): Promise<void> {
+  const { credentialManager } = opts
+  const configDir = opts.configDir ?? CONFIG_DIR
+
+  // List and delete all stored credentials
+  const allCredentials = await credentialManager.list()
+  for (const credId of allCredentials) {
+    await credentialManager.delete(credId)
+  }
+
+  // Delete the config file
+  await unlink(join(configDir, 'config.json')).catch(() => {
+    // Ignore if file doesn't exist
+  })
+}
 
 export function registerAuthHandlers(server: RpcServer, deps: HandlerDeps): void {
   // Show logout confirmation dialog (routed to client)
@@ -50,19 +78,7 @@ export function registerAuthHandlers(server: RpcServer, deps: HandlerDeps): void
   // Logout - clear all credentials and config
   server.handle(RPC_CHANNELS.auth.LOGOUT, async () => {
     try {
-      const manager = getCredentialManager()
-
-      // List and delete all stored credentials
-      const allCredentials = await manager.list()
-      for (const credId of allCredentials) {
-        await manager.delete(credId)
-      }
-
-      // Delete the config file
-      const configPath = join(homedir(), '.craft-agent', 'config.json')
-      await unlink(configPath).catch(() => {
-        // Ignore if file doesn't exist
-      })
+      await performLogout({ credentialManager: getCredentialManager() })
 
       deps.platform.logger.info('Logout complete - cleared all credentials and config')
     } catch (error) {

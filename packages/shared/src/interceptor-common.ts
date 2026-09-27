@@ -26,8 +26,17 @@ export const INTERCEPTOR_LOGGING_ENABLED = !IS_PACKAGED;
 export const DEBUG = INTERCEPTOR_LOGGING_ENABLED &&
   (process.argv.includes('--debug') || process.env.CRAFT_DEBUG === '1');
 
+/**
+ * App config dir. Fork (Orcha Agents): mirrors `resolveConfigDir()` in
+ * ./config/paths.ts (CRAFT_CONFIG_DIR → ~/.orcha-agents, never ~/.craft-agent).
+ * Inlined rather than imported because this file is shipped/preloaded as a
+ * standalone .ts dependency of the interceptor (see build-dmg.sh). The SDK
+ * subprocess inherits CRAFT_CONFIG_DIR from the main process.
+ */
+export const APP_CONFIG_DIR = process.env.CRAFT_CONFIG_DIR || join(homedir(), '.orcha-agents');
+
 /** Config file path for reading settings in the SDK subprocess */
-export const CONFIG_FILE = join(homedir(), '.craft-agent', 'config.json');
+export const CONFIG_FILE = join(APP_CONFIG_DIR, 'config.json');
 
 /** Session directory — set by env var (subprocess) or setSessionDir() (main process) */
 let _sessionDir: string | null = process.env.CRAFT_SESSION_DIR || null;
@@ -36,7 +45,7 @@ let _sessionDir: string | null = process.env.CRAFT_SESSION_DIR || null;
 // LOGGING
 // ============================================================================
 
-export const LOG_DIR = join(homedir(), '.craft-agent', 'logs');
+export const LOG_DIR = join(APP_CONFIG_DIR, 'logs');
 export const LOG_FILE = join(LOG_DIR, 'interceptor.log');
 
 // Ensure log directory exists at module load
@@ -171,7 +180,7 @@ function getErrorFilePath(): string {
   // Prefer session-scoped file to avoid cross-session error consumption.
   if (_sessionDir) return join(_sessionDir, 'api-error.json');
   // Fallback for legacy/non-session contexts.
-  return join(homedir(), '.craft-agent', 'api-error.json');
+  return join(APP_CONFIG_DIR, 'api-error.json');
 }
 
 function getStoredError(sessionDir?: string): LastApiError | null {
