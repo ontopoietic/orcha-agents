@@ -11,7 +11,7 @@ Dieses Repository ist ein Fork von [lukilabs/craft-agents-oss](https://github.co
 | **Zuletzt gemerged** | v0.13.5 |
 | **Upstream-Stand** | v0.13.5 (aktuell) |
 | **Aktiver Branch** | `main` |
-| **Feature-Branch** | `feature/cross-session-recall` (Observer/Reflector/Recall — größter offener Block, → main, s. §6) |
+| **Feature-Branch** | — (alle gemergt; alte/unfertige Branches archiviert unter `origin/archive/*`, 2026-09-27) |
 | **Sentry** | Deaktiviert (main + renderer) — kein Reporting |
 | **Auto-Update** | Deaktiviert (`publish`-Block auskommentiert, `FORK_AUTO_UPDATE_DISABLED`) — Upstream-Feed seit v0.12.0 `https://thecraftagents.com/electron/latest` |
 | **Pages-Public-Publishing** | Default AUS (`isPagesSharingEnabled()` → `false`, s. §10) |
@@ -34,6 +34,8 @@ Ermöglicht Shell-Kommandos vor dem Context-Compaction-Event des Agents. Output 
 - `packages/shared/src/automations/name-utils.ts` — Hilfsfunktionen
 
 **`command` vs. `script` (seit v0.13.5-Merge):** Upstream v0.13.0 führte eigene `script`-Actions ein (workspace-relatives Skript via argv, kein Shell, nur `CRAFT_*`-Env, u. a. für Pages-Refresh) und machte `ActionDefinitionSchema` zu einer **strikten** `discriminatedUnion` (unbekannte Action-Typen = Validierungsfehler, früheres `.passthrough()` entfernt). Unsere `command`-Action (Shell-Kommando, nur Agent-Events, stdout → Hook-`reason`) ist als `CommandActionSchema.strict()` in die Union aufgenommen, `AutomationAction = Prompt | Webhook | Script | Command`; `name-utils.ts` kennt beide. **Folgeaufgabe (offen):** prüfen, ob die PreCompact-Hooks auf `script` migrierbar sind (script läuft ohne Shell und ohne vollen `process.env`, liefert aber keinen Hook-`reason` an den Agent → vermutlich nicht 1:1).
+
+**Nutzung (Stand 2026-09-27):** Der Orcha-Workspace (`~/.orcha-agents/workspaces/orcha/automations.json`) nutzt **keine** PreCompact-Automation mehr — „Orcha Signal-Checkpoint“ (rief `orcha signal count/list`) wurde mit dem Sync-Ledger entfernt, „Observer: Extract signals before compaction“ (`npx tsx scripts/orcha-observe.ts` aus dem Repo) war redundant zum eingebauten token-basierten Observer-Trigger (§6, `observation-trigger.ts`, ~24k Tokens statt ~150k Compaction-Schwelle). Das Feature selbst (PreCompact-Event + `command`-Action) bleibt.
 
 **Hinweis (korrigiert 2026-08-06):** Die PreCompact-Registrierung liegt NICHT in `apps/electron/src/main/index.ts`, sondern im generischen Automation-Hook-System (`packages/shared/src/automations/{types,event-bus,sdk-bridge}.ts` + `buildSdkHooks()` in `automation-system.ts`).
 
@@ -243,39 +245,19 @@ Upstream v0.13.0 bringt **Pages** (agent-erstellte HTML-Mini-Dashboards, Sidebar
 **Problem:** `sessions:create`-RPC unterdrückt `session_created` (Upstream: der aufrufende Renderer fügt die Session aus dem Rückgabewert hinzu, `App.tsx handleCreateSession`). Wird eine Session anders angelegt (rohes `electronAPI.createSession()`, anderes Fenster, Remote-Client), kennt der Renderer sie nicht; das erste Event dafür läuft durch den Event-Processor mit `currentSession = null` → leerer Stub ohne `name` im Meta-Map → Zeile zeigt "New chat". `spawn_session`/TaskRunner waren nicht betroffen (rufen `SessionManager.createSession()` direkt → Broadcast → Hydrate).
 **Lösung:** `apps/electron/src/renderer/lib/unknown-session-hydration.ts` (neu) + Verdrahtung in `App.tsx` `onSessionEvent`: bei Event für unbekannte Session einmalig `getSessionMessages()` und Stub ersetzen (gleicher Apply-Pfad wie `session_created`). Auto-Titel überschreibt expliziten Namen nicht (Guard `!managed.name` in `sendMessage`, jetzt per `server-core/src/sessions/explicit-name-title.test.ts` abgesichert).
 
+### 12. Mid-stream-Default „steer“ für alle Provider (bewusste Upstream-Abweichung, 2026-09-27)
+Upstream setzt `defaultMidStreamBehavior('anthropic') = 'queue'` (seit v0.9.1): Nachrichten während eines Claude-Turns werden erst nach dem Turn zugestellt. Fork-Default ist **`'steer'` für alle Provider** — Nachrichten erreichen das Modell am nächsten Tool-Boundary, genau einmal; ohne Boundary werden sie genau einmal als nächster Turn nachgereicht (kein Abbruch). Pro Connection umstellbar (Settings → AI → Mid-stream sends).
+
+**Berührt Upstream-Dateien (Konflikt-Kandidaten):** `packages/shared/src/config/llm-connections.ts` (Default), `packages/shared/src/agent/claude-agent.ts` (`redirect()` akzeptiert Steers, sobald der Turn die Steer-Queue besitzt — auch vor Query-Erzeugung), `packages/shared/src/agent/core/message-provider.ts` (Tail überspringt noch wartende `isQueued`-User-Nachrichten). Details: §6-Note (d), Tests `server-core/src/sessions/midstream-queue.test.ts`, `agent/__tests__/claude-steering.test.ts`.
+
+### 13. Kleine Upstream-Bugfixes im Fork
+- **`readPluginName('')` CWD-Leak** (`packages/shared/src/utils/workspace.ts`, 2026-06-07, übernommen 2026-09-27 als `13776a5b`): leerer `workspaceRootPath` → `return null` statt relativem Pfad ins CWD. Test: `agent/__tests__/workspace-slug.test.ts`. Kandidat für Upstream-PR.
+
 ## Orcha CLI Änderungen
 
-Diese Änderungen liegen im separaten Repository `~/Developer/orcha/` und sind **nicht Teil des Craft-Agents-Forks**.
+Diese Änderungen lagen im separaten Repository `~/Developer/orcha/` und waren **nicht Teil des Craft-Agents-Forks**.
 
-### 5. Candidate-Klassifizierung (orcha/packages/cli)
-**Problem:** Alle Kandidaten landeten als `"unknown"` — `appendSyncHistory()` las falsche Feldnamen (`category`/`type` statt `candidateType`).
-
-**Berührt Dateien:**
-- `packages/cli/src/lib/ledger.ts` — Zeile ~85, ~118: `c.category ?? c.type` → `c.candidateType ?? "unknown"`; Zeile ~394: `+rotateLedger()` Funktion
-- `packages/cli/src/commands/sync.ts` — Zeile ~222: `createLedger()` ersetzt durch `rotateLedger(previousLedger, { commitHash, branch, maxSignals: 50 })`
-
-### 6. Deutsche Konversations-Signale (orcha/packages/cli)
-6 neue Regex-Patterns für deutsche Signal-Typen in Conversation-Extraktion:
-
-| Pattern | Typ |
-|---|---|
-| `konzept-erkenntnis` | finding |
-| `designprinzip` | preference |
-| `lücke` | finding |
-| `erweiterung` | task |
-| `idee` | task |
-| `modell` | assumption |
-
-**Berührt Dateien:**
-- `packages/cli/src/lib/candidates.ts` — Zeile ~119-124: 6 neue Pattern in `conversationSignalPatterns`
-
-### 7. Ledger-Rotation (orcha/packages/cli)
-**Problem:** Ledger wurde nach jedem Sync komplett gelöscht, was den Agent-Kontextverlust bedeutete.
-**Lösung:** `rotateLedger()` behält die letzten N Signale (default 50), retains linked candidates, cleared obligations.
-
-**Berührt Dateien:**
-- `packages/cli/src/lib/ledger.ts` — `+rotateLedger(prev, opts)` Funktion
-- `packages/cli/src/commands/sync.ts` — Verwendet `rotateLedger` statt `createLedger()`
+> **Entfernt (2026-09-27, orcha `fd3fd87b`):** Die früheren Einträge 5–7 (Candidate-Klassifizierung, deutsche Konversations-Signale, Ledger-Rotation) betrafen die Sync-Ledger-/Signal-/Kandidaten-Pipeline der Orcha-CLI. Diese ist samt Obligations-Engine vollständig zurückgebaut (Entscheidung Timo 2026-09-26: write-only). `orcha sync` = Bereichsübersicht, Konsistenz-Warnungen, Konzeptionsschuld, Sync-Log, Stamp — blockiert nie. Die Ledger-UI im Fork ist ebenfalls entfernt (§1).
 
 ---
 
@@ -298,6 +280,9 @@ Diese Änderungen liegen im separaten Repository `~/Developer/orcha/` und sind *
 | 2026-09-26 | v0.11.4+fork (inkl. Ledger-UI-/Reflector-Bridge-Rückbau) | v0.13.5 | **Merge** (`update/v0.13.5` von `chore/remove-ledger-ui`; `fix/sdk-0.3.258-fable-5-1` verworfen — durch Upstream überholt). **23 echte Konflikte** (Plan-Probelauf 27; `packages/{core,shared}/package.json` + `llm-connections.ts` auto-gemergt). Manifeste (6): root `package.json` (Upstream-Scripts inkl. docs-site/pages-worker ∪ Fork-`./`-isolated-Runner, `build` bleibt `electron:dist:mac` weil `scripts/build.ts` im OSS-Export fehlt), `apps/electron/package.json` (0.13.5 + Orcha-Branding + `build:observers`), `bun.lock` (→ Upstream + `bun install --force`), `tsconfig.base.json` (→ Upstream, das die Datei jetzt selbst mitliefert; ersetzt unseren Fix `f238100c`), `electron-builder.yml` (`publish` bleibt auskommentiert, nur Kommentar-URL → `thecraftagents.com`), `builtin-sources.ts` (Upstream-Löschung übernommen, Docs-Source weg; ebenso der `craft-agents-docs`-MCP-Server in `claude-agent.ts`). Automations (4): `script` ∪ `command` (s. §2). UI (8): Observations ∪ Pages in `route-parser` (NavigatorType + Prefixe), `nav-helpers` (exhaustive switch), `NavigationContext`, `MainContentPanel`, `AppShell`; `main.tsx`/`main/index.ts` Sentry bleibt aus (ungenutzte Upstream-Redaction-Imports entfernt); `FreeFormInput`: persistentes Fork-Kontext-Badge auf Upstreams snapshot-basiertes `getContextDisplay` umgestellt (wahrheitsgetreue %, Compact nur bei `canCompact`). Agent-Kern (5): `claude-agent.ts` — Fork-`pendingSteerMessage` durch Upstream-**`PendingSteers`**-Queue ersetzt (Wrapper hängt Steers an `additionalContext` an), Fork-p10/p11b-Reminder (`checkResult.additionalContext`) bei allow/modify weiter durchgereicht; Streaming-Gate, Stop-Hook-Guard p7, Context-Trace, Swarm-Hint auto-gemergt. `prompt-builder.ts` — Upstream-Git-Developer-Context (stable → `buildStableContextParts`, volatile → Tail) ∪ Fork-Memory/Recall-Hint/Conversation-Tail/Anchor-Reminder (volatile, nach dem Git-Block). `system.ts` (Upstream −641 Rewrite) — Upstream-Struktur + Orcha-Identität/Co-Author + `backgroundWorkSection` + Self-Close-Semantik (§7) in der neuen Session-Tools-Liste + `create_task start/nodes`-Hinweis; Docs-Zeile als „Fork von Craft Agents" markiert. `pi-agent.ts` — Upstream-Pinning (`pinnedIncludeCoAuthoredBy/ProjectContext`) + `'Orcha Agents Backend'`. `sessions/types.ts` — `AnchorRef` ∪ `ContextUsageSnapshot`. **Semantik-Checks:** `snapshot: true` (System-Prompt einmal pro SDK-Session gepinnt) ist unkritisch — Memory liegt in `buildVolatileContextParts()`, `backgroundWorkSection` env-konstant; `markLiveBackgroundTasksOrphaned`-Child-Session-Exemption, `notifyParentOnChildComplete`/`notifyParentOnTaskRunSettled`/`setTaskRunHook` intakt; Tool-Registry `recall`/`set_session_anchors`/`spawn_session`/`create_task`(start/nodes)/`set_session_status`(Self-Close) ∪ 6 Pages-Tools; Channel-Map-Parity ✓. **Merge-verursachter Fix:** Lockfile-Neuauflösung zog `@tiptap/extension-list` & 22 weitere StarterKit-Transitive auf 3.31.3, während der Fork `@tiptap/core` auf 3.22.3 pinnt → `getPreviousBlockSibling`-Import bricht (Editor/`mention-menu.test`). Fix: Top-Level-`overrides` in root `package.json` pinnen alle StarterKit-Transitive auf 3.22.3. **Pages-Publishing:** Default aus (§10). **Upstream-Highlights:** neue Domain `thecraftagents.com`, Moonshot/Kimi K3, **Pages (Beta)**, Fable 5.1, Pi-Retries + Utility-Query-Deadlines, Git-Developer-Context, Steer-Queue, Context-Usage-Snapshots, **Opus 5.5 = Default**, Claude-SDK **0.3.280** (⚠️ §4-Post-Build braucht neues natives Binary), Pi-SDK 0.87.1, `validate:ci`/i18n-coverage repariert. Validierung (isoliertes `HOME`): typecheck:all ✓, i18n parity+sorted ✓ (6 Locales, 1765 Keys, keine neuen Branding-Strings), **`validate:ci` ✓ (erstmals grün)**, shared **3507/13** (alle 13 identisch auf pristine v0.13.5 mit isoliertem HOME), `pre-tool-use-checks.isolated.ts` 83/0, electron+server-core+session-tools-core **1401/11** (alle 11 identisch auf pristine v0.13.5), electron:build ✓ (Embedder 79M + 3 Observer-Skripte). | Timo + Craft Agent |
 | 2026-09-27 | v0.13.5+fork | v0.13.5+fork | Keine (Fork-interne Erweiterung, Branch `feature/session-nesting`). **Session-Hierarchie (§9 p13):** Nesting unter nächstem sichtbarem Vorfahren (Liste, Suche, Auto-Selektion), Archiv-Kaskade auf Nachfahren mit neuem persistiertem Feld `archivedByCascadeFrom` (selektives Unarchive), `spawn_session`-Option `standalone`, rekursiver Aktivitätsindikator. **Neue Berührungspunkte:** `SessionManager.archiveSession/unarchiveSession` + `onSpawnSession` (Registry-Gate), `SESSION_PERSISTENT_FIELDS`, `App.tsx` `handoffEventTypes`, `NavigationContext.filterSessionsByFilter`, beide spawn_session-Schemata. | Timo + Craft Agent |
 | 2026-09-27 | v0.13.5+fork | v0.13.5+fork | Keine (Fork-intern, Branch `fix/app-isolation`). **Vollständige App-Isolation (§3):** alle Laufzeitpfade aus `CONFIG_DIR`, `~/.craft-agent`-Fallback in `paths.ts` entfernt, Logout auf Orcha beschränkt, Einmal-Migration `isolation-2026-09` (Credentials-Kopie mit Backup der stale Datei, Messaging-Bindings). **Neue Berührungspunkte:** `secure-storage.ts` (Konstruktor `{dir}`), `rpc/auth.ts` (`performLogout`), `main/index.ts` + `server/src/index.ts` (Migration-Aufruf, `getMessagingDir`), `window-state.ts`, `logger.ts`, `interceptor-common.ts`, `privileged-execution-broker.ts`, `logo.ts`, `permissions-config.ts`, `AddWorkspaceStep_ConnectRemote.tsx`; Test-Fixture `unified-network-interceptor.schema.test.ts` schreibt nach `CONFIG_FILE` statt `~/.craft-agent/config.json`. | Timo + Craft Agent |
+| 2026-09-27 | v0.13.5+fork | v0.13.5+fork | Keine (Fork-intern). **Steer-Delivery-Fix** (`2c34c93e`, §12 + §6-Note (d)): Mid-stream-Default `steer`, Tail ohne wartende Nachrichten, `redirect()` vor Query-Erzeugung. Live-verifiziert (2 Steers während `sleep`-Kette → 1 Turn, je 1×). | Timo + Craft Agent |
+| 2026-09-27 | v0.13.5+fork | v0.13.5+fork | Keine (Fork-intern, Branch `chore/followups`). **Follow-ups:** agent-sichtbare Pfade aus `CONFIG_DIR` (`ca9ad06a`, §3), „New chat“-Hydration (`d66c4a3c`, §11), Spinner an Zeilen ohne sichtbare Kinder (`d86130c5`, §9 p13), Observer-Kommentar (`cdf003a3`), `readPluginName`-Fix (`13776a5b`, §13). Vorher schon: `orcha-observer`-Skill entfernt (`bb245773`), `build:observers` ohne gelöschtes `orcha-episode-emit.ts` (`47d64f0a`). | Timo + Craft Agent |
+| 2026-09-27 | — | — | **Aufräumen (kein Code):** 4 gemergte Branches gelöscht, 9 alte/unfertige als `origin/archive/*` gesichert und lokal gelöscht (u. a. `fix/interceptor-stuck-queue-recovery` bewusst NICHT übernommen: harter 5-min-Processing-Watchdog würde lange Swarm-Nodes abbrechen). Beide PreCompact-Automationen im Orcha-Workspace entfernt (§2). Workspace „General“ von `~/.craft-agent/workspaces/general` nach `~/.orcha-agents/workspaces/general` verschoben (lokale Config, §3). | Timo + Craft Agent |
 
 ---
 
