@@ -1702,12 +1702,14 @@ export function getPathHint(targetPath: string, plansFolderPath: string, dataFol
   }
 
   // Case: Writing to workspace root instead of session
-  if (normalizedTarget.includes('/.craft-agent/workspaces/') && !normalizedTarget.includes('/sessions/')) {
+  // Fork: also recognise the ~/.orcha-agents config dir (FORK.md §3)
+  const inAppDir = normalizedTarget.includes('/.craft-agent/') || normalizedTarget.includes('/.orcha-agents/');
+  if (/\/\.(?:craft-agent|orcha-agents)\/workspaces\//.test(normalizedTarget) && !normalizedTarget.includes('/sessions/')) {
     return 'Hint: Write to the session plans or data folder, not the workspace root.';
   }
 
   // Case: Writing outside .craft-agent entirely
-  if (!normalizedTarget.includes('/.craft-agent/')) {
+  if (!inAppDir) {
     return 'Hint: Files must be written to the session plans or data folder. Use plansFolderPath or dataFolderPath from <session_state>.';
   }
 

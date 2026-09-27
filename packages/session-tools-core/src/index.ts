@@ -289,3 +289,6 @@ export {
   isPathWithinDirectory,
   isPathWithinDirectoryForCreation,
 } from './runtime/path-security.ts';
+
+// Fork (Orcha Agents): config-dir display helpers for agent-facing paths
+export { getAppConfigDir, getAppConfigDirDisplay, toTildePath, docDisplayPath } from './config-dir.ts';

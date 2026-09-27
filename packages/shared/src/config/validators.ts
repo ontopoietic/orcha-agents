@@ -15,7 +15,7 @@
 import { z } from 'zod';
 import { existsSync, readFileSync, readdirSync, statSync } from 'fs';
 import { join } from 'path';
-import { CONFIG_DIR } from './paths.ts';
+import { CONFIG_DIR, CONFIG_DIR_DISPLAY } from './paths.ts';
 import { safeJsonParse, readJsonFileSync } from '../utils/files.ts';
 import { EntityColorSchema } from '../colors/validate.ts';
 import { THINKING_LEVEL_IDS } from '../agent/thinking-levels.ts';
@@ -818,7 +818,7 @@ export function validateSkillContent(markdownContent: string, slug: string): Val
         path: 'frontmatter',
         message: `Invalid YAML frontmatter: ${e instanceof Error ? e.message : 'Unknown error'}`,
         severity: 'error',
-        suggestion: 'See ~/.craft-agent/docs/skills.md for SKILL.md format reference',
+        suggestion: `See ${CONFIG_DIR_DISPLAY}/docs/skills.md for SKILL.md format reference`, // Fork: real config dir
       }],
       warnings: [],
     };
@@ -1890,7 +1890,7 @@ export function validateToolIcons(): ValidationResult {
               path: `tools[id=${tool.id}].icon`,
               message: `Icon file '${tool.icon}' not found in tool-icons directory`,
               severity: 'warning',
-              suggestion: `Place '${tool.icon}' in ~/.craft-agent/tool-icons/`,
+              suggestion: `Place '${tool.icon}' in ${CONFIG_DIR_DISPLAY}/tool-icons/`, // Fork: real config dir
             });
           }
         }

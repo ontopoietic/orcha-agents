@@ -9,6 +9,7 @@ import { AddWorkspaceContainer, AddWorkspaceStepHeader, AddWorkspaceSecondaryBut
 import { AddWorkspace_RadioOption } from "./AddWorkspace_RadioOption"
 import { useDirectoryPicker } from "@/hooks/useDirectoryPicker"
 import { ServerDirectoryBrowser } from "@/components/ServerDirectoryBrowser"
+import { APP_CONFIG_DIR_NAME } from "@/lib/app-config-dir"
 
 type LocationOption = 'default' | 'custom'
 
@@ -23,7 +24,7 @@ interface AddWorkspaceStep_CreateNewProps {
  *
  * Fields:
  * - Workspace name (required)
- * - Location: Default (~/.craft-agent/workspaces/) or Custom
+ * - Location: Default (~/.orcha-agents/workspaces/ in the fork) or Custom
  */
 export function AddWorkspaceStep_CreateNew({
   onBack,
@@ -44,7 +45,8 @@ export function AddWorkspaceStep_CreateNew({
   }, [])
 
   const slug = slugify(name)
-  const defaultBasePath = homeDir ? `${homeDir}/.craft-agent/workspaces` : null
+  // Fork: default location is the fork config dir (upstream: ~/.craft-agent/workspaces)
+  const defaultBasePath = homeDir ? `${homeDir}/${APP_CONFIG_DIR_NAME}/workspaces` : null
   const finalPath = locationOption === 'default'
     ? (defaultBasePath && slug ? `${defaultBasePath}/${slug}` : null)
     : customPath && slug

@@ -29,24 +29,25 @@ const CONFIG_FILE_PATTERNS: { pattern: RegExp; type: ConfigFileType }[] = [
 /**
  * Craft Agent specific config files that have known schemas.
  */
+// Fork (Orcha Agents): also match the fork config dir ~/.orcha-agents (FORK.md §3)
 const CRAFT_AGENT_CONFIG_PATTERNS = [
   // Main config
-  /\.craft-agent\/config\.json$/,
+  /\.(?:craft-agent|orcha-agents)\/config\.json$/,
   // Preferences
-  /\.craft-agent\/preferences\.json$/,
+  /\.(?:craft-agent|orcha-agents)\/preferences\.json$/,
   // Source configs
-  /\.craft-agent\/workspaces\/[^/]+\/sources\/[^/]+\/config\.json$/,
+  /\.(?:craft-agent|orcha-agents)\/workspaces\/[^/]+\/sources\/[^/]+\/config\.json$/,
   // Permissions
-  /\.craft-agent\/workspaces\/[^/]+\/permissions\.json$/,
-  /\.craft-agent\/permissions\/[^/]+\.json$/,
+  /\.(?:craft-agent|orcha-agents)\/workspaces\/[^/]+\/permissions\.json$/,
+  /\.(?:craft-agent|orcha-agents)\/permissions\/[^/]+\.json$/,
   // Theme
-  /\.craft-agent\/workspaces\/[^/]+\/theme\.json$/,
+  /\.(?:craft-agent|orcha-agents)\/workspaces\/[^/]+\/theme\.json$/,
   // Statuses
-  /\.craft-agent\/workspaces\/[^/]+\/statuses\/config\.json$/,
+  /\.(?:craft-agent|orcha-agents)\/workspaces\/[^/]+\/statuses\/config\.json$/,
   // Labels
-  /\.craft-agent\/workspaces\/[^/]+\/labels\.json$/,
+  /\.(?:craft-agent|orcha-agents)\/workspaces\/[^/]+\/labels\.json$/,
   // Tool icons
-  /\.craft-agent\/tool-icons\/tool-icons\.json$/,
+  /\.(?:craft-agent|orcha-agents)\/tool-icons\/tool-icons\.json$/,
 ];
 
 /**

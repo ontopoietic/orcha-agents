@@ -44,6 +44,7 @@ import { PROJECT_COLOR_PALETTE, type ProjectColorTreatment } from '@/utils/proje
 import { Info_DataTable, SortableHeader } from '@/components/info/Info_DataTable'
 import { Info_Badge } from '@/components/info/Info_Badge'
 import type { PresetTheme } from '@config/theme'
+import { APP_CONFIG_DIR_NAME } from '@/lib/app-config-dir'
 
 export const meta: DetailsPageMeta = {
   navigator: 'settings',
@@ -255,7 +256,7 @@ export default function AppearanceSettingsPage() {
           window.electronAPI.getHomeDir(),
         ])
         setToolIcons(mappings)
-        setToolIconsJsonPath(`${homeDir}/.craft-agent/tool-icons/tool-icons.json`)
+        setToolIconsJsonPath(`${homeDir}/${APP_CONFIG_DIR_NAME}/tool-icons/tool-icons.json`) // Fork: real config dir
       } catch (error) {
         console.error('Failed to load tool icon mappings:', error)
       }

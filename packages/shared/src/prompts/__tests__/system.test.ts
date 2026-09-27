@@ -4,6 +4,8 @@ import { describe, it, expect, mock, beforeEach } from 'bun:test'
 // without touching disk. `formatPreferencesForPrompt` is stubbed to '' because
 // it's unrelated to the behavior under test here.
 let mockIncludeCoAuthoredBy = true
+import { DOC_REFS } from '../../docs/index.ts'
+
 mock.module('../../config/preferences.ts', () => ({
   getCoAuthorPreference: () => mockIncludeCoAuthoredBy,
   formatPreferencesForPrompt: () => '',
@@ -49,7 +51,9 @@ describe('system prompt guidance', () => {
     const prompt = getMiniAgentSystemPrompt('/tmp/workspace')
 
     expect(prompt).toContain('MCP tool calls require _displayName and _intent metadata')
-    expect(prompt).toContain('read the matching local doc in ~/.craft-agent/docs/')
+    expect(prompt).toContain(`read the matching local doc in ${DOC_REFS.docsDir}`)
+    // Fork: docs path derives from CONFIG_DIR, never the upstream ~/.craft-agent
+    expect(prompt).not.toContain('~/.craft-agent/docs/')
   })
 
   it('keeps automations defined as a first-class feature area', () => {
@@ -57,7 +61,7 @@ describe('system prompt guidance', () => {
 
     expect(prompt).toContain('## Automations')
     expect(prompt).toContain('Automations run prompts, webhooks, or workspace-local scripts')
-    expect(prompt).toContain('Read `~/.craft-agent/docs/automations.md` before creating or modifying automations.')
+    expect(prompt).toContain(`Read \`${DOC_REFS.automations}\` before creating or modifying automations.`)
     expect(prompt).toContain('Script actions run workspace-local scripts, not arbitrary shell snippets.')
   })
 

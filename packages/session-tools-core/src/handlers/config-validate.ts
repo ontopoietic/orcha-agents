@@ -6,7 +6,6 @@
  */
 
 import { join } from 'node:path';
-import { homedir } from 'node:os';
 
 const AUTOMATIONS_CONFIG_FILE = 'automations.json';
 import type { SessionToolContext } from '../context.ts';
@@ -18,6 +17,7 @@ import {
   mergeResults,
 } from '../validation.ts';
 import { getSourceConfigPath } from '../source-helpers.ts';
+import { getAppConfigDir } from '../config-dir.ts';
 
 export interface ConfigValidateArgs {
   target: 'config' | 'sources' | 'statuses' | 'preferences' | 'permissions' | 'automations' | 'tool-icons' | 'all';
@@ -35,7 +35,7 @@ export async function handleConfigValidate(
   args: ConfigValidateArgs
 ): Promise<ToolResult> {
   const { target, sourceSlug } = args;
-  const craftAgentRoot = join(homedir(), '.craft-agent');
+  const craftAgentRoot = getAppConfigDir(); // Fork: was ~/.craft-agent hardcoded
 
   // If full validators available (Claude), use them
   if (ctx.validators) {

@@ -49,7 +49,7 @@ Ermöglicht Shell-Kommandos vor dem Context-Compaction-Event des Agents. Output 
 **Berührt Upstream-Dateien (Konflikt-Kandidaten):**
 - `apps/electron/electron-builder.yml` — `appId` geändert
 - `apps/electron/src/main/index.ts` — `CRAFT_CONFIG_DIR` auf `~/.orcha-agents` gesetzt, `userData` auf `~/.orcha-agents/electron-data/`
-- `packages/shared/src/config/paths.ts` — **unverändert** — nutzt bereits `process.env.CRAFT_CONFIG_DIR` als Override
+- `packages/shared/src/config/paths.ts` — `CRAFT_CONFIG_DIR`-Override + Auto-Discovery (`~/.orcha-agents` → `~/.craft-agent` → Default `~/.orcha-agents`); `+CONFIG_DIR_DISPLAY` (s. u.)
 - `apps/electron/src/main/auto-update.ts` — `FORK_AUTO_UPDATE_DISABLED` (Launch-Check übersprungen, kein Auto-Download/-Install); `electron-builder.yml` `publish`-Block auskommentiert (Upstream-Feed seit v0.12.0: `https://thecraftagents.com/electron/latest`)
 
 **Workspace-Aufteilung:**
@@ -58,6 +58,17 @@ Ermöglicht Shell-Kommandos vor dem Context-Compaction-Event des Agents. Output 
 |---|---|---|
 | Orcha Agents (Fork) | Orcha, Collibri, Lukas Auer Coaching | `~/.orcha-agents/` |
 | Craft Agents (Original) | Orcha Agents, Kurz am Bau | `~/.craft-agent/` |
+
+**Agent-facing Config-Pfade (2026-09-27):** Upstream schreibt `~/.craft-agent/...` hart in Prompts, Tool-Beschreibungen und Docs. Im Fork zeigten dadurch u. a. System-Prompt, `create_page`, `mermaid_validate` und die Browser-Doc-Sperre auf das Verzeichnis der **Original-App**. Jetzt aus dem echten Config-Dir abgeleitet:
+- `packages/shared/src/config/paths.ts` — `CONFIG_DIR_DISPLAY` (CONFIG_DIR mit `~`-Kürzung)
+- `packages/shared/src/docs/index.ts` — `APP_ROOT = CONFIG_DIR_DISPLAY` (speist `DOC_REFS`), `rewriteDocAppRoot()`: beim Doc-Sync werden `~/.craft-agent/`-Präfixe in `resources/docs/*.md` auf das echte Dir umgeschrieben → **Upstream-Markdown bleibt unverändert**
+- `packages/session-tools-core/src/config-dir.ts` (neu, Fork-only) — Spiegel der `paths.ts`-Auflösung (Zyklus: shared → session-tools-core), `docDisplayPath()`; genutzt in `tool-defs.ts` (Pages), `handlers/mermaid-validate.ts`, `handlers/config-validate.ts` (Basis-Validierung las `~/.craft-agent/config.json`!)
+- `packages/shared/src/agent/core/prerequisite-manager.ts` — Browser-Doc-Gate prüft `CONFIG_DIR/docs/browser-tools.md` (muss zum Prompt-Pfad passen)
+- `packages/shared/src/prompts/system.ts` (Mini-Prompt), `config/validators.ts` (Suggestions), `agent/core/{path-processor,config-validator}.ts` + `agent/mode-manager.ts` (`getPathHint`) — Regex/Checks matchen zusätzlich `.orcha-agents`
+- Renderer: `apps/electron/src/renderer/lib/app-config-dir.ts` (neu, statisch `.orcha-agents`, da kein CONFIG_DIR im Renderer) → `EditPopover.tsx`, `AddWorkspaceStep_CreateNew.tsx` (Default-Ort neuer Workspaces war `~/.craft-agent/workspaces`!), `AppearanceSettingsPage.tsx`; `server-core/.../rpc/workspace.ts` CHECK_SLUG → `getDefaultWorkspacesDir()`
+- Texte: `docs/doc-links.ts`, `packages/ui/.../UserMessageBubble.tsx` (Tooltip-Regex), i18n-Keys `settings.appearance.toolIconsDesc`, `settings.permissions.noDefaultPermissionsDesc`, `workspace.underDefaultFolder` (alle 7 Locales)
+
+**Offen — weitere Isolation-Lecks (bewusst NICHT geändert, brauchen Migrationsentscheidung):** hart `homedir()/.craft-agent` in `credentials/backends/secure-storage.ts` (`credentials.enc` wird mit der Original-App **geteilt**), `apps/electron/src/main/window-state.ts`, `main/logger.ts` (messaging-gateway/auto-update-Logs), `main/index.ts` + `packages/server/src/index.ts` (Messaging-Bindings unter `~/.craft-agent/workspaces/{id}/messaging`), `interceptor-common.ts` (config/logs/api-error-Fallback), `server-core/.../rpc/auth.ts` (Logout löscht `~/.craft-agent/config.json`!), `services/privileged-execution-broker.ts` (Audit-Log), `utils/logo.ts` (provider-domains-Cache), `resources/bridge-mcp-server/index.js` (generiertes Bundle).
 
 ### 4. Orcha Branding (i18n-Overlay)
 **Problem:** Upstream v0.8.5 führte i18n ein — 1050+ Strings mit "Craft Agents" Referenzen.

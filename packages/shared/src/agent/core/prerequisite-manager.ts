@@ -11,10 +11,10 @@
  */
 
 import { existsSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { resolve, join } from 'node:path';
 import { expandPath } from './path-processor.ts';
 import { getBrowserToolEnabled } from '../../config/storage.ts';
+import { CONFIG_DIR } from '../../config/paths.ts';
 
 // ============================================================
 // Types
@@ -49,7 +49,9 @@ export interface PrerequisiteManagerConfig {
 const EXEMPT_SLUGS = new Set(['session']);
 
 /** Global browser tools docs path required before browser tool usage. */
-const BROWSER_TOOLS_DOC_PATH = resolve(join(homedir(), '.craft-agent', 'docs', 'browser-tools.md'));
+// Fork (Orcha Agents): real config dir, not a hardcoded ~/.craft-agent — must match
+// the path the prompt tells the agent to read (DOC_REFS.browserTools).
+const BROWSER_TOOLS_DOC_PATH = resolve(join(CONFIG_DIR, 'docs', 'browser-tools.md'));
 
 // ============================================================
 // Rules

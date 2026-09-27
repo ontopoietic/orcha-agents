@@ -32,3 +32,20 @@ function resolveConfigDir(): string {
 }
 
 export const CONFIG_DIR = resolveConfigDir();
+
+/**
+ * Fork (Orcha Agents): CONFIG_DIR for agent-facing text (system prompt, tool
+ * descriptions, synced docs), with the home dir collapsed to `~` — e.g.
+ * `~/.orcha-agents`. Upstream hardcodes `~/.craft-agent` (docs APP_ROOT);
+ * see FORK.md §3 "Agent-facing config paths".
+ */
+export const CONFIG_DIR_DISPLAY = toTildePath(CONFIG_DIR);
+
+function toTildePath(absPath: string): string {
+  const normalized = absPath.replace(/\\/g, '/');
+  const home = homedir().replace(/\\/g, '/').replace(/\/+$/, '');
+  if (home && (normalized === home || normalized.startsWith(home + '/'))) {
+    return '~' + normalized.slice(home.length);
+  }
+  return normalized;
+}

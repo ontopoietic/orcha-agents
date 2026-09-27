@@ -9,6 +9,7 @@ import type { SessionToolContext } from '../context.ts';
 import type { ToolResult } from '../types.ts';
 import { renderMermaidSVG } from 'beautiful-mermaid';
 import { normalizeMermaidSource } from '../validation.ts';
+import { docDisplayPath } from '../config-dir.ts';
 
 export interface MermaidValidateArgs {
   code: string;
@@ -53,7 +54,7 @@ export async function handleMermaidValidate(
         text: JSON.stringify({
           valid: false,
           error: errorMessage,
-          suggestion: 'Check the syntax against ~/.craft-agent/docs/mermaid.md',
+          suggestion: `Check the syntax against ${docDisplayPath('mermaid.md')}`, // Fork: real docs dir
         }, null, 2),
       }],
       isError: true,

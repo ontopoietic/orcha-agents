@@ -4,7 +4,7 @@
  * Provides access to built-in documentation that Claude can reference
  * when performing configuration tasks (sources, agents, permissions, etc.).
  *
- * Docs are stored at ~/.craft-agent/docs/ and synced from bundled assets.
+ * Docs are stored at {CONFIG_DIR}/docs/ (fork: ~/.orcha-agents/docs/) and synced from bundled assets.
  * Source content lives in apps/electron/resources/docs/*.md for easier editing.
  */
 
@@ -12,7 +12,7 @@ import { join } from 'path';
 import { existsSync, mkdirSync, writeFileSync, readdirSync, readFileSync } from 'fs';
 import { getBundledAssetsDir } from '../utils/paths.ts';
 import { debug } from '../utils/debug.ts';
-import { CONFIG_DIR } from '../config/paths.ts';
+import { CONFIG_DIR, CONFIG_DIR_DISPLAY } from '../config/paths.ts';
 const DOCS_DIR = join(CONFIG_DIR, 'docs');
 
 // Track if docs have been initialized this session (prevents re-init on hot reload)
@@ -49,7 +49,10 @@ function loadBundledDocs(): Record<string, string> {
   for (const filename of files) {
     const filePath = join(assetsDir, filename);
     try {
-      docs[filename] = readFileSync(filePath, 'utf-8');
+      // Fork: rewrite ~/.craft-agent/ → real config dir (see rewriteDocAppRoot)
+      docs[filename] = filename.endsWith('.md')
+        ? rewriteDocAppRoot(readFileSync(filePath, 'utf-8'))
+        : readFileSync(filePath, 'utf-8');
     } catch (error) {
       console.error(`[docs] Failed to load ${filename}:`, error);
     }
@@ -89,10 +92,24 @@ export function getDocPath(filename: string): string {
 }
 
 // App root path reference for prompt/display text only.
-// IMPORTANT: This is intentionally a human-readable, non-instance-aware path.
+// IMPORTANT: This is a human-readable path (home collapsed to ~).
 // Do NOT use APP_ROOT for real filesystem reads/writes.
 // For runtime filesystem paths, use CONFIG_DIR from config/paths.ts.
-export const APP_ROOT = '~/.craft-agent';
+// Fork (Orcha Agents): derived from CONFIG_DIR (e.g. '~/.orcha-agents') instead
+// of upstream's hardcoded '~/.craft-agent' — see FORK.md §3.
+export const APP_ROOT = CONFIG_DIR_DISPLAY;
+
+/**
+ * Fork (Orcha Agents): the bundled markdown docs (apps/electron/resources/docs)
+ * are upstream files that reference `~/.craft-agent/...`. Rewrite those to the
+ * real config dir when loading, so the synced copies the agent reads are
+ * accurate without editing the upstream markdown. Only `~/.craft-agent/` path
+ * prefixes are touched (not the `craft-agent` CLI name).
+ */
+export function rewriteDocAppRoot(content: string, appRoot: string = APP_ROOT): string {
+  if (appRoot === '~/.craft-agent') return content;
+  return content.replace(/~\/\.craft-agent(?=\/)/g, appRoot);
+}
 
 /**
  * Documentation file references for use in error messages and tool descriptions.

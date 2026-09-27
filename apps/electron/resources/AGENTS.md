@@ -2,6 +2,8 @@
 
 This folder contains assets that are bundled with the Electron app and synced to the user's `~/.craft-agent/` directory on every launch.
 
+> **Orcha Agents fork:** the target is the app config dir (`CONFIG_DIR`, `~/.orcha-agents/` in the fork) — read `~/.craft-agent/` below as `CONFIG_DIR`. The `docs/*.md` files keep upstream's literal `~/.craft-agent/...` paths; `initializeDocs()` rewrites them to the real config dir when syncing (`rewriteDocAppRoot` in `packages/shared/src/docs/index.ts`, FORK.md §3).
+
 ## How It Works
 
 1. **Build time**: `scripts/copy-assets.ts` copies this folder to `dist/resources/`
