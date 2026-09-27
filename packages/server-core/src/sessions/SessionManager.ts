@@ -104,10 +104,11 @@ import { ensureLabelsExist, ensureTaskItemLabel } from '@craft-agent/shared/labe
 import { loadStatusConfig } from '@craft-agent/shared/statuses/storage'
 import { AutomationSystem, createPromptHistoryEntry, appendAutomationHistoryEntry, type AutomationSystemMetadataSnapshot } from '@craft-agent/shared/automations'
 import { buildBackendRuntimeSignature, buildRestartRequiredSignature, filterAttachmentsForModelInput } from './runtime-config'
-import { buildSpawnedChildSessionOptions } from './spawn-child-session-options'
+import { buildSpawnedChildSessionOptions, isNestedSpawn } from './spawn-child-session-options'
 import { buildChildSessionBackgroundTaskEntry } from './child-session-background-task-entry'
 import { buildChildSessionBackgroundedEvent, buildChildSessionCompletedEvent } from './child-session-backgrounded-event'
 import { validateArchiveTarget } from './archive-guards'
+import { planArchiveCascade, planUnarchiveCascade, type CascadeNode } from './archive-cascade'
 
 // Import from server-core domain utilities
 import { sanitizeForTitle, shouldActivateBrowserOverlay, normalizeBrowserToolName, rollbackFailedBranchCreation, releaseBrowserOwnershipOnForcedStop } from '@craft-agent/server-core/domain'
@@ -746,6 +747,8 @@ interface ManagedSession {
   isArchived?: boolean
   /** Timestamp when session was archived (for retention policy) */
   archivedAt?: number
+  /** ORCHA §session-nesting: ancestor id whose archive cascaded to this session (cleared on unarchive) */
+  archivedByCascadeFrom?: string
   /** Permission mode for this session ('safe', 'ask', 'allow-all') */
   permissionMode?: PermissionMode
   /** Previous permission mode (preserved across restarts for session_state modeTransition context) */
@@ -4287,26 +4290,32 @@ export class SessionManager implements ISessionManager {
           buildSpawnedChildSessionOptions(request, managed),
         )
 
-        // ORCHA §bg-child-sessions — register the child in the parent's
-        // background task registry so the existing chip UI and
-        // list_background_tasks report it truthfully (kind: 'child-session'
-        // distinguishes it from in-query background tasks for the UI).
-        // Shape is built by buildChildSessionBackgroundTaskEntry so it's
-        // unit-testable in isolation (bg-child-visibility-01).
-        managed.backgroundTaskRegistry.set(
-          session.id,
-          buildChildSessionBackgroundTaskEntry(session, request, Date.now()),
-        )
+        // ORCHA §session-nesting — `standalone: true` spawns an independent
+        // top-level session: no parent link (see buildSpawnedChildSessionOptions)
+        // and NOT registered as this session's background child, so no running
+        // chip / background_result expectation is created.
+        if (isNestedSpawn(request)) {
+          // ORCHA §bg-child-sessions — register the child in the parent's
+          // background task registry so the existing chip UI and
+          // list_background_tasks report it truthfully (kind: 'child-session'
+          // distinguishes it from in-query background tasks for the UI).
+          // Shape is built by buildChildSessionBackgroundTaskEntry so it's
+          // unit-testable in isolation (bg-child-visibility-01).
+          managed.backgroundTaskRegistry.set(
+            session.id,
+            buildChildSessionBackgroundTaskEntry(session, request, Date.now()),
+          )
 
-        // ORCHA §bg-child-sessions — mirror the registration into the
-        // `task_backgrounded` event the renderer's ActiveTasksBar actually
-        // listens for (bg-child-visibility-01). Without this, the registry
-        // entry above makes `list_background_tasks` truthful but the running
-        // chip never appears.
-        this.sendEvent(
-          buildChildSessionBackgroundedEvent(managed.id, session, request),
-          managed.workspace.id,
-        )
+          // ORCHA §bg-child-sessions — mirror the registration into the
+          // `task_backgrounded` event the renderer's ActiveTasksBar actually
+          // listens for (bg-child-visibility-01). Without this, the registry
+          // entry above makes `list_background_tasks` truthful but the running
+          // chip never appears.
+          this.sendEvent(
+            buildChildSessionBackgroundedEvent(managed.id, session, request),
+            managed.workspace.id,
+          )
+        }
 
         // Build FileAttachment[] from paths (if any)
         let fileAttachments: FileAttachment[] | undefined
@@ -4809,6 +4818,13 @@ export class SessionManager implements ISessionManager {
     }
   }
 
+  /**
+   * Archive a session. ORCHA §session-nesting: cascades to every descendant
+   * (via parentSessionId, same workspace, cycle-safe) that isn't archived yet,
+   * tagging it `archivedByCascadeFrom = sessionId` so `unarchiveSession` can
+   * restore exactly those. Like a direct archive, this never aborts running
+   * work — a processing descendant is archived but keeps running.
+   */
   async archiveSession(sessionId: string): Promise<void> {
     const managed = this.sessions.get(sessionId)
     if (!managed) {
@@ -4817,15 +4833,37 @@ export class SessionManager implements ISessionManager {
     if (managed) {
       managed.isArchived = true
       managed.archivedAt = Date.now()
+      // An explicit archive supersedes any earlier cascade marker.
+      managed.archivedByCascadeFrom = undefined
       // Persist in-memory state directly to avoid race with pending queue writes
       this.persistSession(managed)
       await this.flushSession(managed.id)
       // Notify all windows for this workspace
       this.sendEvent({ type: 'session_archived', sessionId }, managed.workspace.id)
+
+      const cascadeIds = planArchiveCascade(sessionId, this.cascadeNodesForWorkspace(managed.workspace.id))
+      for (const childId of cascadeIds) {
+        const child = this.sessions.get(childId)
+        if (!child) continue
+        child.isArchived = true
+        child.archivedAt = managed.archivedAt
+        child.archivedByCascadeFrom = sessionId
+        this.persistSession(child)
+        await this.flushSession(child.id)
+        this.sendEvent({ type: 'session_archived', sessionId: child.id }, child.workspace.id)
+      }
+      if (cascadeIds.length > 0) {
+        sessionLog.info(`archiveSession: cascaded archive from ${sessionId} to ${cascadeIds.length} descendant(s)`)
+      }
       this.emitUnreadSummaryChanged()
     }
   }
 
+  /**
+   * Unarchive a session. ORCHA §session-nesting: also restores descendants that
+   * were archived by cascade from THIS session (`archivedByCascadeFrom ===
+   * sessionId`); manually archived descendants stay archived.
+   */
   async unarchiveSession(sessionId: string): Promise<void> {
     const managed = this.sessions.get(sessionId)
     if (!managed) {
@@ -4834,13 +4872,44 @@ export class SessionManager implements ISessionManager {
     if (managed) {
       managed.isArchived = false
       managed.archivedAt = undefined
+      managed.archivedByCascadeFrom = undefined
       // Persist in-memory state directly to avoid race with pending queue writes
       this.persistSession(managed)
       await this.flushSession(managed.id)
       // Notify all windows for this workspace
       this.sendEvent({ type: 'session_unarchived', sessionId }, managed.workspace.id)
+
+      const restoreIds = planUnarchiveCascade(sessionId, this.cascadeNodesForWorkspace(managed.workspace.id))
+      for (const childId of restoreIds) {
+        const child = this.sessions.get(childId)
+        if (!child) continue
+        child.isArchived = false
+        child.archivedAt = undefined
+        child.archivedByCascadeFrom = undefined
+        this.persistSession(child)
+        await this.flushSession(child.id)
+        this.sendEvent({ type: 'session_unarchived', sessionId: child.id }, child.workspace.id)
+      }
+      if (restoreIds.length > 0) {
+        sessionLog.info(`unarchiveSession: restored ${restoreIds.length} cascade-archived descendant(s) of ${sessionId}`)
+      }
       this.emitUnreadSummaryChanged()
     }
+  }
+
+  /** ORCHA §session-nesting: hierarchy snapshot for archive-cascade planning (one workspace). */
+  private cascadeNodesForWorkspace(workspaceId: string): CascadeNode[] {
+    const nodes: CascadeNode[] = []
+    for (const s of this.sessions.values()) {
+      if (s.workspace.id !== workspaceId) continue
+      nodes.push({
+        id: s.id,
+        parentSessionId: s.parentSessionId,
+        isArchived: s.isArchived,
+        archivedByCascadeFrom: s.archivedByCascadeFrom,
+      })
+    }
+    return nodes
   }
 
   async setSessionStatus(sessionId: string, sessionStatus: SessionStatus): Promise<void> {

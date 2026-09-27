@@ -22,6 +22,13 @@ export interface SpawnChildSessionRequest {
   projectId?: string;
   /** Keep the child out of the session list/board; still reachable via its pill or a direct link. Not inherited from the parent — always opt-in per spawn. */
   hidden?: boolean;
+  /**
+   * ORCHA §session-nesting — spawn an independent top-level session instead of
+   * a nested child: no `parentSessionId`, no completion `background_result`
+   * to the caller, not registered as the caller's background child. Settings
+   * (connection, model, sources, …) are still inherited. Default: false.
+   */
+  standalone?: boolean;
 }
 
 /** The subset of the parent `ManagedSession` state a spawned child inherits from. */
@@ -43,6 +50,10 @@ export interface SpawnParentSession {
  * The child always records the parent's id and is always marked to notify the
  * parent on completion (bg-child-routing-03) — every spawn_session child gets
  * this, not just background-subagent reroutes.
+ *
+ * ORCHA §session-nesting — `standalone: true` opts out of the parent link:
+ * no `parentSessionId` and `notifyParentOnComplete: false` (settings are still
+ * inherited). Callers must also skip the background-child registration.
  */
 export function buildSpawnedChildSessionOptions(
   request: SpawnChildSessionRequest,
@@ -58,8 +69,13 @@ export function buildSpawnedChildSessionOptions(
     labels: request.labels ?? parent.labels,
     workingDirectory: request.workingDirectory ?? parent.workingDirectory,
     projectId: request.projectId ?? parent.projectId,
-    parentSessionId: parent.id,
-    notifyParentOnComplete: true,
+    parentSessionId: request.standalone ? undefined : parent.id,
+    notifyParentOnComplete: !request.standalone,
     hidden: request.hidden ?? false,
   };
+}
+
+/** ORCHA §session-nesting — whether a spawn request links the child to its caller. */
+export function isNestedSpawn(request: Pick<SpawnChildSessionRequest, 'standalone'>): boolean {
+  return request.standalone !== true;
 }

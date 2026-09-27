@@ -43,6 +43,8 @@ export const SESSION_PERSISTENT_FIELDS = [
   'pendingPlanExecution',
   // Archive
   'isArchived', 'archivedAt',
+  // ORCHA §session-nesting: set when archived by cascade from an ancestor's archive
+  'archivedByCascadeFrom',
   // Branching
   'branchFromMessageId',
   'branchFromSdkSessionId',
@@ -186,6 +188,8 @@ export interface SessionConfig {
   isArchived?: boolean;
   /** Timestamp when session was archived (for retention policy) */
   archivedAt?: number;
+  /** ORCHA §session-nesting: id of the ancestor whose archive cascaded to this session (cleared on unarchive). */
+  archivedByCascadeFrom?: string;
   /**
    * Message ID this session was branched from.
    * Branching semantics are a hard cutoff: model context must not include parent messages after this message.
@@ -324,6 +328,8 @@ export interface SessionHeader {
   isArchived?: boolean;
   /** Timestamp when session was archived (for retention policy) */
   archivedAt?: number;
+  /** ORCHA §session-nesting: id of the ancestor whose archive cascaded to this session (cleared on unarchive). */
+  archivedByCascadeFrom?: string;
   /** One-shot hidden summary injected on the first turn after a remote transfer. */
   transferredSessionSummary?: string;
   /** Whether the transferred-session summary has already been injected. */
@@ -429,6 +435,8 @@ export interface SessionMetadata {
   isArchived?: boolean;
   /** Timestamp when session was archived (for retention policy) */
   archivedAt?: number;
+  /** ORCHA §session-nesting: id of the ancestor whose archive cascaded to this session (cleared on unarchive). */
+  archivedByCascadeFrom?: string;
   /** Message ID that this session was branched from (hard context cutoff marker). */
   branchFromMessageId?: string;
   /** Workspace-scoped project id this session belongs to (undefined = unbound). */

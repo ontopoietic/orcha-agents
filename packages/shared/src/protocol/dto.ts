@@ -104,6 +104,8 @@ export interface Session {
   hidden?: boolean
   isArchived?: boolean
   archivedAt?: number
+  /** ORCHA §session-nesting: id of the ancestor whose archive cascaded to this session */
+  archivedByCascadeFrom?: string
   supportsBranching?: boolean
   /** Workspace-scoped project id this session is bound to (undefined = unbound) */
   projectId?: string

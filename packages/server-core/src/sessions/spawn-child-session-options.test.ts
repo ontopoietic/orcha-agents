@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { buildSpawnedChildSessionOptions, type SpawnParentSession } from './spawn-child-session-options.ts'
+import { buildSpawnedChildSessionOptions, isNestedSpawn, type SpawnParentSession } from './spawn-child-session-options.ts'
 
 describe('buildSpawnedChildSessionOptions', () => {
   const parent: SpawnParentSession = {
@@ -100,5 +100,28 @@ describe('buildSpawnedChildSessionOptions', () => {
     expect(options.thinkingLevel).toBe('high')
     expect(options.labels).toEqual(['other'])
     expect(options.projectId).toBe('proj_2')
+  })
+
+  // ORCHA §session-nesting: standalone spawn
+  it('standalone: true drops the parent link and the completion notification but still inherits settings', () => {
+    const options = buildSpawnedChildSessionOptions({ standalone: true }, parent)
+    expect(options.parentSessionId).toBeUndefined()
+    expect(options.notifyParentOnComplete).toBe(false)
+    expect(options.model).toBe('claude-sonnet-5')
+    expect(options.projectId).toBe('proj_1')
+  })
+
+  it('default (and standalone: false) stays a nested, notifying child', () => {
+    for (const req of [{}, { standalone: false }]) {
+      const options = buildSpawnedChildSessionOptions(req, parent)
+      expect(options.parentSessionId).toBe('parent_session_1')
+      expect(options.notifyParentOnComplete).toBe(true)
+    }
+  })
+
+  it('isNestedSpawn gates the background-child registration', () => {
+    expect(isNestedSpawn({})).toBe(true)
+    expect(isNestedSpawn({ standalone: false })).toBe(true)
+    expect(isNestedSpawn({ standalone: true })).toBe(false)
   })
 })

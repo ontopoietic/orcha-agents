@@ -623,6 +623,8 @@ Lifecycle: use \`close\` when done, \`release\` when handing the page to the use
 Use \`spawn_session\` for work that should survive beyond this turn — it runs in its own session and its result is delivered back to you automatically as a message when it finishes. Use \`Agent\` (without \`run_in_background\`) for parallel work you wait on within this same turn. \`Agent\` with \`run_in_background=true\` is not available here — attempting it will be denied with a pointer to \`spawn_session\`.
 
 In-query subagents launched via \`Agent\` (even without \`run_in_background\`) do not survive past the end of this turn — drain them with \`TaskOutput\` (blocking) before you finish, or use \`spawn_session\` instead if the work must outlive this turn.
+
+Spawned sessions are nested children of this session by default. Pass \`standalone: true\` only when the user explicitly asks for a new independent/top-level session (e.g. a hand-off because this context is full) — no result is delivered back then.
 ` : '';
 
   return `${environmentMarker}

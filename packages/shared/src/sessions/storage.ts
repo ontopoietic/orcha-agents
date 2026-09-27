@@ -553,6 +553,7 @@ export async function updateSessionMetadata(
     | 'llmConnection'
     | 'isArchived'
     | 'archivedAt'
+    | 'archivedByCascadeFrom'
     | 'projectId'
   >>
 ): Promise<void> {
@@ -575,6 +576,7 @@ export async function updateSessionMetadata(
   if (updates.llmConnection !== undefined) session.llmConnection = updates.llmConnection;
   if (updates.isArchived !== undefined) session.isArchived = updates.isArchived;
   if ('archivedAt' in updates) session.archivedAt = updates.archivedAt;
+  if ('archivedByCascadeFrom' in updates) session.archivedByCascadeFrom = updates.archivedByCascadeFrom;
   if ('projectId' in updates) session.projectId = updates.projectId;
 
   await saveSession(session);
@@ -669,6 +671,7 @@ export async function unarchiveSession(workspaceRootPath: string, sessionId: str
   await updateSessionMetadata(workspaceRootPath, sessionId, {
     isArchived: false,
     archivedAt: undefined,
+    archivedByCascadeFrom: undefined,
   });
 }
 

@@ -185,6 +185,7 @@ export const SpawnSessionSchema = z.object({
     .describe('Reasoning level for the new session. Silently ignored on non-reasoning models (e.g. gpt-4o, gemini-2.5-flash). Omit to inherit the workspace default.'),
   labels: z.array(z.string()).optional().describe('Labels for the new session'),
   workingDirectory: z.string().optional().describe('Working directory for the new session'),
+  standalone: z.boolean().optional().describe('If true, create an independent top-level session (no parent link, no pill, no result delivered back). Use ONLY when the user explicitly asks for a new independent session, e.g. a hand-off because the context is full. Default: false (nested child).'),
   attachments: z.array(z.object({
     path: z.string().describe('Absolute file path on disk'),
     name: z.string().optional().describe('Display name (defaults to file basename)'),
@@ -564,7 +565,9 @@ Optional overrides: \`model\`, \`llmConnection\`, \`permissionMode\`, \`thinking
 
 \`thinkingLevel\` is silently ignored on non-reasoning models (e.g. gpt-4o, gemini-2.5-flash) — the SDK drops the reasoning param rather than erroring. Use it when you want to force deeper reasoning on a supported model, or set it to \`off\` when spawning a session that doesn't need to think.
 
-The spawned session appears in the session list and runs fire-and-forget.
+The spawned session runs fire-and-forget.
+By default the spawned session is a nested child of this session: it renders under this session in the list, shows as a running/finished pill above this session's input, and its result is delivered back to you when it finishes.
+Set \`standalone\` to true ONLY when the user explicitly asks for a new independent/top-level session (e.g. handing the work off to a fresh session because this context is full): it then has no parent link, no pill, and no result is delivered back to you. Settings are still inherited.
 Only use 'attachments' for existing file paths on disk — the tool reads them automatically.`,
 
   send_developer_feedback: `Send freeform feedback to the Craft Agent development team.

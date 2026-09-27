@@ -51,7 +51,9 @@ Optional overrides: model, llmConnection, permissionMode, thinkingLevel, enabled
 
 thinkingLevel is silently ignored on non-reasoning models (e.g. gpt-4o, gemini-2.5-flash) — the SDK drops the reasoning param rather than erroring.
 
-The spawned session appears in the session list and runs fire-and-forget, and it also shows as a running/finished pill above this session's input either way.
+The spawned session runs fire-and-forget.
+By default the spawned session is a nested child of this session: it renders under this session in the list, shows as a running/finished pill above this session's input, and its result is delivered back to you when it finishes.
+Set 'standalone' to true ONLY when the user explicitly asks for a new independent/top-level session (e.g. handing the work off to a fresh session because this context is full): it then has no parent link, no pill, and no result is delivered back to you. Settings are still inherited.
 Set 'hidden' to true to keep it out of the session list/board — still reachable via that pill or a direct link. Default is false; only hide short-lived helper sessions, not standalone delegated work the user may want to find later.
 Only use 'attachments' for existing file paths on disk — the tool reads them automatically.`,
     {
@@ -79,6 +81,8 @@ Only use 'attachments' for existing file paths on disk — the tool reads them a
         .describe('Workspace project id to bind the new session to. Inherits the project working directory unless overridden.'),
       hidden: z.boolean().optional()
         .describe('If true, keep this session out of the session list/board (still reachable via the running/finished pill or a direct link). Default: false.'),
+      standalone: z.boolean().optional()
+        .describe('If true, create an independent top-level session (no parent link, no pill, no result delivered back). Use ONLY when the user explicitly asks for a new independent session, e.g. a hand-off because the context is full. Default: false (nested child).'),
       attachments: z.array(z.object({
         path: z.string().describe('Absolute file path on disk'),
         name: z.string().optional().describe('Display name (defaults to file basename)'),

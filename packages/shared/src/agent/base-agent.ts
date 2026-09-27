@@ -104,6 +104,8 @@ export interface SpawnSessionRequest {
   projectId?: string;
   /** Keep the spawned session out of the session list/board; still reachable via its pill or a direct link. Default: false. */
   hidden?: boolean;
+  /** ORCHA §session-nesting: independent top-level session (no parent link / pill / background_result). Default: false. */
+  standalone?: boolean;
   attachments?: Array<{ path: string; name?: string }>;
 }
 
@@ -1196,6 +1198,7 @@ ${formattedMessages}
         : undefined,
       projectId: input.projectId as string | undefined,
       hidden: input.hidden as boolean | undefined,
+      standalone: input.standalone === true ? true : undefined,
       attachments: input.attachments as SpawnSessionRequest['attachments'],
     };
 
