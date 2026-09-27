@@ -31,8 +31,10 @@
  *   ORCHA_OBSERVER_DISABLE_TRIGGER       set to "1" to opt out entirely
  *
  * Resolution of the script: CRAFT_APP_ROOT (set by the Electron main
- * process). Packaged builds will need orcha-observe.ts as extraResource —
- * currently only dev mode is supported.
+ * process) via resolveOrchaScript() (observer-runtime.ts). Packaged builds
+ * run the esbuild-bundled `dist/observer-scripts/orcha-observe.cjs` through
+ * Electron-as-Node (ELECTRON_RUN_AS_NODE=1); dev falls back to
+ * `scripts/orcha-observe.ts` via `npx tsx`. See FORK.md §6.
  */
 
 import { existsSync, readFileSync, statSync } from 'node:fs';
