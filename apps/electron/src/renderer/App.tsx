@@ -61,6 +61,7 @@ import {
 } from '@/atoms/background-finished'
 import { visibleSessionIdsAtom } from '@/atoms/panel-stack'
 import { getSessionTitle } from '@/utils/session'
+import { createUnknownSessionHydrator } from '@/lib/unknown-session-hydration'
 import { extractBadges } from '@/lib/mentions'
 import { getDefaultStore } from 'jotai'
 import {
@@ -957,6 +958,26 @@ export default function App() {
       }
     }
 
+    // Apply an authoritative session payload (replace a stub/existing entry or add it).
+    const applyHydratedSession = (hydrated: Session) => {
+      const existingMeta = store.get(sessionMetaMapAtom).has(hydrated.id)
+      if (existingMeta) {
+        replaceLoadedSession(hydrated)
+      } else {
+        addSession(hydrated)
+      }
+      syncSessionOptionsFromSession(hydrated)
+    }
+
+    // Fork: sessions first seen via an event (created through the raw sessions:create
+    // RPC elsewhere, which suppresses session_created) would otherwise become a
+    // nameless stub → "New chat" row. See lib/unknown-session-hydration.ts.
+    const unknownSessionHydrator = createUnknownSessionHydrator<Session>({
+      fetchSession: (id) => window.electronAPI.getSessionMessages(id),
+      applySession: applyHydratedSession,
+      onError: (error) => console.error('Failed to hydrate unknown session:', error),
+    })
+
     const cleanup = window.electronAPI.onSessionEvent((event: SessionEvent) => {
       if (!('sessionId' in event)) return
 
@@ -968,13 +989,7 @@ export default function App() {
         window.electronAPI.getSessionMessages(sessionId)
           .then((createdSession: Session | null) => {
             if (createdSession) {
-              const existingMeta = store.get(sessionMetaMapAtom).has(sessionId)
-              if (existingMeta) {
-                replaceLoadedSession(createdSession)
-              } else {
-                addSession(createdSession)
-              }
-              syncSessionOptionsFromSession(createdSession)
+              applyHydratedSession(createdSession)
               return
             }
             return window.electronAPI.getSessions().then(initializeSessions)
@@ -987,6 +1002,13 @@ export default function App() {
         removeSession(sessionId)
         return
       }
+
+      // Fork: hydrate sessions this window doesn't know yet (processing below still
+      // builds a temporary stub so the event itself isn't lost).
+      unknownSessionHydrator.maybeHydrate(
+        sessionId,
+        store.get(sessionAtomFamily(sessionId)) != null || store.get(sessionMetaMapAtom).has(sessionId),
+      )
 
       const agentEvent = event as unknown as AgentEvent
 

@@ -224,6 +224,10 @@ Upstream v0.13.0 bringt **Pages** (agent-erstellte HTML-Mini-Dashboards, Sidebar
 
 ---
 
+### 11. Unbekannte Sessions per Event hydratisieren ("New chat"-Fix, 2026-09-27)
+**Problem:** `sessions:create`-RPC unterdrückt `session_created` (Upstream: der aufrufende Renderer fügt die Session aus dem Rückgabewert hinzu, `App.tsx handleCreateSession`). Wird eine Session anders angelegt (rohes `electronAPI.createSession()`, anderes Fenster, Remote-Client), kennt der Renderer sie nicht; das erste Event dafür läuft durch den Event-Processor mit `currentSession = null` → leerer Stub ohne `name` im Meta-Map → Zeile zeigt "New chat". `spawn_session`/TaskRunner waren nicht betroffen (rufen `SessionManager.createSession()` direkt → Broadcast → Hydrate).
+**Lösung:** `apps/electron/src/renderer/lib/unknown-session-hydration.ts` (neu) + Verdrahtung in `App.tsx` `onSessionEvent`: bei Event für unbekannte Session einmalig `getSessionMessages()` und Stub ersetzen (gleicher Apply-Pfad wie `session_created`). Auto-Titel überschreibt expliziten Namen nicht (Guard `!managed.name` in `sendMessage`, jetzt per `server-core/src/sessions/explicit-name-title.test.ts` abgesichert).
+
 ## Orcha CLI Änderungen
 
 Diese Änderungen liegen im separaten Repository `~/Developer/orcha/` und sind **nicht Teil des Craft-Agents-Forks**.
