@@ -69,6 +69,45 @@ export interface ObservableMessage {
   timestamp: number;
   type: 'user' | 'assistant' | 'tool' | 'system' | 'error' | 'plan';
   toolName?: string;
+  /**
+   * Who actually authored a `type: 'user'` message. Orcha delivers several
+   * machine-generated turns through the user channel (task-runner dispatch,
+   * background results, completion nudges); without this the Observer
+   * attributes them to the human. Absent = human (and for non-user types).
+   */
+  origin?: MessageOrigin;
+}
+
+/**
+ * Author of a user-channel message.
+ *  - `human`               — typed by the user
+ *  - `task-runner`         — TaskRunner dispatch / retry / verification prompt
+ *  - `background-result`   — `<background_result …>` delivered to a parent session
+ *  - `system-notification` — hidden nudges such as `[background-task-completed]`
+ */
+export type MessageOrigin = 'human' | 'task-runner' | 'background-result' | 'system-notification';
+
+const BACKGROUND_RESULT_RE = /^<background_result[\s>]/;
+const BACKGROUND_NUDGE_RE = /^\[background-task-[a-z]+\]/;
+
+/**
+ * Classify the author of a user-channel message.
+ *
+ * `taskSession` = the session header carries a `taskSlug` (task-node child or
+ * run orchestrator). Every user turn in those sessions is sent by TaskRunner
+ * (`host.sendMessage`) — verified against all 253 task sessions in the real
+ * workspaces as of 2026-09-29, none with human input.
+ */
+export function classifyUserMessageOrigin(
+  content: string,
+  opts: { hidden?: boolean; taskSession?: boolean } = {},
+): MessageOrigin {
+  const head = content.trimStart();
+  if (BACKGROUND_RESULT_RE.test(head)) return 'background-result';
+  if (BACKGROUND_NUDGE_RE.test(head)) return 'system-notification';
+  if (opts.taskSession) return 'task-runner';
+  if (opts.hidden) return 'system-notification';
+  return 'human';
 }
 
 // ============================================================================
@@ -169,12 +208,13 @@ export function messagesSinceWatermark(
   // If watermark not found, return last 50 messages (safe fallback)
   const startLine = watermarkIndex >= 0 ? watermarkIndex + 1 : Math.max(0, messageLines.length - 50);
   const relevantLines = messageLines.slice(startLine);
+  const taskSession = isTaskSessionHeader(lines[0]);
 
   const messages: ObservableMessage[] = [];
   for (const line of relevantLines) {
     try {
       const parsed = JSON.parse(line);
-      messages.push(toObservableMessage(parsed));
+      messages.push(toObservableMessage(parsed, taskSession));
     } catch {
       // Skip corrupted lines
     }
@@ -194,11 +234,12 @@ export function readAllMessages(sessionJsonlPath: string): ObservableMessage[] {
   if (lines.length === 0) return [];
 
   // Skip header line
+  const taskSession = isTaskSessionHeader(lines[0]);
   const messages: ObservableMessage[] = [];
   for (const line of lines.slice(1)) {
     try {
       const parsed = JSON.parse(line);
-      messages.push(toObservableMessage(parsed));
+      messages.push(toObservableMessage(parsed, taskSession));
     } catch {
       // Skip corrupted lines
     }
@@ -215,14 +256,31 @@ export function readAllMessages(sessionJsonlPath: string): ObservableMessage[] {
  * Convert a raw JSONL message object to an ObservableMessage.
  * Extracts only the fields needed for observation extraction.
  */
-function toObservableMessage(parsed: Record<string, unknown>): ObservableMessage {
-  return {
+function toObservableMessage(parsed: Record<string, unknown>, taskSession: boolean): ObservableMessage {
+  const content = extractTextContent(parsed);
+  const type = (parsed.type as ObservableMessage['type']) ?? 'assistant';
+  const msg: ObservableMessage = {
     id: parsed.id as string,
-    content: extractTextContent(parsed),
+    content,
     timestamp: parsed.timestamp as number,
-    type: (parsed.type as ObservableMessage['type']) ?? 'assistant',
+    type,
     toolName: parsed.toolName as string | undefined,
   };
+  if (type === 'user') {
+    msg.origin = classifyUserMessageOrigin(content, { hidden: parsed.hidden === true, taskSession });
+  }
+  return msg;
+}
+
+/** True when the session.jsonl header line marks a TaskRunner session (`taskSlug`). */
+function isTaskSessionHeader(headerLine: string | undefined): boolean {
+  if (!headerLine) return false;
+  try {
+    const header = JSON.parse(headerLine) as Record<string, unknown>;
+    return typeof header.taskSlug === 'string' && header.taskSlug.length > 0;
+  } catch {
+    return false;
+  }
 }
 
 /**

@@ -274,6 +274,7 @@ async function runMastraObservation(expandedDir: string, jsonlPath: string): Pro
     parseObserverOutput,
     parseAnchoredBullets,
     ORCHA_ANCHOR_INSTRUCTION,
+    ORCHA_SPEAKER_INSTRUCTION,
   } = await import('../packages/shared/src/sessions/mastra-om/index.ts');
 
   // 1. Watermark + message slice
@@ -315,8 +316,13 @@ async function runMastraObservation(expandedDir: string, jsonlPath: string): Pro
   );
   // Custom-instruction override: tells the LLM to append {shortId} per
   // bullet using the [#shortId] markers our formatMessagesForObserver puts
-  // on each source message header. Keeps the vendored Mastra prompts intact.
-  const system = buildObserverSystemPrompt({ instruction: ORCHA_ANCHOR_INSTRUCTION });
+  // on each source message header. The speaker instruction keeps
+  // machine-generated turns (Task Runner / Background Result / System
+  // Notification titles) from being attributed to the user. Keeps the
+  // vendored Mastra prompts intact.
+  const system = buildObserverSystemPrompt({
+    instruction: `${ORCHA_ANCHOR_INSTRUCTION}\n\n${ORCHA_SPEAKER_INSTRUCTION}`,
+  });
 
   let runningWatermark: ObservationWatermark | null = initialWatermark;
   let totalBullets = 0;

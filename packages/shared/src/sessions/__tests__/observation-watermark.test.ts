@@ -5,6 +5,7 @@ import {
   messagesSinceWatermark,
   readAllMessages,
   watermarkPath,
+  classifyUserMessageOrigin,
   type ObservationWatermark,
 } from '../observation-watermark.ts';
 import { writeFileSync, mkdirSync, rmSync, existsSync } from 'node:fs';
@@ -189,6 +190,54 @@ describe('observation-watermark', () => {
       const header = JSON.stringify({ id: 'test', workspaceRootPath: '~/test', createdAt: 1, lastUsedAt: 1 });
       writeFileSync(TEST_JSONL, header + '\n', 'utf-8');
       expect(readAllMessages(TEST_JSONL).length).toBe(0);
+    });
+  });
+
+  // --- Message origin (who authored a user-channel turn) ---
+
+  describe('user message origin', () => {
+    it('classifies background results, nudges, hidden turns and plain input', () => {
+      expect(classifyUserMessageOrigin('<background_result task="x" childSessionId="y" status="completed">\nok')).toBe(
+        'background-result',
+      );
+      expect(classifyUserMessageOrigin('[background-task-completed] The background agent …')).toBe('system-notification');
+      expect(classifyUserMessageOrigin('[background-task-failed] The background agent …')).toBe('system-notification');
+      expect(classifyUserMessageOrigin('some hidden nudge', { hidden: true })).toBe('system-notification');
+      expect(classifyUserMessageOrigin('Apply these skills: [skill:a]\n\nYou are QA', { taskSession: true })).toBe(
+        'task-runner',
+      );
+      expect(classifyUserMessageOrigin('Bitte prüfe den Branch')).toBe('human');
+      // A human quoting the tag mid-message stays human.
+      expect(classifyUserMessageOrigin('what does <background_result> mean?')).toBe('human');
+    });
+
+    it('marks every user turn in a task session (header taskSlug) as task-runner', () => {
+      const header = JSON.stringify({ id: 'child', taskSlug: 'swarm-p15-qa', taskNodeId: 'qa', createdAt: 1 });
+      const lines = [
+        header,
+        '{"id":"m1","content":"Apply these skills: [skill:swarm-rollen]\\n\\nYou are the QA","type":"user","timestamp":1}',
+        '{"id":"m2","content":"done","type":"assistant","timestamp":2}',
+        '{"id":"m3","content":"The previous result was rejected on verification: x","type":"user","timestamp":3}',
+      ];
+      writeFileSync(TEST_JSONL, lines.join('\n') + '\n', 'utf-8');
+      const msgs = readAllMessages(TEST_JSONL);
+      expect(msgs.map(m => m.origin)).toEqual(['task-runner', undefined, 'task-runner']);
+      expect(messagesSinceWatermark(TEST_JSONL, 'm2')[0]!.origin).toBe('task-runner');
+    });
+
+    it('keeps human origin in normal sessions and flags hidden / background turns', () => {
+      const lines = [
+        JSON.stringify({ id: 'normal', workspaceRootPath: '~/test', createdAt: 1 }),
+        '{"id":"m1","content":"Mach das bitte","type":"user","timestamp":1}',
+        '{"id":"m2","content":"<background_result task=\\"t\\" childSessionId=\\"c\\" status=\\"completed\\">\\nresult\\n</background_result>","type":"user","timestamp":2}',
+        '{"id":"m3","content":"[background-task-completed] finished","type":"user","hidden":true,"timestamp":3}',
+      ];
+      writeFileSync(TEST_JSONL, lines.join('\n') + '\n', 'utf-8');
+      expect(readAllMessages(TEST_JSONL).map(m => m.origin)).toEqual([
+        'human',
+        'background-result',
+        'system-notification',
+      ]);
     });
   });
 

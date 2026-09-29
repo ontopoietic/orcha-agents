@@ -18,7 +18,8 @@
  *
  * Date headers appear when the date changes. Times appear when they change.
  * Tool / system / error messages are folded in with synthesized titles so the
- * Observer can still reason about them.
+ * Observer can still reason about them. Machine-generated user-channel turns
+ * (see `ObservableMessage.origin`) get their own titles instead of `User`.
  *
  * Works for both Claude Code SDK and Pi sessions because our caller already
  * normalised to ObservableMessage upstream in observation-watermark.ts.
@@ -52,10 +53,23 @@ function formatTime(ts: number): string {
   });
 }
 
+/**
+ * Titles for machine-generated user-channel turns. Keeping them out of the
+ * `User` label is what stops the Observer from recording orchestration
+ * prompts as user decisions (cf. Mastra #22195). ORCHA_SPEAKER_INSTRUCTION
+ * tells the Observer how to treat each title.
+ */
+const USER_ORIGIN_TITLES = {
+  human: 'User',
+  'task-runner': 'Task Runner',
+  'background-result': 'Background Result',
+  'system-notification': 'System Notification',
+} as const satisfies Record<NonNullable<ObservableMessage['origin']>, string>;
+
 function titleForMessage(msg: ObservableMessage): string {
   switch (msg.type) {
     case 'user':
-      return 'User';
+      return USER_ORIGIN_TITLES[msg.origin ?? 'human'];
     case 'assistant':
       return 'Assistant';
     case 'tool':
