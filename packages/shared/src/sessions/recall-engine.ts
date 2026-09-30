@@ -25,8 +25,9 @@ import { loadObservationSignals } from './observation-loader.ts';
 import { readAllMessages, type ObservableMessage } from './observation-watermark.ts';
 import { getWorkspaceSessionsPath } from '../workspaces/storage.ts';
 import { getSessionPath, getSessionFilePath } from './storage.ts';
-import { cosineSimilarity, resolveEmbedder, type Embedder } from './embedder.ts';
-import { ensureEmbeddings } from './vector-sidecar.ts';
+import { cosineSimilarity, type Embedder } from './embedder.ts';
+import { getEmbedClient } from './embed-client.ts';
+import { lookupEmbeddings } from './vector-sidecar.ts';
 
 // ============================================================================
 // Types
@@ -218,11 +219,27 @@ export function recall(
 // ============================================================================
 
 export interface SemanticRecallOptions {
-  /** Inject a provider (tests); defaults to `resolveEmbedder()`. */
+  /** Inject a provider (tests); defaults to the embed-worker client. */
   embedder?: Embedder | null;
   /** Optional cosine floor (0..1), like Mastra's `semanticRecall.threshold`.
    *  Default 0 = pure ranking, exactly Mastra's default behaviour. */
   minSimilarity?: number;
+}
+
+/** How much of the scanned memory could be scored semantically. */
+export interface SemanticRecallCoverage {
+  /** Observations scanned (after the session filter). */
+  observations: number;
+  /** Of those, how many had a cached vector (the rest scored by text only). */
+  vectorized: number;
+  /** Sessions whose missing vectors were handed to the worker for indexing. */
+  indexingRequested: number;
+}
+
+export interface SemanticRecallResult {
+  hits: RecallHit[];
+  /** Absent when semantics could not contribute at all (pure text fallback). */
+  coverage?: SemanticRecallCoverage;
 }
 
 /**
@@ -237,21 +254,27 @@ export interface SemanticRecallOptions {
  * error strings) are something embeddings are *worse* at than grep — the two
  * signals cover each other's blind spots.
  *
+ * READ-ONLY on the vector side: the only inference per call is the query
+ * embedding. Observations without a cached vector are scored by text overlap
+ * and their sessions are handed to the embed worker (`requestIndex`) so the
+ * next call can use them. A workspace-wide scan therefore costs one query
+ * embedding plus JSON reads, independent of the indexing backlog — before
+ * 2026-09-30 it embedded the whole backlog inline and crashed the app.
+ *
  * Degrades to plain `recall()` whenever semantics can't contribute: no query
- * text, embedder unavailable/disabled, or query embedding fails. Per-session
- * embedding failures degrade only that session to text scoring. Callers can
- * therefore use this unconditionally.
+ * text, embedder unavailable, or query embedding fails.
  */
-export async function recallSemantic(
+export async function recallSemanticDetailed(
   workspaceRootPath: string,
   query: RecallQuery,
   opts: SemanticRecallOptions = {},
   clock: () => number = () => Date.now(),
-): Promise<RecallHit[]> {
-  if (!query.text) return recall(workspaceRootPath, query, clock);
+): Promise<SemanticRecallResult> {
+  const fallback = (): SemanticRecallResult => ({ hits: recall(workspaceRootPath, query, clock) });
+  if (!query.text) return fallback();
 
-  const embedder = opts.embedder !== undefined ? opts.embedder : await resolveEmbedder();
-  if (!embedder) return recall(workspaceRootPath, query, clock);
+  const embedder = opts.embedder !== undefined ? opts.embedder : getEmbedClient();
+  if (!embedder) return fallback();
 
   let queryVector: Float32Array | undefined;
   try {
@@ -259,7 +282,7 @@ export async function recallSemantic(
   } catch {
     queryVector = undefined;
   }
-  if (!queryVector) return recall(workspaceRootPath, query, clock);
+  if (!queryVector) return fallback();
 
   const limit = query.limit ?? 20;
   const minSimilarity = opts.minSimilarity ?? 0;
@@ -269,6 +292,9 @@ export async function recallSemantic(
 
   const sessionIds = query.sessionId ? [query.sessionId] : listSessionIds(workspaceRootPath);
   const hits: RecallHit[] = [];
+  const needsIndex: string[] = [];
+  let observations = 0;
+  let vectorized = 0;
 
   for (const sessionId of sessionIds) {
     const sessionDir = getSessionPath(workspaceRootPath, sessionId);
@@ -279,12 +305,10 @@ export async function recallSemantic(
       continue; // one bad session never sinks the whole recall
     }
 
-    let vectors: Map<string, Float32Array>;
-    try {
-      vectors = await ensureEmbeddings(sessionDir, signals, embedder);
-    } catch {
-      vectors = new Map(); // this session degrades to text scoring
-    }
+    const { vectors, missing } = lookupEmbeddings(sessionDir, signals, embedder);
+    observations += signals.length;
+    vectorized += vectors.size;
+    if (missing > 0) needsIndex.push(sessionDir);
 
     for (const sig of signals) {
       const anchorRefs = toAnchorRefs(sig.anchorRefs);
@@ -331,8 +355,29 @@ export async function recallSemantic(
     }
   }
 
+  if (needsIndex.length > 0) {
+    try {
+      embedder.requestIndex?.(needsIndex);
+    } catch {
+      // indexing is best-effort — the answer below is already complete
+    }
+  }
+
   hits.sort((a, b) => b.score - a.score || Date.parse(b.createdAt) - Date.parse(a.createdAt));
-  return hits.slice(0, limit);
+  return {
+    hits: hits.slice(0, limit),
+    coverage: { observations, vectorized, indexingRequested: embedder.requestIndex ? needsIndex.length : 0 },
+  };
+}
+
+/** `recallSemanticDetailed` without the coverage report. */
+export async function recallSemantic(
+  workspaceRootPath: string,
+  query: RecallQuery,
+  opts: SemanticRecallOptions = {},
+  clock: () => number = () => Date.now(),
+): Promise<RecallHit[]> {
+  return (await recallSemanticDetailed(workspaceRootPath, query, opts, clock)).hits;
 }
 
 // ============================================================================

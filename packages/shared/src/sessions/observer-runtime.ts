@@ -29,13 +29,15 @@ import { join } from 'node:path';
 export type OrchaScriptBase =
   | 'orcha-observe'
   | 'orcha-reflect'
-  | 'orcha-recall-anchors';
+  | 'orcha-recall-anchors'
+  | 'orcha-embed-worker';
 
 /** Every spawnable script — keep in sync with OrchaScriptBase. */
 export const ORCHA_SCRIPT_BASES: readonly OrchaScriptBase[] = [
   'orcha-observe',
   'orcha-reflect',
   'orcha-recall-anchors',
+  'orcha-embed-worker',
 ];
 
 export interface ResolvedScriptInvocation {

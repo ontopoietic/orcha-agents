@@ -762,6 +762,9 @@ export interface RecallToolResult {
   mode: 'search' | 'resolve';
   hits?: unknown[];
   resolved?: unknown | null;
+  /** search (semantic): how many scanned observations had a vector; the rest
+   *  were scored by word overlap and are being indexed in the background. */
+  coverage?: { observations: number; vectorized: number; indexingRequested: number };
 }
 
 /**

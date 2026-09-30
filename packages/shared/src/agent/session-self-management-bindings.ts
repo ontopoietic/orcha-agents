@@ -21,7 +21,7 @@
 
 import type { SessionToolContext, RecallToolArgs, RecallToolResult } from '@craft-agent/session-tools-core';
 import { getSessionScopedToolCallbacks } from './session-scoped-tool-callback-registry.ts';
-import { recall, recallSemantic, resolvePointer } from '../sessions/recall-engine.ts';
+import { recall, recallSemanticDetailed, resolvePointer } from '../sessions/recall-engine.ts';
 
 /**
  * Attach session self-management bindings to a SessionToolContext.
@@ -107,9 +107,12 @@ export function attachSessionSelfManagementBindings(
           limit: args.limit,
         };
         // Semantic scoring is the default for text queries; it degrades to the
-        // sync engine on its own when no embedder is available.
+        // sync engine on its own when no embedder is available. Embedding runs
+        // in the embed worker process, never here (see embed-client.ts).
         if (args.text && args.semantic !== false) {
-          return recallSemantic(workspaceRootPath, query).then((hits) => ({ mode, hits }));
+          return recallSemanticDetailed(workspaceRootPath, query).then(({ hits, coverage }) =>
+            coverage ? { mode, hits, coverage } : { mode, hits },
+          );
         }
         return { mode, hits: recall(workspaceRootPath, query) };
       };

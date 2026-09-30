@@ -15,6 +15,7 @@ import { estimateBacklogTokens, getObserverThresholdTokens } from '@craft-agent/
 import { maybeTriggerReflector } from '@craft-agent/shared/sessions/reflection-trigger'
 import { maybeTriggerAutoAnchor } from '@craft-agent/shared/sessions/auto-anchor-trigger'
 import { resolveOrchaScript } from '@craft-agent/shared/sessions/observer-runtime'
+import { requestEmbeddingIndex } from '@craft-agent/shared/sessions/embed-client'
 import { getLlmConnections } from '@craft-agent/shared/config/storage'
 import { getValidClaudeOAuthToken } from '@craft-agent/shared/auth/state'
 import log from 'electron-log/main'
@@ -389,6 +390,7 @@ export async function runObserverNow(sessionDir: string): Promise<string> {
         obsLog.warn(`subprocess stderr (code=${code ?? 'null'}): ${stderr.trim().slice(0, 1200)}`)
       }
       if (code === 0) {
+        requestEmbeddingIndex(sessionDir)
         resolveOut(stdout.trim() || 'Observer ran (no output).')
       } else {
         rejectOut(new Error(`Observer exited with code ${code}: ${stderr.trim() || stdout.trim()}`))
@@ -462,6 +464,7 @@ export async function runReflectorNow(
     child.on('close', (code) => {
       clearTimeout(killer)
       if (code === 0) {
+        requestEmbeddingIndex(sessionDir)
         resolveOut(stdout.trim() || 'Reflector ran (no output).')
       } else {
         rejectOut(new Error(`Reflector exited with code ${code}: ${stderr.trim() || stdout.trim()}`))

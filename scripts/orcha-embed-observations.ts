@@ -4,8 +4,10 @@
  * (`data/observations-embeddings.json`) so semantic recall has embeddings for
  * sessions recorded before the feature existed (or after deleting the caches).
  *
- * Idempotent: `ensureEmbeddings` hashes the embedded text per observation and
- * re-embeds only missing/stale entries, so re-running is cheap. The Markdown
+ * Idempotent: the sidecar is content-addressed (text hash → vector), so only
+ * texts without a vector are embedded — in batches, persisted per chunk, so an
+ * interrupted run resumes where it stopped. Runs ONNX in THIS process (never
+ * in the app); the app's embed worker does the same work incrementally. The Markdown
  * ledgers are never written — the sidecar is a derived cache.
  *
  * CLI:
@@ -26,7 +28,7 @@ import { resolveEmbedder } from '../packages/shared/src/sessions/embedder.ts';
 import { loadObservationSignals } from '../packages/shared/src/sessions/observation-loader.ts';
 import {
   ensureEmbeddings,
-  loadVectorSidecar,
+  lookupEmbeddings,
   embeddingTextFor,
 } from '../packages/shared/src/sessions/vector-sidecar.ts';
 
@@ -88,24 +90,20 @@ for (const dir of sessionDirs) {
   if (embeddable.length === 0) continue;
   totalSignals += embeddable.length;
 
-  const existing = loadVectorSidecar(dir);
-  const cachedCount =
-    existing && existing.model === embedder.model ? Object.keys(existing.entries).length : 0;
+  const { vectors: cached, missing } = lookupEmbeddings(dir, signals, embedder);
+  const cachedCount = cached.size;
 
   if (dryRun) {
-    console.log(`  ${id}: ${embeddable.length} observation(s), ${cachedCount} already cached`);
+    console.log(`  ${id}: ${embeddable.length} observation(s), ${cachedCount} already cached, ${missing} missing`);
     continue;
   }
 
   const t0 = Date.now();
   try {
     const vectors = await ensureEmbeddings(dir, signals, embedder);
-    const embedded = vectors.size - Math.min(cachedCount, vectors.size);
-    totalEmbedded += Math.max(0, embedded);
-    totalCached += Math.min(cachedCount, vectors.size);
-    console.log(
-      `  ${id}: ${vectors.size} vector(s) (${Math.max(0, embedded)} new) in ${Date.now() - t0}ms`,
-    );
+    totalEmbedded += missing;
+    totalCached += cachedCount;
+    console.log(`  ${id}: ${vectors.size} vector(s) (${missing} new) in ${Date.now() - t0}ms`);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.warn(`  ${id}: failed — ${message}`);
