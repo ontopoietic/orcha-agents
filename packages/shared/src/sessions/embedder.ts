@@ -47,6 +47,8 @@ export interface Embedder {
    * backfill sessions it had to score by text only.
    */
   requestIndex?(sessionDirs: string[]): void;
+  /** Optional: release native resources (ONNX sessions) before process exit. */
+  dispose?(): Promise<void>;
 }
 
 export const DEFAULT_EMBED_MODEL = 'Xenova/multilingual-e5-small';
@@ -97,6 +99,7 @@ interface FeatureExtractor {
   (texts: string[], opts: { pooling: 'mean'; normalize: boolean }): Promise<{
     tolist(): number[][];
   }>;
+  dispose?(): Promise<void>;
 }
 
 let cached: Promise<Embedder | null> | undefined;
@@ -159,6 +162,11 @@ async function doResolve(): Promise<Embedder | null> {
         );
         return output.tolist().map((row) => Float32Array.from(row));
       }),
+    // Exiting with live ONNX sessions aborts in onnxruntime's static
+    // destructors (SIGABRT + a macOS crash report) — release them first.
+    dispose: async () => {
+      await extractor.dispose?.();
+    },
   };
 }
 

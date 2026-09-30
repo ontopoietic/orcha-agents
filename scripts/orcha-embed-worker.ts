@@ -46,6 +46,23 @@ async function main(): Promise<void> {
   }
   send({ type: 'ready', model: embedder.model, dim: embedder.dim });
 
+  // Once onnxruntime-node is loaded, a normal exit() aborts on macOS: its
+  // global destructors throw "mutex lock failed" (SIGABRT + a crash report per
+  // exit). So: release the sessions, flush stdout, then terminate by signal —
+  // SIGTERM's default action skips the C++ static destructors entirely. The
+  // client treats this as an intentional stop (it initiated it or is gone).
+  let exiting = false;
+  async function shutdown(): Promise<void> {
+    if (exiting) return;
+    exiting = true;
+    try {
+      await embedder!.dispose?.();
+    } catch {
+      // exiting anyway
+    }
+    process.stdout.write('', () => process.kill(process.pid, 'SIGTERM'));
+  }
+
   const queue: string[] = [];
   const queued = new Set<string>();
   let draining = false;
@@ -79,7 +96,7 @@ async function main(): Promise<void> {
   }
 
   const rl = createInterface({ input: process.stdin });
-  rl.on('close', () => process.exit(0));
+  rl.on('close', () => void shutdown());
   rl.on('line', (line) => {
     let req: EmbedWorkerRequest;
     try {
@@ -101,7 +118,7 @@ async function main(): Promise<void> {
       // event loop never pays for it.
       enqueue(findSessionsNeedingEmbeddings(req.workspaceRoots, embedder!));
     } else if (req.op === 'shutdown') {
-      process.exit(0);
+      void shutdown();
     }
   });
 }
