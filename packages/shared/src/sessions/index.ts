@@ -147,6 +147,7 @@ export type {
   ObservationWatermark,
   ObservableMessage,
   ObservationSignal,
+  MessageOrigin,
 } from './observation-watermark.ts';
 
 // Observation loader (MD canonical + JSON fallback)
@@ -165,6 +166,7 @@ export {
   messagesSinceWatermark,
   readAllMessages,
   watermarkPath,
+  classifyUserMessageOrigin,
 } from './observation-watermark.ts';
 
 // Episodes (L3) were removed June 2026 — cross-session visibility is the

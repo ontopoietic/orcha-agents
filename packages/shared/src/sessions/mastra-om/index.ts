@@ -63,6 +63,7 @@ export {
 export { formatMessagesForObserver } from './format-messages.ts';
 
 export { ORCHA_ANCHOR_INSTRUCTION } from './orcha-anchor-instruction.ts';
+export { ORCHA_SPEAKER_INSTRUCTION } from './orcha-speaker-instruction.ts';
 
 export {
   parseAnchoredBullets,

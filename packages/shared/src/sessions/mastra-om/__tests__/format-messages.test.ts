@@ -45,6 +45,21 @@ describe('formatMessagesForObserver', () => {
     expect(out).toContain('Error');
   });
 
+  it('titles machine-generated user turns by origin instead of "User"', () => {
+    const msgs: ObservableMessage[] = [
+      { id: 'm-aaaaaa', content: 'typed by the human', timestamp: MAY_15_1430, type: 'user', origin: 'human' },
+      { id: 'm-bbbbbb', content: 'You are the QA role', timestamp: MAY_15_1430, type: 'user', origin: 'task-runner' },
+      { id: 'm-cccccc', content: '<background_result …>', timestamp: MAY_15_1430, type: 'user', origin: 'background-result' },
+      { id: 'm-dddddd', content: '[background-task-completed] …', timestamp: MAY_15_1430, type: 'user', origin: 'system-notification' },
+    ];
+    const out = formatMessagesForObserver(msgs);
+    expect(out).toMatch(/^User .*\[#aaaaaa\]: typed by the human$/m);
+    expect(out).toMatch(/^Task Runner \[#bbbbbb\]: You are the QA role$/m);
+    expect(out).toMatch(/^Background Result \[#cccccc\]: /m);
+    expect(out).toMatch(/^System Notification \[#dddddd\]: /m);
+    expect(out.match(/^User /gm)?.length).toBe(1);
+  });
+
   it('handles an empty input gracefully', () => {
     expect(formatMessagesForObserver([])).toBe('');
   });
