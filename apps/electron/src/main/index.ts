@@ -92,6 +92,7 @@ import { initializeDocs } from '@craft-agent/shared/docs'
 import { initializeReleaseNotes } from '@craft-agent/shared/release-notes'
 import { ensureDefaultPermissions } from '@craft-agent/shared/agent/permissions-config'
 import { validateOrchaScriptRuntime } from '@craft-agent/shared/sessions/observer-runtime'
+import { getEmbedClient, shutdownEmbedClient } from '@craft-agent/shared/sessions/embed-client'
 import { ensureToolIcons, ensurePresetThemes } from '@craft-agent/shared/config'
 import { setBundledAssetsRoot } from '@craft-agent/shared/utils'
 import { initializeBackendHostRuntime } from '@craft-agent/shared/agent/backend'
@@ -225,6 +226,21 @@ if (isDebugMode) {
     mainLog.info('Memory-script runtime validated', { mode: report.mode })
   }
 }
+
+// Semantic-recall backlog: once startup has settled, let the embed worker
+// (a child process — ONNX never runs in this process) scan all workspaces and
+// vectorise observations that have no cached embedding yet. Recall itself is
+// read-only, so this sweep plus write-time indexing after each Observer /
+// Reflector run is what keeps vector coverage complete.
+app.whenReady().then(() => {
+  setTimeout(() => {
+    try {
+      getEmbedClient().requestSweep(getWorkspaces().map((w) => w.rootPath))
+    } catch (err) {
+      mainLog.warn('Embedding backlog sweep could not start', { error: String(err) })
+    }
+  }, 60_000).unref()
+})
 
 // Register Pi model resolver so llm-connections.ts can resolve Pi models
 // without importing @earendil-works/pi-ai (which breaks the Vite renderer build)
@@ -1373,6 +1389,9 @@ app.on('before-quit', async (event) => {
   // Avoid re-entry when we call app.exit()
   if (isQuitting) return
   isQuitting = true
+
+  // Stop the embed worker (it would also exit on its own once stdin closes).
+  shutdownEmbedClient()
 
   // Ensure Cmd+Q/app quit bypasses layered window close interception (Cmd+W behavior).
   windowManager?.setAppQuitting(true)

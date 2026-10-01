@@ -34,6 +34,7 @@ import { join } from 'node:path';
 import { createLogger } from '../utils/debug.ts';
 import { parseAnchoredBullets } from './mastra-om/parse-anchored-bullets.ts';
 import { resolveOrchaScript } from './observer-runtime.ts';
+import { requestEmbeddingIndex } from './embed-client.ts';
 
 const log = createLogger('reflection-trigger');
 
@@ -158,6 +159,7 @@ function spawnReflector(
   child.on('close', (code) => {
     state.inFlight = false;
     if (code === 0) {
+      requestEmbeddingIndex(sessionDir);
       log.debug(`Reflector (token-trigger) ran for ${sessionId}: ${stdout.trim().slice(0, 200)}`);
     } else {
       log.debug(`Reflector (token-trigger) failed for ${sessionId} (code ${code}): ${stderr.trim().slice(0, 200) || stdout.trim().slice(0, 200)}`);

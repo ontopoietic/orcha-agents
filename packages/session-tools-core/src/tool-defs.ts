@@ -659,7 +659,7 @@ Two modes:
 - mode "search" (default): find relevant past observations. Filter by framework anchor (anchorType + anchorId) for a precise, structural lookup ("everything about feature X"), and/or pass text for a word-overlap search. Each hit carries a durable pointer (messageRange.from + its sessionId).
 - mode "resolve": pass a hit's sessionId + messageId (its messageRange.from) to page the raw original messages around it, when you need exact quotes, tool output, or chronology that the summary dropped.
 
-Anchor search is precise and explainable; text search is semantic (embedding similarity with word-overlap fallback). Prefer anchors when you know the artifact; use text for everything phrased differently than it was recorded.`,
+Anchor search is precise and explainable; text search is semantic (embedding similarity with word-overlap fallback). Prefer anchors when you know the artifact; use text for everything phrased differently than it was recorded. A semantic search reports coverage (observations vs. vectorized): observations not yet vectorized were matched by words only and are indexed in the background, so a repeat search a little later can find more.`,
 
   list_background_tasks: `List background agents/tasks tracked for a session (running, finished, or orphaned).
 
