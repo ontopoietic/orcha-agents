@@ -8,8 +8,8 @@ Dieses Repository ist ein Fork von [lukilabs/craft-agents-oss](https://github.co
 |---|---|
 | **Upstream** | `https://github.com/lukilabs/craft-agents-oss.git` |
 | **Unser Remote** | `https://github.com/ontopoietic/orcha-agents.git` |
-| **Zuletzt gemerged** | v0.13.5 |
-| **Upstream-Stand** | v0.13.5 (aktuell) |
+| **Zuletzt gemerged** | v0.15.1 |
+| **Upstream-Stand** | v0.15.1 (aktuell) |
 | **Aktiver Branch** | `main` |
 | **Feature-Branch** | — (alle gemergt; alte/unfertige Branches archiviert unter `origin/archive/*`, 2026-09-27) |
 | **Sentry** | Deaktiviert (main + renderer) — kein Reporting |
@@ -51,7 +51,8 @@ Ermöglicht Shell-Kommandos vor dem Context-Compaction-Event des Agents. Output 
 **Berührt Upstream-Dateien (Konflikt-Kandidaten):**
 - `apps/electron/electron-builder.yml` — `appId` geändert
 - `apps/electron/src/main/index.ts` — `CRAFT_CONFIG_DIR` auf `~/.orcha-agents` gesetzt, `userData` auf `~/.orcha-agents/electron-data/`
-- `packages/shared/src/config/paths.ts` — `CRAFT_CONFIG_DIR`-Override, sonst `~/.orcha-agents` (kein `~/.craft-agent`-Fallback mehr, s. u.); `+CONFIG_DIR_DISPLAY`, `+getMessagingDir`
+- `packages/shared/src/config/paths.ts` — seit v0.15.1-Merge Upstreams `resolveConfigDir()` (OSS #1062: `CRAFT_CONFIG_DIR` getrimmt, sonst `<home>/DEFAULT_CONFIG_DIR_NAME`) mit Fork-Wert **`DEFAULT_CONFIG_DIR_NAME = '.orcha-agents'`** (Upstream `.craft-agent`); `+CONFIG_DIR_DISPLAY`, `+getMessagingDir`. Upstreams Einmal-Migrationen „Legacy-Dir → CONFIG_DIR“ (`workspaces/storage.ts` `LEGACY_WORKSPACES_DIR`) laufen dadurch im Fork ins Leere (Legacy = Default) — gewollt, unsere `isolation-2026-09`-Migration deckt das ab. In `secure-storage.ts` wurde Upstreams `migrateCredentialsIfNeeded` nicht übernommen (Fork-Konstruktor `{dir}` bleibt).
+- Import-freie Spiegel (müssen denselben Fork-Default haben!): `interceptor-common.ts` (`CRAFT_CONFIG_DIR?.trim() || ~/.orcha-agents`), `session-tools-core/src/handlers/config-validate.ts` (über Fork-`config-dir.ts`)
 - `packages/shared/src/credentials/backends/secure-storage.ts`, `server-core/.../rpc/auth.ts`, `main/{window-state,logger}.ts`, `interceptor-common.ts`, `privileged-execution-broker.ts`, `utils/logo.ts`, `permissions-config.ts`, `packages/server/src/index.ts` — Pfade aus `CONFIG_DIR` (s. „Vollständige Trennung")
 - `apps/electron/src/main/auto-update.ts` — `FORK_AUTO_UPDATE_DISABLED` (Launch-Check übersprungen, kein Auto-Download/-Install); `electron-builder.yml` `publish`-Block auskommentiert (Upstream-Feed seit v0.12.0: `https://thecraftagents.com/electron/latest`)
 
@@ -255,6 +256,17 @@ Upstream setzt `defaultMidStreamBehavior('anthropic') = 'queue'` (seit v0.9.1): 
 ### 13. Kleine Upstream-Bugfixes im Fork
 - **`readPluginName('')` CWD-Leak** (`packages/shared/src/utils/workspace.ts`, 2026-06-07, übernommen 2026-09-27 als `13776a5b`): leerer `workspaceRootPath` → `return null` statt relativem Pfad ins CWD. Test: `agent/__tests__/workspace-slug.test.ts`. Kandidat für Upstream-PR.
 
+### 14. Neue Berührungspunkte seit v0.15.1-Merge (2026-10-13)
+Upstream v0.15.0 hat die gesamte UI neu gestaltet; Fork-UI wurde auf die neuen Komponenten portiert statt alte Dateien zu behalten:
+- **Background-Task-`kind`:** Upstream führte `kind?: 'agent' | 'workflow' | 'shell' | 'task'` ein (SessionManager `RunningBackgroundTask`, session-tools-core `BackgroundTaskInfo`, DTO `task_backgrounded`). Unser früheres `kind?: 'in-query' | 'child-session'` ist darin aufgegangen: Union **+ `'child-session'`**; „in-query“ = jede Upstream-Kind. Exemptions (`markLiveBackgroundTasksOrphaned`, Stop-Hook-Guard) prüfen weiter nur `=== 'child-session'`.
+- **spawn_session:** `buildSpawnedChildSessionOptions()` bleibt Quelle der Optionen; Upstreams Permission-Clamp (`clampPermissionMode`, Kind nie lockerer als Parent) und `unattended` werden darüber gelegt (`SessionManager.onSpawnSession`).
+- **Session-Liste:** Filter-/Gruppier-Menü ist jetzt `SessionFilterMenu.tsx` (Upstream) — Fork ergänzt dort „Group by Anchor“ und „Show hidden sessions“ (Props `showHiddenSessions`/`setShowHiddenSessions` aus `AppShell`). Mobile `CompactSessionListFilter` ohne Anchor-Gruppierung. `SessionItem`: Spinner/Plan/Unread-Icons wanderten upstream in die `runState`-Subtitle-Zeile — Fork speist `hasWorkingDescendant` in `runState: 'working'` ein; Child-Chip (`childToggleChip`) unverändert.
+- **ChatPage:** Upstream-`ChatHeader` (Status/Labels/Actions im Header) ersetzt `PanelHeader`+Menüs; `SessionAnchorBar` sitzt direkt darunter (beide Render-Pfade).
+- **Composer:** Kontext-Anzeige ist Upstreams `ContextUsageChip.tsx`; Fork-Prop `persistent` (immer sichtbar sobald Usage-Daten da sind, neutral unter der Warnschwelle, Info-Tint darüber) ersetzt das frühere eigene Badge in `FreeFormInput`.
+- **Background-Task-Chips:** `TaskActionMenu.tsx` ist upstream gelöscht; Nachfolger `BackgroundTaskChip.tsx` (Popover-Card mit Output-Polling). Fork: für `kind === 'child-session'` kein Output-Polling, kein Stop/Copy/Open, stattdessen **„Open session“** (Navigation zur Child-Session — Zugangspfad auch für hidden Children).
+- **Settings → About:** „Check for updates“ zeigt weiter „Managed manually“ (Auto-Update aus, §3).
+- **Neue Upstream-Features ohne Fork-Anpassung:** Decision-Model/Guarded-Mode (opt-in, Log `CONFIG_DIR/logs/decisions.jsonl`; i18n `settings.ai.decisions.privacyNote` auf `~/.orcha-agents` umgeschrieben), `decide`-Tool, `project_memory_append`, MCP-Resources/Prompts-Tools, „Stop beendet nur die Antwort“. Upstreams Decision-Feature „Mid-turn messages“ kann — wenn aktiviert — pro Nachricht steer/queue entscheiden; ohne Aktivierung gilt unser Default `steer` (§12).
+
 ## Orcha CLI Änderungen
 
 Diese Änderungen lagen im separaten Repository `~/Developer/orcha/` und waren **nicht Teil des Craft-Agents-Forks**.
@@ -285,7 +297,7 @@ Diese Änderungen lagen im separaten Repository `~/Developer/orcha/` und waren *
 | 2026-09-27 | v0.13.5+fork | v0.13.5+fork | Keine (Fork-intern). **Steer-Delivery-Fix** (`2c34c93e`, §12 + §6-Note (d)): Mid-stream-Default `steer`, Tail ohne wartende Nachrichten, `redirect()` vor Query-Erzeugung. Live-verifiziert (2 Steers während `sleep`-Kette → 1 Turn, je 1×). | Timo + Craft Agent |
 | 2026-09-27 | v0.13.5+fork | v0.13.5+fork | Keine (Fork-intern, Branch `chore/followups`). **Follow-ups:** agent-sichtbare Pfade aus `CONFIG_DIR` (`ca9ad06a`, §3), „New chat“-Hydration (`d66c4a3c`, §11), Spinner an Zeilen ohne sichtbare Kinder (`d86130c5`, §9 p13), Observer-Kommentar (`cdf003a3`), `readPluginName`-Fix (`13776a5b`, §13). Vorher schon: `orcha-observer`-Skill entfernt (`bb245773`), `build:observers` ohne gelöschtes `orcha-episode-emit.ts` (`47d64f0a`). | Timo + Craft Agent |
 | 2026-09-27 | — | — | **Aufräumen (kein Code):** 4 gemergte Branches gelöscht, 9 alte/unfertige als `origin/archive/*` gesichert und lokal gelöscht (u. a. `fix/interceptor-stuck-queue-recovery` bewusst NICHT übernommen: harter 5-min-Processing-Watchdog würde lange Swarm-Nodes abbrechen). Beide PreCompact-Automationen im Orcha-Workspace entfernt (§2). Workspace „General“ von `~/.craft-agent/workspaces/general` nach `~/.orcha-agents/workspaces/general` verschoben (lokale Config, §3). | Timo + Craft Agent |
-
+| 2026-10-13 | v0.13.5+fork | v0.15.1 | **Merge** (`update/v0.15.1`, Backup `backup/main-v0.13.5+fork`; Upstream v0.13.6→v0.15.1 = 5 Release-Squashes, 781 Dateien). **36 Konflikte**, davon: Config-Dir/Isolation (12: `paths.ts` → Upstream-`resolveConfigDir` mit `.orcha-agents`, `secure-storage`/`auth`/`workspace`/`server`/`main/index`/`window-state`/`logo`/`docs` Fork behalten, `interceptor-common`/`logger`/`permissions-config` Upstream mit Fork-Default), Agent-Kern (`SessionManager` 4 Hunks: `kind`-Union, `archivedByCascadeFrom` ∪ Guarded-Kommentar, spawn_session Helper + Clamp, `getSessionFinalText`/`getSessionLastErrorText` behalten — Upstream hatte sie entfernt, Fork-p11 braucht sie; `claude-agent.ts` Stop-Hook-Guard ∪ `stoppedTurn`/`releaseToolHandoffOn`; `system.ts` decide-Abschnitt ∪ `backgroundWorkSection`), Tools (`tool-defs` `project_memory_append` ∪ Fork-`create_task`-Text; `context.ts`/`dto.ts` `kind`-Union), UI-Redesign (10 Dateien, s. §14), Manifeste (`apps/electron/package.json` 0.15.1 + Branding, `index.html` Titel + Upstream-Theme-Script, `bun.lock` → Upstream + `bun install --force`). **Merge-verursachte Fixes:** Duplikat-Imports (`workspaces/storage.ts`, `logo.ts`), fehlender `homedir`-Import im `prerequisite-manager.isolated.ts`, `pre-tool-use-step0-routing.test.ts`-Mock an verkleinertes `PermissionManagerLike` angepasst. **Branding:** neuer Key `chat.newChatSubtitle` (7 Locales) + `decisions.privacyNote`-Pfad. **Upstream-Highlights:** `CRAFT_CONFIG_DIR` überall autoritativ (OSS #1062 — deckt sich mit §3), Decision-Model + Guarded-Mode, `decide`, Semantic Automations/Labels, neues Design, Claude-SDK **0.3.296** (CLI 2.1.296, ⚠️ neues natives Binary), Pi-SDK 1.1.0, Sonnet/Haiku 5.5, MCP-Resources/Prompts, `project_memory_append`, Labels-Bereinigung beim Session-Load (schreibt Session-Daten um → vor Installation Workspaces sichern). Validierung (isoliertes `HOME`): typecheck:all ✓, i18n parity+sorted ✓ (6 Locales, 1994 Keys), `validate:ci` ✓, shared **4112/13** (alle 13 identisch auf pristine v0.15.1), electron+server-core+session-tools-core **1844/7** (alle 7 identisch auf pristine), `.isolated.ts` alle wie pristine (`pre-tool-use-checks` 97/0, `prerequisite-manager` jetzt 78/0, `session-branch-rollback` weiter 0/1). | Timo + Craft Agent |
 ---
 
 ## Upstream-Update-Anleitung
@@ -330,11 +342,13 @@ git add -A && git commit   # Merge-Commit mit Konfliktlösung
 
 > **Wichtig:** `FORK.md` ist Teil des Update-Prozesses. Nach jedem Rebase/Merge muss sie den aktuellen Stand widerspiegeln. Ohne aktuelle `FORK.md` ist der nächste Update-Aufwand schwerer einzuschätzen.
 
-### Bekannte vorbestehende Upstream-Defekte (Stand v0.13.5)
-Diese Fehler existieren **im reinen Upstream v0.13.5** (verifiziert per pristine Worktree, gleiche Bedingungen: isoliertes `HOME=$(mktemp -d)`) und sind NICHT durch unseren Fork/Merge verursacht — nicht im Rahmen eines Updates „fixen":
+### Bekannte vorbestehende Upstream-Defekte (Stand v0.15.1)
+Diese Fehler existieren **im reinen Upstream v0.15.1** (Zahlen v0.15.1; Details zur v0.13.5-Liste unten) (verifiziert per pristine Worktree, gleiche Bedingungen: isoliertes `HOME=$(mktemp -d)`) und sind NICHT durch unseren Fork/Merge verursacht — nicht im Rahmen eines Updates „fixen":
 - ~~`lint:i18n:coverage` / `validate:ci` brechen (fehlendes `scripts/check-i18n-coverage.ts`)~~ — **seit v0.13.2 upstream repariert**, `validate:ci` läuft im Fork grün.
 - `packages/shared` (`cd packages/shared && bun test`): **13 Fehler**, alle umgebungsbedingt durch das isolierte `HOME` (fehlende `~/.orcha-agents/config-defaults.json` → `loadConfigDefaults()` wirft) oder Upstream-Test-Drift: 5× `system prompt guidance`, 4× `includeCoAuthoredBy handling`, `PiAgent pre-tool labels guard`, `createBackend … Anthropic provider`, `ClaudeAgent model switching (setModel)`, `PromptBuilder volatile/stable context split` (Timing: `getDateTimeContext()` stempelt ISO-Millisekunden, zwei Aufrufe liegen durch den Git-Developer-Context > 1 ms auseinander). Vor dem Merge (v0.11.4-Basis) waren es 9 derselben Familie.
-- `apps/electron` + `server-core` + `session-tools-core`: **11 Fehler** — 8× `BrowserPaneManager` (headless electron-Window-Tests), 2× `RPC_CHANNELS wire-format stability` (Upstream fügte `pages:getShareDataScan` hinzu, ohne die Test-Fixture zu aktualisieren: 355 statt 354), 1× `refreshConnectionRuntime … supportsImages`.
+- **v0.15.1:** `packages/shared` 13 Fehler (gleiche Familie: fehlende `config-defaults.json` im isolierten HOME, u. a. `system prompt guidance`, `includeCoAuthoredBy`, `page data write … concurrent writers`), `apps/electron` + `server-core` + `session-tools-core` **7 Fehler** — beide Listen per `comm` gegen pristine v0.15.1 identisch.
+- `scripts/verify-orcha-build.sh` meldet 1/28 ❌ für `node_modules/@anthropic-ai/claude-agent-sdk/cli.js` — veralteter Check (SDK ≥ 0.2.113 liefert ein natives Binary statt `cli.js`), kein Defekt.
+- (v0.13.5) `apps/electron` + `server-core` + `session-tools-core`: **11 Fehler** — 8× `BrowserPaneManager` (headless electron-Window-Tests), 2× `RPC_CHANNELS wire-format stability` (Upstream fügte `pages:getShareDataScan` hinzu, ohne die Test-Fixture zu aktualisieren: 355 statt 354), 1× `refreshConnectionRuntime … supportsImages`.
 - `session-branch-rollback.isolated.ts` / `prerequisite-manager.isolated.ts` — s. Build-Gotcha zu `.isolated.ts`.
 
 ### Build-Gotchas (Stand v0.13.5)
