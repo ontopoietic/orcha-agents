@@ -9,7 +9,7 @@ import type { HandlerDeps } from '../handler-deps'
 
 // History file name — matches AUTOMATIONS_HISTORY_FILE from @craft-agent/shared/automations/constants
 const HISTORY_FILE = 'automations-history.jsonl'
-interface HistoryEntry { id: string; ts: number; ok: boolean; sessionId?: string; prompt?: string; error?: string; webhook?: { method: string; url: string; statusCode: number; durationMs: number; attempts?: number; error?: string; responseBody?: string } }
+interface HistoryEntry { id: string; ts: number; ok: boolean; sessionId?: string; prompt?: string; error?: string; skipped?: string; webhook?: { method: string; url: string; statusCode: number; durationMs: number; attempts?: number; error?: string; responseBody?: string } }
 
 // Per-workspace config mutex: serializes read-modify-write cycles on automations.json
 // to prevent concurrent IPC calls from clobbering each other's changes.
@@ -357,7 +357,8 @@ export function registerAutomationsHandlers(server: RpcServer, deps: HandlerDeps
       for (const line of content.trim().split('\n')) {
         try {
           const entry = JSON.parse(line)
-          if (entry.id && entry.ts) result[entry.id] = entry.ts
+          // A run skipped by its semantic condition is not an execution.
+          if (entry.id && entry.ts && !entry.skipped) result[entry.id] = entry.ts
         } catch { /* skip malformed lines */ }
       }
       return result

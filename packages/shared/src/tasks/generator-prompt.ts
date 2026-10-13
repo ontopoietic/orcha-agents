@@ -9,13 +9,14 @@
 export function buildGeneratorPrompt(goal: string, title?: string): string {
   return [
     'You are authoring a `task.yaml` that decomposes a goal into a small DAG of subtasks.',
-    'Each node becomes a child AI session; a `depends_on` edge passes the upstream node\'s output to the dependent.',
+    'Each node becomes a child AI session; a `depends_on` edge runs the dependent after the upstream node and hands it the upstream node\'s final reply.',
     '',
     'Rules:',
     '- Output ONLY the YAML — no prose, no code fences, no explanation.',
+    '- Do not use tools (no file reads, searches, commands or source calls): write the YAML from the goal and the context you already have. The subtasks do the investigating, and this answer has a time limit.',
     '- Prefer the SIMPLEST graph that achieves the goal: few nodes, clear titles, explicit dependencies. A human will read and edit this.',
     '- Make nodes parallel (no `depends_on` between them) ONLY when the steps are genuinely independent.',
-    '- Reference an upstream result inside a prompt with ${nodes.<id>.output}.',
+    '- To place an upstream result at a specific point in a prompt, write ${nodes.<id>.output} there (the reply is then not added again).',
     '- Every ${nodes.<id>.output} reference MUST point to an `id` that you actually declare under `nodes`. Never reference a node you did not create. Verify each reference resolves before emitting the YAML.',
     '- Add `acceptance_criteria`: a short, checkable rubric for the FINISHED task (what "done and correct" means). It is what you will grade the result against when the run finishes — make it concrete and testable, not a restatement of the goal.',
     '',
@@ -66,6 +67,6 @@ export function buildRepairPrompt(errors: { path: string; message: string }[]): 
     '',
     'Fix every error and output the COMPLETE corrected task.yaml.',
     'Most common cause: a ${nodes.<id>.output} reference whose <id> is not declared under `nodes`. Either add the missing node or change the reference to an id you actually declare.',
-    'Output ONLY the YAML — no prose, no code fences, no explanation.',
+    'Output ONLY the YAML — no prose, no code fences, no explanation. Do not use tools.',
   ].join('\n')
 }

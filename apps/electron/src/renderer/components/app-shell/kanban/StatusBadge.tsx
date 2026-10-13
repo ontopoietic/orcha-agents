@@ -1,46 +1,26 @@
 import { cn } from '@/lib/utils'
-import type { SessionStatus } from '@/config/session-status-config'
+import { type SessionStatus, getStatusIconStyle } from '@/config/session-status-config'
 
 interface StatusBadgeProps {
   status: SessionStatus
-  /** Pulse the dot to signal live/active work (gated by the board's live-pulse pref). */
-  live?: boolean
   className?: string
 }
 
 /**
- * Read-only status pill: colored dot + label, on a faint tint of the status
- * color so the badge carries its own presence. Independent from the board column
- * (a `needs-review` badge can sit in the In Progress column).
- *
- * When `live`, the dot gains a ping ring to signal an in-flight turn.
+ * Read-only workflow-status chip (design spec §2.4): a neutral chip with the user's status icon in
+ * its configured color, plus the label — status is never carried by color alone. Independent from
+ * the board column (a `needs-review` badge can sit in the In Progress column).
  */
-export function StatusBadge({ status, live = false, className }: StatusBadgeProps) {
-  const color = status.resolvedColor
+export function StatusBadge({ status, className }: StatusBadgeProps) {
   return (
     <span
       className={cn(
-        'inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium whitespace-nowrap',
+        'inline-flex h-5 items-center gap-1 whitespace-nowrap rounded-xs bg-fill-hover pl-1 pr-1.5 text-label-sm text-secondary',
         className
       )}
-      style={{
-        backgroundColor: `color-mix(in srgb, ${color} 12%, transparent)`,
-        color,
-      }}
     >
-      <span className="relative flex h-1.5 w-1.5 shrink-0">
-        {live && (
-          <span
-            className="absolute inline-flex h-full w-full animate-ping rounded-full opacity-75"
-            style={{ backgroundColor: color }}
-            aria-hidden
-          />
-        )}
-        <span
-          className="relative inline-flex h-1.5 w-1.5 rounded-full"
-          style={{ backgroundColor: color }}
-          aria-hidden
-        />
+      <span className="flex size-3.5 shrink-0 items-center justify-center" style={getStatusIconStyle(status)} aria-hidden>
+        {status.icon}
       </span>
       {status.label}
     </span>

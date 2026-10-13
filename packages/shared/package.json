@@ -1,6 +1,6 @@
 {
   "name": "@craft-agent/shared",
-  "version": "0.13.5",
+  "version": "0.15.1",
   "license": "Apache-2.0",
   "description": "Shared business logic for Craft Agents - agent, auth, config, credentials, MCP integration",
   "type": "module",
@@ -21,10 +21,14 @@
     "./auth/callback-page": "./src/auth/callback-page.ts",
     "./auth/types": "./src/auth/types.ts",
     "./config": "./src/config/index.ts",
+    "./config/paths": "./src/config/paths.ts",
     "./docs": "./src/docs/index.ts",
     "./docs/doc-links": "./src/docs/doc-links.ts",
     "./config/types": "./src/config/types.ts",
     "./credentials": "./src/credentials/index.ts",
+    "./decisions": "./src/decisions/index.ts",
+    "./decisions/types": "./src/decisions/types.ts",
+    "./decisions/settings": "./src/decisions/settings.ts",
     "./mcp": "./src/mcp/index.ts",
     "./prompts": "./src/prompts/index.ts",
     "./sessions": "./src/sessions/index.ts",
@@ -37,6 +41,7 @@
     "./pages": "./src/pages/index.ts",
     "./pages/types": "./src/pages/types.ts",
     "./pages/data-store": "./src/pages/data-store.ts",
+    "./pages/claude-artifact": "./src/pages/claude-artifact.ts",
     "./sources": "./src/sources/index.ts",
     "./sources/types": "./src/sources/types.ts",
     "./skills": "./src/skills/index.ts",
@@ -90,12 +95,12 @@
     "incr-regex-package": "^1.0.4",
     "shell-quote": "^1.8.3",
     "yaml": "^2.8.2",
-    "@earendil-works/pi-agent-core": "0.87.1",
-    "@earendil-works/pi-ai": "0.87.1",
-    "@earendil-works/pi-coding-agent": "0.87.1"
+    "@earendil-works/pi-agent-core": "1.1.0",
+    "@earendil-works/pi-ai": "1.1.0",
+    "@earendil-works/pi-coding-agent": "1.1.0"
   },
   "peerDependencies": {
-    "@anthropic-ai/claude-agent-sdk": "0.3.280",
+    "@anthropic-ai/claude-agent-sdk": "0.3.296",
     "@modelcontextprotocol/sdk": ">=1.29.0",
     "zod": ">=4.0.0"
   },

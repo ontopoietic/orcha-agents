@@ -258,6 +258,28 @@ export interface PageShareInfo {
 }
 
 // ============================================================================
+// Claude artifact (claude.ai publication)
+// ============================================================================
+
+/**
+ * Pointer to the claude.ai artifact a page was published to with "Publish as
+ * Claude artifact". Managed field (written only by the publish flow, excluded
+ * from `updatePage`); claude.ai stays authoritative. Republishing passes `url`
+ * so the same artifact is updated in place.
+ */
+export interface PageClaudeArtifactInfo {
+  /** claude.ai/artifact/{id} link */
+  url: string;
+  artifactId?: string;
+  /** sha256 hex of index.html at the last publish (drift = "update available") */
+  publishedContentDigest: string;
+  /** First publish (epoch ms) */
+  publishedAt: number;
+  /** Last publish (epoch ms) */
+  updatedAt: number;
+}
+
+// ============================================================================
 // Preview thumbnail (cached poster)
 // ============================================================================
 
@@ -317,4 +339,6 @@ export interface PageConfig {
   share?: PageShareInfo;
   /** Cached preview poster pointer (absent = none captured yet) */
   thumbnail?: PageThumbnailInfo;
+  /** claude.ai artifact pointer (absent = never published there) */
+  claudeArtifact?: PageClaudeArtifactInfo;
 }

@@ -180,22 +180,14 @@ export function CompactSessionListFilter({
     <Drawer open={open} onOpenChange={setOpen}>
       <DrawerTrigger asChild>
         <HeaderIconButton
-          icon={<ListFilter className="h-4 w-4" />}
+          icon={<ListFilter className="size-4" />}
           aria-label={t('sidebar.filterChats')}
-          className={cn(
-            'rounded-[8px]',
-            hasUserFilter && 'bg-accent/5 text-accent shadow-tinted',
-          )}
-          style={
-            hasUserFilter
-              ? ({ '--shadow-color': 'var(--accent-rgb)' } as React.CSSProperties)
-              : undefined
-          }
+          className={cn(hasUserFilter && 'bg-accent-tint text-accent hover:bg-accent-tint hover:text-accent')}
         />
       </DrawerTrigger>
 
       <DrawerContent className="max-h-[75vh]">
-        <DrawerHeader className="flex flex-row items-center justify-between gap-3 !text-left">
+        <DrawerHeader className="flex flex-row items-center justify-between gap-3">
           <DrawerTitle>{t('sidebar.filterChats')}</DrawerTitle>
           {hasUserFilter && (
             <button
@@ -204,7 +196,7 @@ export function CompactSessionListFilter({
                 setListFilter(new Map())
                 setLabelFilter(new Map())
               }}
-              className="text-xs text-muted-foreground hover:text-foreground"
+              className="text-label text-secondary hover:text-foreground"
             >
               {t('common.clear')}
             </button>
@@ -212,20 +204,20 @@ export function CompactSessionListFilter({
         </DrawerHeader>
 
         <div className="px-4 pb-2">
-          <label className="bg-foreground/5 rounded-[8px] px-3 h-10 flex items-center gap-2">
-            <Search className="h-4 w-4 text-muted-foreground shrink-0" />
+          <label className="field-surface rounded-md px-3 h-control-xl flex items-center gap-2">
+            <Search className="size-4 text-tertiary shrink-0" />
             <input
               type="text"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder={t('sidebar.searchStatusesLabels')}
-              className="flex-1 min-w-0 bg-transparent text-sm text-foreground placeholder:text-muted-foreground outline-none"
+              className="flex-1 min-w-0 bg-transparent text-copy-lg text-foreground placeholder:text-tertiary outline-none"
             />
             {query && (
               <button
                 type="button"
                 onClick={() => setQuery('')}
-                className="shrink-0 h-6 w-6 flex items-center justify-center text-muted-foreground rounded-full hover:bg-foreground/5"
+                className="shrink-0 size-7 flex items-center justify-center text-tertiary rounded-full hover:bg-fill-hover"
                 aria-label={t('common.clear')}
               >
                 <X className="h-3.5 w-3.5" />
@@ -278,7 +270,7 @@ export function CompactSessionListFilter({
                     label={
                       item.parentPath ? (
                         <>
-                          <span className="text-muted-foreground">{item.parentPath}</span>
+                          <span className="text-tertiary">{item.parentPath}</span>
                           {item.label}
                         </>
                       ) : (
@@ -296,7 +288,7 @@ export function CompactSessionListFilter({
           )}
 
           {isSearching && results.states.length === 0 && results.labels.length === 0 && (
-            <div className="px-4 py-6 text-center text-sm text-muted-foreground">
+            <div className="px-4 py-6 text-center text-label text-tertiary">
               No matches
             </div>
           )}
@@ -330,10 +322,10 @@ export function CompactSessionListFilter({
                 <button
                   type="button"
                   onClick={onOpenSearch}
-                  className="w-full flex items-center gap-3 px-3 py-3 rounded-[10px] hover:bg-foreground/5 active:bg-foreground/10 transition-colors text-left"
+                  className="w-full flex items-center gap-3 px-2 min-h-row-touch rounded-md hover:bg-fill-hover active:bg-fill-pressed text-left"
                 >
-                  <Search className="h-4 w-4 text-muted-foreground shrink-0" />
-                  <span className="text-sm font-medium">{t('sidebar.search')}</span>
+                  <Search className="size-4 text-tertiary shrink-0" />
+                  <span className="text-copy font-medium">{t('sidebar.search')}</span>
                 </button>
               </DrawerClose>
             </div>
@@ -355,7 +347,7 @@ function Section({
 }) {
   return (
     <div className="pt-3">
-      <div className="px-3 pb-1 flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground/70 uppercase tracking-wider">
+      <div className="px-2 pb-1 flex items-center gap-1.5 text-label-sm font-medium text-tertiary">
         {icon}
         <span>{title}</span>
       </div>
@@ -405,14 +397,14 @@ function FilterRow({
       role="button"
       onClick={pinned ? undefined : onTap}
       className={cn(
-        'flex items-center gap-3 px-3 py-2.5 rounded-[10px] transition-colors',
-        pinned ? 'opacity-60' : 'cursor-pointer hover:bg-foreground/5 active:bg-foreground/10',
+        'flex items-center gap-3 px-3 min-h-row-touch rounded-md',
+        pinned ? 'opacity-60' : 'cursor-pointer hover:bg-fill-hover active:bg-fill-pressed',
       )}
     >
       {renderedIcon}
-      <span className="flex-1 min-w-0 text-sm truncate">{label}</span>
-      {pinned && <Check className="h-4 w-4 text-muted-foreground shrink-0" />}
-      {!pinned && radioSelected && <Check className="h-4 w-4 text-foreground/70 shrink-0" />}
+      <span className="flex-1 min-w-0 text-copy truncate">{label}</span>
+      {pinned && <Check className="size-4 text-tertiary shrink-0" />}
+      {!pinned && radioSelected && <Check className="size-4 text-accent shrink-0" />}
       {!pinned && mode && (
         <button
           type="button"
@@ -421,16 +413,11 @@ function FilterRow({
             onModeTap?.()
           }}
           className={cn(
-            'shrink-0 h-7 px-2.5 rounded-[6px] text-xs font-medium flex items-center gap-1 shadow-tinted',
+            'shrink-0 h-9 min-w-9 px-2.5 rounded-sm text-label-sm font-medium flex items-center justify-center gap-1',
             mode === 'include'
-              ? 'bg-background text-foreground'
-              : 'bg-destructive/10 text-destructive',
+              ? 'bg-raised text-foreground shadow-elev-1'
+              : 'bg-destructive-tint text-destructive',
           )}
-          style={
-            mode === 'exclude'
-              ? ({ '--shadow-color': 'var(--destructive-rgb)' } as React.CSSProperties)
-              : undefined
-          }
           aria-label={mode === 'include' ? 'Switch to exclude' : 'Switch to include'}
         >
           {mode === 'include' ? <Check className="h-3 w-3" /> : <X className="h-3 w-3" />}
@@ -487,10 +474,10 @@ function PinnedSummary({
 
 function PinnedChip({ icon, label }: { icon: React.ReactNode; label: React.ReactNode }) {
   return (
-    <span className="inline-flex items-center gap-1.5 h-7 pl-2 pr-2.5 rounded-[6px] bg-foreground/5 text-xs text-foreground/70">
+    <span className="inline-flex items-center gap-1.5 h-7 pl-2 pr-2.5 rounded-sm bg-fill-hover text-label text-secondary">
       <span className="shrink-0 inline-flex items-center justify-center">{icon}</span>
       <span className="truncate">{label}</span>
-      <Check className="h-3 w-3 shrink-0 text-muted-foreground" />
+      <Check className="h-3 w-3 shrink-0 text-tertiary" />
     </span>
   )
 }

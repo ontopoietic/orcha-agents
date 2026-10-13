@@ -21,6 +21,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import { IconButton } from '@/components/ui/button'
 
 interface Props {
   open: boolean
@@ -134,28 +135,27 @@ export function TelegramSupergroupPairingDialog({ open, onOpenChange, botUsernam
           </DialogDescription>
         </DialogHeader>
 
-        <div className="flex flex-col items-center gap-4 py-4">
+        <div className="flex flex-col items-center gap-4 py-2">
           {error ? (
-            <p className="text-sm text-destructive text-center">{error}</p>
+            <p className="text-label text-destructive text-center">{error}</p>
           ) : code ? (
             <>
-              <div className="rounded-lg bg-muted px-6 py-4 font-mono text-3xl font-bold tracking-[0.3em]">
+              <div className="rounded-lg bg-sunken px-6 py-4 font-mono text-display font-semibold tracking-[0.3em] tabular-nums">
                 {code}
               </div>
 
-              <div className="flex items-center gap-2 text-sm">
-                <code className="rounded bg-muted px-2 py-1 font-mono">{pairCommand}</code>
-                <button
-                  type="button"
+              <div className="flex items-center gap-1">
+                <code className="rounded-sm bg-sunken px-2 py-1 text-mono-ui">{pairCommand}</code>
+                <IconButton
+                  size="sm"
+                  aria-label={t('common.copy')}
+                  tooltip
                   onClick={handleCopy}
-                  className="inline-flex items-center gap-1 rounded px-2 py-1 text-xs hover:bg-accent"
-                  title={t('common.copy')}
-                >
-                  <Copy className="h-3.5 w-3.5" />
-                </button>
+                  icon={<Copy className="size-3.5" />}
+                />
               </div>
 
-              <p className="text-center text-sm text-muted-foreground">
+              <p className="text-center text-label text-secondary">
                 {t('settings.messaging.telegram.supergroup.dialogSendHint', {
                   defaultValue:
                     'Send this command from any topic in your supergroup. The dialog closes once paired.',
@@ -167,15 +167,15 @@ export function TelegramSupergroupPairingDialog({ open, onOpenChange, botUsernam
                   href={botLink}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1 text-sm text-primary hover:underline"
+                  className="inline-flex items-center gap-1 text-label text-accent hover:underline"
                 >
-                  <ExternalLink className="h-3.5 w-3.5" />
+                  <ExternalLink className="size-3.5" />
                   @{botUsername}
                 </a>
               )}
 
               {secondsLeft > 0 && (
-                <p className="text-center text-xs text-muted-foreground">
+                <p className="text-center text-label-sm text-tertiary tabular-nums">
                   {t('dialog.pairingCode.expiresIn', {
                     minutes,
                     seconds: String(seconds).padStart(2, '0'),
@@ -184,7 +184,7 @@ export function TelegramSupergroupPairingDialog({ open, onOpenChange, botUsernam
               )}
             </>
           ) : (
-            <p className="text-sm text-muted-foreground">{t('common.loading', { defaultValue: 'Loading…' })}</p>
+            <p className="text-label text-secondary">{t('common.loading', { defaultValue: 'Loading…' })}</p>
           )}
         </div>
       </DialogContent>

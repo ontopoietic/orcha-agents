@@ -11,7 +11,7 @@
 
 import * as React from 'react'
 import { useState, useCallback, useEffect, useRef } from 'react'
-import { Cloud, CloudOff, Monitor, Send } from 'lucide-react'
+import { Send } from 'lucide-react'
 import { toast } from 'sonner'
 import {
   Dialog,
@@ -22,9 +22,8 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
-import { WorkspaceAvatar } from '@/components/ui/workspace-avatar'
 import { useWorkspaceIcons } from '@/hooks/useWorkspaceIcon'
-import { cn } from '@/lib/utils'
+import { WorkspaceTargetList, type RemoteHealth } from './WorkspaceTargetList'
 import type { Workspace, ExportResourcesOptions, ResourceImportMode } from '../../../shared/types'
 
 export type SendResourceType = 'source' | 'skill' | 'automation'
@@ -67,7 +66,7 @@ export function SendResourceToWorkspaceDialog({
   const workspaceIconMap = useWorkspaceIcons(workspaces)
 
   // Health check results for remote workspaces
-  const [remoteHealthMap, setRemoteHealthMap] = useState<Map<string, 'ok' | 'error' | 'checking'>>(new Map())
+  const [remoteHealthMap, setRemoteHealthMap] = useState<Map<string, RemoteHealth>>(new Map())
   const healthCheckAbort = useRef<AbortController | null>(null)
 
   // All workspaces except current (both local and remote)
@@ -202,7 +201,7 @@ export function SendResourceToWorkspaceDialog({
       <DialogContent className="sm:max-w-sm">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <Send className="h-4 w-4" />
+            <Send className="size-4 text-tertiary" />
             Send to Workspace
           </DialogTitle>
           <DialogDescription>
@@ -211,67 +210,26 @@ export function SendResourceToWorkspaceDialog({
         </DialogHeader>
 
         {/* Workspace list */}
-        <div className="flex flex-col gap-1 max-h-64 overflow-y-auto py-1">
-          {targetWorkspaces.length === 0 ? (
-            <p className="text-sm text-muted-foreground px-2 py-4 text-center">
-              No other workspaces available.
-            </p>
-          ) : (
-            targetWorkspaces.map(workspace => {
-              const isSelected = selectedWorkspaceId === workspace.id
-              const isRemote = !!workspace.remoteServer
-              const healthStatus = remoteHealthMap.get(workspace.id)
-              const isDisconnected = isRemote && healthStatus === 'error'
-              const isChecking = isRemote && healthStatus === 'checking'
+        <WorkspaceTargetList
+          workspaces={targetWorkspaces}
+          selectedId={selectedWorkspaceId}
+          onSelect={setSelectedWorkspaceId}
+          disabled={isSending}
+          remoteHealth={remoteHealthMap}
+          iconById={workspaceIconMap}
+          emptyLabel="No other workspaces available."
+        />
 
-              return (
-                <button
-                  key={workspace.id}
-                  type="button"
-                  disabled={isSending || isDisconnected}
-                  onClick={() => setSelectedWorkspaceId(workspace.id)}
-                  className={cn(
-                    'flex items-center gap-2 w-full px-2 py-2 rounded-md text-left text-sm transition-colors',
-                    'hover:bg-foreground/5 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-                    isSelected && 'bg-foreground/10 ring-1 ring-foreground/15',
-                    isDisconnected && 'opacity-50 cursor-not-allowed hover:bg-transparent',
-                  )}
-                >
-                  <WorkspaceAvatar
-                    workspaceId={workspace.id}
-                    workspaceName={workspace.name}
-                    src={workspaceIconMap.get(workspace.id)}
-                    className="h-5 w-5 rounded-full ring-1 ring-border/50 shrink-0"
-                    fallbackClassName="rounded-full"
-                  />
-                  <span className="flex-1 truncate">{workspace.name}</span>
-                  {isRemote ? (
-                    isDisconnected ? (
-                      <CloudOff className="h-3.5 w-3.5 text-muted-foreground/50 shrink-0" />
-                    ) : (
-                      <Cloud className={cn(
-                        'h-3.5 w-3.5 shrink-0',
-                        isChecking ? 'text-muted-foreground/30 animate-pulse' : 'text-muted-foreground',
-                      )} />
-                    )
-                  ) : (
-                    <Monitor className="h-3.5 w-3.5 text-muted-foreground/50 shrink-0" />
-                  )}
-                </button>
-              )
-            })
-          )}
-        </div>
-
-        <DialogFooter className="gap-2 sm:gap-0">
+        <DialogFooter>
           <Button
-            variant="outline"
+            variant="ghost"
             onClick={() => onOpenChange(false)}
             disabled={isSending}
           >
             Cancel
           </Button>
           <Button
+            variant="primary"
             onClick={handleSend}
             disabled={!selectedWorkspaceId || isSending}
           >

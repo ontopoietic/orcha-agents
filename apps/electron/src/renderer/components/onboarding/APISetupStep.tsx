@@ -9,7 +9,7 @@ import type { LlmAuthType, LlmProviderType } from "@craft-agent/shared/config/ll
 export type ProviderSegment = 'anthropic' | 'pi'
 
 const BetaBadge = ({ label }: { label: string }) => (
-  <span className="inline px-1.5 pt-[2px] pb-[3px] text-[10px] font-accent font-bold rounded-[4px] bg-accent text-background ml-1 relative -top-[1px]">
+  <span className="inline-flex h-4 items-center px-1.5 text-caption font-semibold rounded-xs bg-accent-tint text-accent ml-1 align-middle">
     {label}
   </span>
 )
@@ -93,19 +93,19 @@ function OptionButton({
     <button
       onClick={() => onSelect(option.id)}
       className={cn(
-        "flex w-full items-start gap-4 rounded-xl p-4 text-left transition-all",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-        "hover:bg-foreground/[0.02] shadow-minimal",
+        // Same tile as the provider picker: hairline ring, selected = 2px accent ring on an accent tint
+        "motion-press flex w-full items-start gap-3 rounded-md px-3 py-2.5 text-left",
+        "transition-[background-color,box-shadow] duration-micro ease-out-subtle hover:duration-instant",
         isSelected
-          ? "bg-background"
-          : "bg-foreground-2"
+          ? "ring-2 ring-inset ring-accent-solid bg-accent-tint"
+          : "ring-1 ring-inset ring-border hover:bg-fill-hover"
       )}
     >
       {/* Icon */}
       <div
         className={cn(
-          "flex size-10 shrink-0 items-center justify-center rounded-lg",
-          isSelected ? "bg-foreground/10 text-foreground" : "bg-muted text-muted-foreground"
+          "flex size-8 shrink-0 items-center justify-center rounded-md",
+          isSelected ? "text-accent" : "text-secondary"
         )}
       >
         {option.icon}
@@ -114,9 +114,9 @@ function OptionButton({
       {/* Content */}
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
-          <span className="font-medium text-sm">{option.name}</span>
+          <span className="font-medium text-label">{option.name}</span>
         </div>
-        <p className="mt-1 text-xs text-muted-foreground">
+        <p className="mt-1 text-label-sm text-tertiary">
           {option.description}
         </p>
       </div>
@@ -124,10 +124,10 @@ function OptionButton({
       {/* Check */}
       <div
         className={cn(
-          "flex size-5 shrink-0 items-center justify-center rounded-full border-2 transition-colors",
+          "flex size-5 shrink-0 items-center justify-center rounded-full border-2 transition-colors duration-micro",
           isSelected
-            ? "border-foreground bg-foreground text-background"
-            : "border-muted-foreground/20"
+            ? "border-accent-solid bg-accent-solid text-on-accent"
+            : "border-control"
         )}
       >
         {isSelected && <Check className="size-3" strokeWidth={3} />}
@@ -151,16 +151,16 @@ function ProviderSegmentedControl({
   const segments: ProviderSegment[] = ['anthropic', 'pi']
 
   return (
-    <div className="flex rounded-xl bg-foreground/[0.03] p-1 mb-4">
+    <div className="flex rounded-md bg-fill-hover p-0.5 mb-4">
       {segments.map((segment) => (
         <button
           key={segment}
           onClick={() => onSegmentChange(segment)}
           className={cn(
-            "flex-1 px-4 py-2 text-sm font-medium rounded-lg transition-all",
+            "flex-1 h-control px-3 text-label font-medium rounded-sm transition-[background-color,color,box-shadow] duration-micro ease-out-subtle",
             activeSegment === segment
-              ? "bg-background shadow-minimal text-foreground"
-              : "text-muted-foreground hover:text-foreground"
+              ? "bg-floating shadow-elev-1 text-foreground"
+              : "text-secondary hover:text-foreground"
           )}
         >
           {segmentLabels[segment]}
@@ -265,8 +265,8 @@ export function APISetupStep({
       />
 
       {/* Segment description */}
-      <div className="bg-foreground-2 rounded-[8px] p-4 mb-3">
-        <p className="text-sm text-muted-foreground text-center">
+      <div className="bg-sunken rounded-lg p-4 mb-3">
+        <p className="text-label text-secondary text-center">
           {SEGMENT_DESCRIPTIONS[activeSegment]}
         </p>
       </div>

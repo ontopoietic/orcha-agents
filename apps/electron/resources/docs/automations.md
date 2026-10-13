@@ -64,8 +64,8 @@ craft-agent automation validate
 
 | Event | Trigger | Match Value |
 |-------|---------|-------------|
-| `LabelAdd` | Label added to session | Label ID (e.g., `bug`, not `Bug`) |
-| `LabelRemove` | Label removed from session | Label ID (e.g., `bug`, not `Bug`) |
+| `LabelAdd` | Label added to session | The label entry: the ID for a plain label (`bug`, not `Bug`), `id::value` for a valued one (`priority::3`; match it with `^priority(::|$)`) |
+| `LabelRemove` | Label removed from session | The label entry, as for `LabelAdd` |
 | `LabelConfigChange` | Label configuration changed | Always matches |
 | `PermissionModeChange` | Permission mode changed | New mode name |
 | `FlagChange` | Session flagged/unflagged | `true` or `false` |
@@ -231,7 +231,7 @@ These are automatically set by the automation system based on the triggering eve
 
 | Event | Variable | Description |
 |-------|----------|-------------|
-| `LabelAdd` / `LabelRemove` | `$CRAFT_LABEL` | The label that was added/removed |
+| `LabelAdd` / `LabelRemove` | `$CRAFT_LABEL` | The label entry that was added/removed (`bug`, `priority::3`) |
 | `PermissionModeChange` | `$CRAFT_OLD_MODE`, `$CRAFT_NEW_MODE` | Previous and new permission mode |
 | `FlagChange` | `$CRAFT_IS_FLAGGED` | `true` or `false` |
 | `SessionStatusChange` | `$CRAFT_OLD_STATE`, `$CRAFT_NEW_STATE` | Previous and new status |
@@ -444,6 +444,33 @@ Combine conditions with `and`, `or`, and `not`:
 | `not` | None of the sub-conditions may pass |
 
 **Nesting depth:** Conditions can be nested up to 8 levels deep. A simplification warning is emitted at depth 4. Unknown condition types fail closed (evaluate to false).
+
+### Semantic Condition (requires the Decision Model)
+
+`conditions` can only compare fields. `semanticCondition` asks a yes/no question that the decision model (Jev, Settings > AI > Decision model, toggle "Automation conditions") answers before a prompt action starts a session:
+
+```json
+{
+  "matcher": "^needs-triage$",
+  "semanticCondition": {
+    "question": "Is the user reporting a bug or crash, rather than asking a question?",
+    "threshold": 0.6
+  },
+  "actions": [{ "type": "prompt", "prompt": "Triage the bug in session $CRAFT_SESSION_NAME" }]
+}
+```
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `question` | string | **Required.** The yes/no question, in English (max 500 characters). |
+| `threshold` | number | "Yes" probability needed to run, `0 < threshold <= 1`. Default `0.5`. |
+
+- The model sees the event (name, automation name, payload fields) and, for session events, the session's name, labels, status and its latest user and assistant messages (1,500 characters each).
+- Below the threshold the run is skipped and the automation history records it as skipped, not failed.
+- A matcher is judged once per event: all of its prompt actions run, or all are skipped.
+- **Inert without the decision model:** when it is off, unavailable or fails, the automation runs as it would without the condition.
+- **Loop guard:** an automation never runs for an event about a session it created itself (its own prompt matching a label rule would otherwise re-trigger it forever), and a chain of automation-created sessions triggering further automations stops at 3 sessions deep. Such runs are recorded as skipped.
+- It applies to prompt actions only; webhook and script actions are not gated.
 
 ## Permission Mode
 

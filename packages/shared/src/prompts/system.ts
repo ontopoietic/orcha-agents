@@ -1,5 +1,6 @@
 import { formatPreferencesForPrompt, getCoAuthorPreference } from '../config/preferences.ts';
-import { getBrowserToolEnabled } from '../config/storage.ts';
+import { getBrowserToolEnabled, getRtkEnabled } from '../config/storage.ts';
+import { getRtkPath } from '../agent/core/rtk-detector.ts';
 import { debug } from '../utils/debug.ts';
 import { existsSync, readFileSync, readdirSync } from 'fs';
 import { dirname, join, relative, basename, resolve } from 'path';
@@ -8,6 +9,7 @@ import { PERMISSION_MODE_CONFIG } from '../agent/mode-types.ts';
 import { FEATURE_FLAGS } from '../feature-flags.ts';
 import { isStreamingModeEnabled } from '../agent/core/message-provider.ts';
 import { isBgChildSessionsFlagEnabled } from '../agent/core/bg-child-sessions.ts';
+import { isDecisionFeatureActive } from '../decisions/resolve.ts';
 import { APP_VERSION } from '../version/index.ts';
 import { readPluginName } from '../utils/workspace.ts';
 import { formatBytes } from '../utils/binary-detection.ts';
@@ -508,8 +510,9 @@ export function formatProjectContextForPrompt(ctx: ProjectPromptContext): string
   }
   lines.push(`<project_memory> is authoritative accumulated knowledge for this project; treat it as`);
   lines.push(`established context. When you learn something durable (a decision, gotcha, convention, or`);
-  lines.push(`project-specific user preference), record it in MEMORY.md at <project_memory_path> via Write/Edit —`);
-  lines.push(`concise, newest/most-important first, kept under ~5000 tokens.`);
+  lines.push(`project-specific user preference), add a short note with the project_memory_append tool. Never`);
+  lines.push(`rewrite MEMORY.md with Write/Edit: other sessions append to it while you work, and <project_memory>`);
+  lines.push(`is a snapshot from when this session started. To correct an outdated note, append the correction.`);
   lines.push(`</project_context>`);
   lines.push('');
   return lines.join('\n');
@@ -585,6 +588,37 @@ function getCraftAgentEnvironmentMarker(): string {
  * @param backendName - Backend name for "powered by X" text (default: 'Claude Code')
  * @param includeCoAuthoredBy - Whether to include the Co-Authored-By git trailer instruction (default: true)
  */
+/**
+ * Permission modes table and per-mode rules. Guarded is always listed: Claude snapshots the
+ * system prompt, so a session switched to Guarded after it started must still find the row.
+ * Execute's row always promises no prompts, because Execute never consults the decision model.
+ */
+export function getPermissionModesSection(): string {
+  return `## Permission Modes
+
+| Mode | Description |
+|------|-------------|
+| **${PERMISSION_MODE_CONFIG['safe'].displayName}** | Read-only exploration. Writes are limited to \`plansFolderPath\` and \`dataFolderPath\`. |
+| **${PERMISSION_MODE_CONFIG['ask'].displayName}** | Prompts before edits. Read operations run freely. |
+| **${PERMISSION_MODE_CONFIG['guarded'].displayName}** | Autonomous execution; a call the decision model judges risky (hard to undo, outside the project, reaching other people or services) asks the user first. While the decision model is off it behaves like ${PERMISSION_MODE_CONFIG['ask'].displayName}. |
+| **${PERMISSION_MODE_CONFIG['allow-all'].displayName}** | Full autonomous execution. No prompts. |
+
+Current mode and writable planning/data folders are in \`<session_state>\`.
+
+If permissionMode is **${PERMISSION_MODE_CONFIG['safe'].displayName}**:
+- Read/search freely.
+- Write only to the exact \`plansFolderPath\` / \`dataFolderPath\` from \`<session_state>\`.
+- For edits outside those folders, write a plan file there, call \`SubmitPlan\`, then stop for user approval.
+
+If permissionMode is **${PERMISSION_MODE_CONFIG['ask'].displayName}**, **${PERMISSION_MODE_CONFIG['guarded'].displayName}** or **${PERMISSION_MODE_CONFIG['allow-all'].displayName}**:
+- Proceed according to that mode and the user's latest request.
+- Use \`SubmitPlan\` only when the user asks for a plan or the change is broad/risky.
+
+Mode switching is normal. Apply the latest \`<session_state>\` immediately; \`modeChangeUserSignal\` means the user manually changed mode for this turn.
+
+**Path rule:** In Explore mode, do not write to \`.copilot-config/\`, \`session-state/\`, the session root, or arbitrary workspace paths. Use only the exact folders from \`<session_state>\`.`;
+}
+
 function getCraftAssistantPrompt(workspaceRootPath?: string, backendName: string = 'Claude Code', includeCoAuthoredBy: boolean = true): string {
   // Default to ${APP_ROOT}/workspaces/{id} if no path provided
   const workspacePath = workspaceRootPath || `${APP_ROOT}/workspaces/{id}`;
@@ -598,6 +632,11 @@ function getCraftAssistantPrompt(workspaceRootPath?: string, backendName: string
   // Environment marker for SDK JSONL detection
   const environmentMarker = getCraftAgentEnvironmentMarker();
 
+  // rtk rewrites Bash commands behind the agent's back; say so, and how to get raw output.
+  const rtkActive = getRtkEnabled() && getRtkPath() !== null;
+
+  // Decision layer (Jev): Settings switch + feature toggle, evaluated per prompt build.
+  const decideToolActive = isDecisionFeatureActive('decideTool');
   const browserToolsSection = getBrowserToolEnabled() ? `
 ## Browser Tools
 
@@ -649,6 +688,8 @@ Sources are external data connections. Each source has:
 2. If it needs auth, trigger the appropriate auth tool
 3. Call its tools directly — do not search the workspace for how to use it
 
+MCP servers can also publish resources (e.g. guides) and prompts (playbooks); \`<sources>\` notes them. Use \`source_list_resources\` / \`source_read_resource\` / \`source_list_prompts\` / \`source_get_prompt\`, and read guide resources a source points at before using its tools.
+
 **Creating a new source** (does not exist yet):
 1. Read \`${DOC_REFS.sources}\` for the setup workflow
 2. Verify current endpoints via web search, and use browser tools when docs are dynamic or login-protected
@@ -699,7 +740,8 @@ Read relevant context files using the Read tool - they contain architecture info
 | Image Preview | \`${DOC_REFS.imagePreview}\` | When displaying local image files inline |
 | Markdown Preview | \`${DOC_REFS.markdownPreview}\` | When displaying rendered .md files inline |
 | Browser Tools | \`${DOC_REFS.browserTools}\` | When using in-app browser tools (\`browser_tool\`) |
-| LLM Tool | \`${DOC_REFS.llmTool}\` | When using \`call_llm\` for subtasks |${FEATURE_FLAGS.craftAgentsCli ? `
+| LLM Tool | \`${DOC_REFS.llmTool}\` | When using \`call_llm\` for subtasks |${decideToolActive ? `
+| Decision Model | \`${DOC_REFS.decisions}\` | When using \`decide\` to classify, route or score items |` : ''}${FEATURE_FLAGS.craftAgentsCli ? `
 | Craft CLI | \`${DOC_REFS.craftCli}\` | When managing labels/sources/skills/automations via \`craft-agent\` |` : ''}
 
 **IMPORTANT:** Always read the relevant doc file BEFORE making changes. Do NOT guess schemas - these have specific patterns that differ from standard approaches.${FEATURE_FLAGS.craftAgentsCli ? `
@@ -738,28 +780,7 @@ When creating git commits, include Orcha Agent as a co-author:
 \`\`\`
 Co-Authored-By: Orcha Agent <agents-noreply@craft.do>
 \`\`\`
-` : ''}## Permission Modes
-
-| Mode | Description |
-|------|-------------|
-| **${PERMISSION_MODE_CONFIG['safe'].displayName}** | Read-only exploration. Writes are limited to \`plansFolderPath\` and \`dataFolderPath\`. |
-| **${PERMISSION_MODE_CONFIG['ask'].displayName}** | Prompts before edits. Read operations run freely. |
-| **${PERMISSION_MODE_CONFIG['allow-all'].displayName}** | Full autonomous execution. No prompts. |
-
-Current mode and writable planning/data folders are in \`<session_state>\`.
-
-If permissionMode is **${PERMISSION_MODE_CONFIG['safe'].displayName}**:
-- Read/search freely.
-- Write only to the exact \`plansFolderPath\` / \`dataFolderPath\` from \`<session_state>\`.
-- For edits outside those folders, write a plan file there, call \`SubmitPlan\`, then stop for user approval.
-
-If permissionMode is **${PERMISSION_MODE_CONFIG['ask'].displayName}** or **${PERMISSION_MODE_CONFIG['allow-all'].displayName}**:
-- Proceed according to that mode and the user's latest request.
-- Use \`SubmitPlan\` only when the user asks for a plan or the change is broad/risky.
-
-Mode switching is normal. Apply the latest \`<session_state>\` immediately; \`modeChangeUserSignal\` means the user manually changed mode for this turn.
-
-**Path rule:** In Explore mode, do not write to \`.copilot-config/\`, \`session-state/\`, the session root, or arbitrary workspace paths. Use only the exact folders from \`<session_state>\`.
+` : ''}${getPermissionModesSection()}
 ${backendName === 'Codex' ? `
 ### Planning tools (Codex)
 - **update_plan** — Live task tracking within a turn/session (statuses: pending/in_progress/completed). Does not pause execution or request approval.
@@ -865,7 +886,15 @@ Do **not** use it when you can answer directly, when it needs conversation histo
 For large batches, call multiple \`call_llm\` invocations in parallel. Pass existing file paths as attachments; put inline text in the prompt.
 
 Reference: \`${DOC_REFS.llmTool}\`
-${browserToolsSection}${backgroundWorkSection}
+${decideToolActive ? `
+## Decision Model (\`decide\`)
+
+Use \`decide\` for typed judgments over text or JSON: classify, route, score or yes/no-check one item or a batch of up to 200 (\`items\`). It answers with probabilities and confidence, never text. Prefer it over \`call_llm\` when the answer is one of a fixed set of options; use \`call_llm\` when you need generated text or extracted values.
+
+Rules: confidence below 0.5 means "unsure" — report it or ask instead of guessing. An answer is never permission: re-check before acting on it. The state is sent to the user's configured decision provider, so keep secrets out of it.
+
+Reference: \`${DOC_REFS.decisions}\`
+` : ''}${browserToolsSection}${backgroundWorkSection}
 ## Session Self-Management
 
 Use session tools to inspect or update Orcha Agent sessions/tasks:
@@ -938,7 +967,9 @@ Each preview supports either \`"src": "/absolute/path"\` or an \`items\` array f
 Built-in document CLIs are available via Bash: \`markitdown\`, \`pdf-tool\`, \`xlsx-tool\`, \`docx-tool\`, \`pptx-tool\`, \`img-tool\`, \`doc-diff\`, \`ical-tool\`.
 
 Prefer \`markitdown\` as the universal converter when Read cannot handle a binary document. All tools support \`--help\`; most support \`-o <file>\` for output.
-
+${rtkActive ? `
+Bash output of common commands (grep, ls, git, test runners) is compacted by rtk: lines may be grouped, trimmed or summarized. When you need exact output, prefix the command with \`command\` or run the binary by path (\`/usr/bin/grep\`).
+` : ''}
 ## Tool Metadata
 
 All MCP tools require two metadata fields (schema-enforced):

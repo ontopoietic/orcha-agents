@@ -19,8 +19,11 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
 } from '@/components/ui/dropdown-menu'
+import { Button, IconButton } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Textarea } from '@/components/ui/textarea'
 import type { KanbanModelProviderGroup, TaskEditorTarget } from './types'
-import { uid, buildSpec, specToSubtasks, canDependOn, quickAddNodeId, quickAddChildToSubtask, DEFAULT_REPAIR_ATTEMPTS, MAX_REPAIR_ATTEMPTS_CAP, type EditorSubtask, type TaskPermissionMode } from './task-spec-form'
+import { uid, buildSpec, specToSubtasks, canDependOn, quickAddNodeId, quickAddChildToSubtask, DEFAULT_REPAIR_ATTEMPTS, MAX_REPAIR_ATTEMPTS_CAP, type EditorSubtask, type TaskPermissionMode, isTaskPermissionMode } from './task-spec-form'
 import { resolveNodeStatePill } from './node-state-pill'
 import { SourceAvatar } from '@/components/ui/source-avatar'
 import { SkillAvatar } from '@/components/ui/skill-avatar'
@@ -29,9 +32,10 @@ import { SkillSelectorPopover } from '@/components/ui/SkillSelectorPopover'
 import { WorkingDirectorySelector } from '../input/WorkingDirectorySelector'
 import type { LoadedSource, LoadedSkill } from '../../../../shared/types'
 
-// Client-side fallback for async generate: a touch longer than the server's GENERATE_TIMEOUT_MS
-// (180s) so the orchestrator's own timeout + result push can land before we give up locally.
-const GENERATE_CLIENT_TIMEOUT_MS = 200_000
+// Client-side fallback for async generate, for a result push that never arrives. The server
+// always pushes one, failing a stalled turn after 90 s without progress and capping each of its
+// two attempts at 5 minutes (rpc/tasks.ts), so this stays above both attempts.
+const GENERATE_CLIENT_TIMEOUT_MS = 620_000
 
 /**
  * TaskEditor — full-pane authoring surface for a Tasks DAG (graduated from the
@@ -76,24 +80,38 @@ type TaskResults = Awaited<ReturnType<typeof window.electronAPI.getTaskResults>>
 // Small inline controls (presentational)
 // ---------------------------------------------------------------------------
 type BtnVariant = 'primary' | 'secondary' | 'ghost'
-const BTN_VARIANT: Record<BtnVariant, string> = {
-  primary: 'bg-indigo-500 text-white hover:bg-indigo-600',
-  secondary: 'border border-border bg-card text-foreground hover:bg-foreground/[0.03]',
-  ghost: 'text-foreground/60 hover:bg-foreground/[0.06] hover:text-foreground',
-}
 
+/** The editor's button: the Button primitive (primary = the one solid-accent treatment). 28px; 32px for CTAs. */
 function Btn({
   variant = 'secondary',
+  size = 'md',
   className,
   ...rest
-}: { variant?: BtnVariant } & React.ButtonHTMLAttributes<HTMLButtonElement>) {
+}: { variant?: BtnVariant; size?: 'md' | 'lg' } & React.ButtonHTMLAttributes<HTMLButtonElement>) {
+  return <Button type="button" variant={variant} size={size} className={className} {...rest} />
+}
+
+/** Segmented control (the Tabs primitive's material): a neutral well with the selected item raised. */
+function SegmentedGroup({ className, children }: { className?: string; children: React.ReactNode }) {
+  return (
+    <div className={cn('inline-flex h-control items-center gap-0.5 rounded-md bg-fill-hover p-0.5', className)}>
+      {children}
+    </div>
+  )
+}
+
+function SegmentedButton({
+  active,
+  className,
+  ...rest
+}: { active: boolean } & React.ButtonHTMLAttributes<HTMLButtonElement>) {
   return (
     <button
       type="button"
+      aria-pressed={active}
       className={cn(
-        'inline-flex h-8 items-center justify-center gap-1.5 whitespace-nowrap rounded-lg px-3 text-[12.5px] font-semibold transition-colors',
-        'disabled:pointer-events-none disabled:opacity-60',
-        BTN_VARIANT[variant],
+        'motion-press inline-flex h-control-sm items-center justify-center gap-1.5 whitespace-nowrap rounded-sm px-2.5 text-label-sm font-medium [&_svg]:size-3.5 [&_svg]:shrink-0',
+        active ? 'bg-floating text-foreground shadow-elev-1' : 'text-secondary hover:text-foreground',
         className,
       )}
       {...rest}
@@ -104,6 +122,7 @@ function Btn({
 // MUST forward the ref: Radix's <DropdownMenuTrigger asChild> attaches a ref to
 // this element to anchor the menu. A function component without forwardRef drops
 // that ref and the dropdown fails to open/position.
+/** Select trigger: the field material (sunken well, hairline, focus tint when open), like SelectTrigger. */
 const SelectButton = React.forwardRef<
   HTMLButtonElement,
   { size?: 'sm' | 'md' } & React.ButtonHTMLAttributes<HTMLButtonElement>
@@ -113,15 +132,14 @@ const SelectButton = React.forwardRef<
       ref={ref}
       type="button"
       className={cn(
-        'inline-flex items-center gap-1.5 rounded-lg border border-border bg-background font-medium text-foreground',
-        'transition-colors hover:bg-foreground/[0.03] data-[state=open]:bg-foreground/[0.03]',
-        size === 'sm' ? 'h-7 px-2 text-[11.5px]' : 'h-8 px-2.5 text-[12.5px]',
+        'field-surface inline-flex items-center gap-1.5 font-medium text-foreground',
+        size === 'sm' ? 'h-control rounded-md px-2 text-label-sm' : 'h-control-lg rounded-md px-2.5 text-label',
         className,
       )}
       {...rest}
     >
       {children}
-      <ChevronDown className="ml-auto h-3.5 w-3.5 shrink-0 text-foreground/40" strokeWidth={2} />
+      <ChevronDown className="ml-auto size-3.5 shrink-0 text-tertiary" strokeWidth={2} />
     </button>
   )
 })
@@ -150,11 +168,11 @@ function ModelSelect({
         {groups.map((g, gi) => (
           <React.Fragment key={`${g.provider}-${gi}`}>
             {gi > 0 && <DropdownMenuSeparator />}
-            <DropdownMenuLabel className="text-[11px] text-foreground/50">{g.label}</DropdownMenuLabel>
+            <DropdownMenuLabel>{g.label}</DropdownMenuLabel>
             {g.models.map((m) => (
-              <DropdownMenuItem key={m.id} className="text-xs" onSelect={() => onChange(m.id)}>
+              <DropdownMenuItem key={m.id} onSelect={() => onChange(m.id)}>
                 <span className="truncate">{m.name}</span>
-                {m.id === value && <Check className="ml-auto h-3.5 w-3.5 shrink-0" strokeWidth={2} />}
+                {m.id === value && <Check className="ml-auto shrink-0" strokeWidth={2} />}
               </DropdownMenuItem>
             ))}
           </React.Fragment>
@@ -166,8 +184,8 @@ function ModelSelect({
 
 function FieldRow({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="flex items-center justify-between gap-3">
-      <span className="text-[12.5px] font-medium text-foreground/55">{label}</span>
+    <div className="flex min-h-control-lg items-center justify-between gap-3">
+      <span className="text-label text-secondary">{label}</span>
       <div className="shrink-0">{children}</div>
     </div>
   )
@@ -186,7 +204,7 @@ function AvatarStack({ avatars }: { avatars: React.ReactNode[] }) {
         <div
           key={i}
           className={cn(
-            'relative flex h-5 w-5 items-center justify-center rounded-[4px] bg-background shadow-minimal',
+            'relative flex size-5 items-center justify-center rounded-xs bg-raised shadow-elev-1',
             i > 0 && '-ml-1',
           )}
           style={{ zIndex: i + 1 }}
@@ -196,7 +214,7 @@ function AvatarStack({ avatars }: { avatars: React.ReactNode[] }) {
       ))}
       {remaining > 0 && (
         <div
-          className="-ml-1 flex h-5 w-5 items-center justify-center rounded-[4px] bg-background text-[8px] font-medium text-muted-foreground shadow-minimal"
+          className="-ml-1 flex h-5 min-w-5 items-center justify-center rounded-xs bg-raised px-0.5 text-caption tabular-nums text-tertiary shadow-elev-1"
           style={{ zIndex: display.length + 1 }}
         >
           +{remaining}
@@ -243,11 +261,11 @@ function SourcesField({
         onClick={() => setOpen((prev) => !prev)}
       >
         {selected.length === 0 ? (
-          <DatabaseZap className="h-4 w-4 shrink-0 text-foreground/40" strokeWidth={2} />
+          <DatabaseZap className="size-4 shrink-0 text-tertiary" strokeWidth={2} />
         ) : (
           <AvatarStack avatars={selected.map((s) => <SourceAvatar key={s.config.slug} source={s} size="xs" />)} />
         )}
-        <span className={cn('min-w-0 flex-1 truncate text-left', values.length === 0 && 'text-foreground/50')}>{label}</span>
+        <span className={cn('min-w-0 flex-1 truncate text-left', values.length === 0 && 'text-tertiary')}>{label}</span>
       </SelectButton>
       <SourceSelectorPopover
         open={open}
@@ -299,11 +317,11 @@ function SkillsField({
         onClick={() => setOpen((prev) => !prev)}
       >
         {selected.length === 0 ? (
-          <Zap className="h-4 w-4 shrink-0 text-foreground/40" strokeWidth={2} />
+          <Zap className="size-4 shrink-0 text-tertiary" strokeWidth={2} />
         ) : (
           <AvatarStack avatars={selected.map((s) => <SkillAvatar key={s.slug} skill={s} size="xs" workspaceId={workspaceId} />)} />
         )}
-        <span className={cn('min-w-0 flex-1 truncate text-left', values.length === 0 && 'text-foreground/50')}>{label}</span>
+        <span className={cn('min-w-0 flex-1 truncate text-left', values.length === 0 && 'text-tertiary')}>{label}</span>
       </SelectButton>
       <SkillSelectorPopover
         open={open}
@@ -342,8 +360,8 @@ function FolderField({
       align="start"
       renderTrigger={({ hasFolder, folderName }) => (
         <SelectButton style={{ width: 168 }} title={t('tasks.workingDirectoryHint')}>
-          <Folder className="h-3.5 w-3.5 shrink-0 text-foreground/40" strokeWidth={2} />
-          <span className={cn('min-w-0 flex-1 truncate text-left', !hasFolder && 'text-foreground/50')}>
+          <Folder className="size-3.5 shrink-0 text-tertiary" strokeWidth={2} />
+          <span className={cn('min-w-0 flex-1 truncate text-left', !hasFolder && 'text-tertiary')}>
             {folderName ?? t('chat.workInFolder')}
           </span>
         </SelectButton>
@@ -387,9 +405,9 @@ function SubtaskCard({
     (s) => !subtask.dependsOn.includes(s.uid) && canDependOn(allSubtasks, subtask.uid, s.uid),
   )
   return (
-    <div className="group rounded-[10px] border border-border/70 bg-foreground/[0.015] p-3">
+    <div className="group rounded-lg border border-subtle p-3">
       <div className="flex items-start gap-2">
-        <div className="mt-0.5 grid h-6 w-6 shrink-0 place-items-center rounded-full bg-indigo-500/10 text-[12px] font-bold text-indigo-500 dark:text-indigo-300">
+        <div className="mt-0.5 grid size-6 shrink-0 place-items-center rounded-full bg-accent-tint text-label-sm font-semibold tabular-nums text-accent">
           {index + 1}
         </div>
         <div className="min-w-0 flex-1">
@@ -397,14 +415,14 @@ function SubtaskCard({
             value={subtask.title}
             onChange={(e) => onChange({ title: e.target.value })}
             placeholder={t('tasks.subtaskTitlePlaceholder')}
-            className="w-full bg-transparent text-[13.5px] font-semibold text-foreground outline-none placeholder:text-foreground/30"
+            className="h-7 w-full bg-transparent text-label font-semibold text-foreground outline-none placeholder:text-tertiary"
           />
-          <textarea
+          <Textarea
             value={subtask.prompt}
             onChange={(e) => onChange({ prompt: e.target.value })}
             rows={2}
             placeholder={t('tasks.promptPlaceholder')}
-            className="mt-1.5 w-full resize-none rounded-md border border-border/60 bg-background px-2 py-1.5 text-[12px] leading-relaxed outline-none focus:border-foreground/25 field-sizing-content max-h-40"
+            className="mt-1 min-h-0 max-h-40 resize-none px-2 py-1.5 text-label-sm md:text-label-sm"
           />
           <div className="mt-2 flex flex-wrap items-center gap-1.5">
             <ModelSelect
@@ -417,48 +435,48 @@ function SubtaskCard({
             {subtask.dependsOn.map((depUid) => (
               <span
                 key={depUid}
-                className="inline-flex h-7 max-w-[168px] items-center gap-1 rounded-lg border border-border bg-foreground/[0.03] pl-2 pr-1 text-[11.5px] font-medium text-foreground/70"
+                className="inline-flex h-control max-w-[168px] items-center gap-0.5 rounded-md bg-fill-hover pl-2 pr-0.5 text-label-sm font-medium text-secondary"
               >
                 <span className="truncate">{t('tasks.dependsOnLabel', { title: depTitle(depUid) })}</span>
-                <button
-                  type="button"
+                <IconButton
+                  size="sm"
+                  icon={<X className="size-3.5" strokeWidth={2.5} />}
                   onClick={() => removeDep(depUid)}
                   aria-label={t('tasks.removeDependency')}
-                  className="grid h-4 w-4 shrink-0 place-items-center rounded text-foreground/40 hover:bg-foreground/10 hover:text-red-500"
-                >
-                  <X className="h-3 w-3" strokeWidth={2.5} />
-                </button>
+                  className="text-tertiary hover:text-destructive"
+                />
               </span>
             ))}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <SelectButton size="sm" style={{ width: 144 }}>
-                  <span className="truncate text-foreground/70">
+                  <span className="truncate text-secondary">
                     {subtask.dependsOn.length === 0 ? t('tasks.noDependencies') : t('tasks.addDependency')}
                   </span>
                 </SelectButton>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="start" className="max-w-[240px]">
                 {candidates.map((c) => (
-                  <DropdownMenuItem key={c.uid} className="text-xs" onSelect={() => addDep(c.uid)}>
+                  <DropdownMenuItem key={c.uid} onSelect={() => addDep(c.uid)}>
                     <span className="truncate">{c.title || t('tasks.untitledSubtask')}</span>
                   </DropdownMenuItem>
                 ))}
                 {candidates.length === 0 && (
-                  <div className="px-2 py-1.5 text-[11px] text-foreground/40">{t('tasks.noAvailableSubtasks')}</div>
+                  <div className="px-2 py-1.5 text-label-sm text-tertiary">{t('tasks.noAvailableSubtasks')}</div>
                 )}
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
         </div>
-        <button
-          type="button"
+        {/* Hover-revealed on desktop; always visible on touch (data-touch-reveal) */}
+        <IconButton
+          size="sm"
+          icon={<Trash2 className="size-3.5" strokeWidth={2} />}
           onClick={onRemove}
           aria-label={t('tasks.removeSubtask')}
-          className="grid h-6 w-6 shrink-0 place-items-center rounded text-foreground/40 opacity-0 transition-all hover:bg-foreground/10 hover:text-red-500 group-hover:opacity-100"
-        >
-          <Trash2 className="h-3.5 w-3.5" strokeWidth={2} />
-        </button>
+          data-touch-reveal="true"
+          className="text-tertiary opacity-0 hover:text-destructive group-hover:opacity-100 group-hover:duration-instant focus-visible:opacity-100"
+        />
       </div>
     </div>
   )
@@ -625,7 +643,7 @@ export function TaskEditor({
           // Fall back to the session's actual mode so saving a bound tile can't silently escalate it.
           setOrchConnection(spec.defaults?.llmConnection)
           if (spec.defaults?.permissionMode) setPermissionMode(spec.defaults.permissionMode)
-          else if (sessionMeta?.permissionMode) setPermissionMode(sessionMeta.permissionMode as TaskPermissionMode)
+          else if (isTaskPermissionMode(sessionMeta?.permissionMode)) setPermissionMode(sessionMeta.permissionMode)
           const nodes = spec.nodes ?? []
           setSubtasks([
             ...specToSubtasks(nodes),
@@ -639,7 +657,7 @@ export function TaskEditor({
       // saving it as a task neither drops its project nor silently changes its permission mode.
       setProjectId(sessionProjectId)
       setBoundProjectId(sessionProjectId)
-      if (sessionMeta?.permissionMode) setPermissionMode(sessionMeta.permissionMode as TaskPermissionMode)
+      if (isTaskPermissionMode(sessionMeta?.permissionMode)) setPermissionMode(sessionMeta.permissionMode)
       setSubtasks(collectQuickAddRows(new Set()))
     }
     return () => {
@@ -905,129 +923,118 @@ export function TaskEditor({
   }
 
   return (
-    <div className="flex h-full flex-col gap-3 bg-background p-3 text-foreground">
-      {/* Header */}
-      <div className="flex items-center gap-2.5 rounded-xl border border-border bg-card px-3 py-2.5 shadow-minimal">
-        <Btn variant="ghost" className="px-2" onClick={onClose}>
-          <ChevronLeft className="h-4 w-4" strokeWidth={2} /> {t('kanban.board')}
+    // No surface of its own: the panel card (paper) shows through; the two panes are raised cards.
+    <div className="flex h-full flex-col text-foreground">
+      {/* Header (48px, like the panel headers): back to the board / title · tabs … actions */}
+      <div className="flex h-12 shrink-0 items-center gap-1.5 px-2">
+        <Btn variant="ghost" className="px-2 text-secondary hover:text-foreground" onClick={onClose}>
+          <ChevronLeft strokeWidth={2} /> {t('kanban.board')}
         </Btn>
-        <span className="text-foreground/25">/</span>
-        <span className="text-sm font-semibold">{isEdit ? t('tasks.editTask') : t('kanban.newTask')}</span>
+        <span className="text-label text-tertiary" aria-hidden>/</span>
+        <span className="truncate text-label-lg font-semibold">{isEdit ? t('tasks.editTask') : t('kanban.newTask')}</span>
 
         {/* Definition / Results tabs — edit mode only (results need a backing task to read). */}
         {isEdit && (
-          <div className="ml-3 inline-flex rounded-[9px] bg-foreground/[0.05] p-0.5">
+          <SegmentedGroup className="ml-2">
             {(['definition', 'results'] as Tab[]).map((tb) => (
-              <button
-                key={tb}
-                onClick={() => setTab(tb)}
-                className={cn(
-                  'rounded-[7px] px-3 py-1 text-[12.5px] font-semibold transition-colors',
-                  tab === tb ? 'bg-card text-foreground shadow-minimal' : 'text-foreground/55 hover:text-foreground/80',
-                )}
-              >
+              <SegmentedButton key={tb} active={tab === tb} onClick={() => setTab(tb)}>
                 {tb === 'definition' ? t('tasks.tabDefinition') : t('tasks.tabResults')}
-              </button>
+              </SegmentedButton>
             ))}
-          </div>
+          </SegmentedGroup>
         )}
 
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex shrink-0 items-center gap-1.5">
           {isEdit && onOpenSession && (
             <Btn variant="secondary" onClick={onOpenSession} disabled={busy}>
-              <ExternalLink className="h-3.5 w-3.5" strokeWidth={2} /> {t('tasks.openSession')}
+              <ExternalLink strokeWidth={2} /> {t('tasks.openSession')}
             </Btn>
           )}
           {tab === 'definition' && (
             <>
-              <Btn variant="secondary" onClick={onClose} disabled={busy}>
+              <Btn variant="ghost" onClick={onClose} disabled={busy}>
                 {t('common.cancel')}
               </Btn>
               <Btn variant="secondary" onClick={() => submit(false)} disabled={busy}>
                 {isEdit ? t('common.save') : t('common.create')}
               </Btn>
               <Btn variant="primary" onClick={() => submit(true)} disabled={busy}>
-                {busy ? <Spinner /> : <Sparkles className="h-3.5 w-3.5" strokeWidth={2.5} />}
+                {busy ? <Spinner className="text-label" /> : <Sparkles strokeWidth={2} />}
                 {busy ? t('tasks.starting') : isEdit ? t('tasks.saveAndRun') : t('tasks.createAndRun')}
               </Btn>
             </>
           )}
           {tab === 'results' && (
             <Btn variant="secondary" onClick={loadResults} disabled={resultsLoading}>
-              {resultsLoading ? <Spinner /> : <RefreshCw className="h-3.5 w-3.5" strokeWidth={2} />} {t('common.refresh')}
+              {resultsLoading ? <Spinner className="text-label" /> : <RefreshCw strokeWidth={2} />} {t('common.refresh')}
             </Btn>
           )}
         </div>
       </div>
 
       {tab === 'results' ? (
-        <ResultsPanel
-          results={results}
-          loading={resultsLoading}
-          onOpenChildSession={onOpenChildSession}
-        />
+        <div className="flex min-h-0 flex-1 flex-col px-3 pb-3">
+          <ResultsPanel
+            results={results}
+            loading={resultsLoading}
+            onOpenChildSession={onOpenChildSession}
+          />
+        </div>
       ) : (
       /* Body */
-      <div className="grid min-h-0 flex-1 grid-cols-[minmax(360px,2fr)_3fr] gap-3">
+      <div className="grid min-h-0 flex-1 grid-cols-[minmax(360px,2fr)_3fr] gap-3 px-3 pb-3">
         {/* Left — definition */}
-        <div className="flex min-h-0 flex-col gap-4 overflow-y-auto rounded-xl border border-border bg-card p-4 shadow-minimal">
-          <div className="text-[15px] font-bold">{t('tasks.definition')}</div>
+        <div className="flex min-h-0 flex-col gap-4 overflow-y-auto rounded-lg bg-raised p-4 shadow-elev-1">
+          <div className="text-label-lg font-semibold">{t('tasks.definition')}</div>
 
-          <div className="inline-flex w-fit rounded-[9px] bg-foreground/[0.05] p-0.5">
+          <SegmentedGroup className="w-fit">
             {(['manual', 'generate'] as Mode[]).map((m) => (
-              <button
-                key={m}
-                onClick={() => setMode(m)}
-                className={cn(
-                  'inline-flex items-center gap-1.5 rounded-[7px] px-3 py-1.5 text-[12.5px] font-semibold transition-colors',
-                  mode === m ? 'bg-card text-foreground shadow-minimal' : 'text-foreground/55 hover:text-foreground/80',
-                )}
-              >
-                {m === 'generate' && <Sparkles className="h-3.5 w-3.5" strokeWidth={2.5} />}
+              <SegmentedButton key={m} active={mode === m} onClick={() => setMode(m)}>
+                {m === 'generate' && <Sparkles strokeWidth={2} />}
                 {m === 'generate' ? t('tasks.modeGenerate') : t('tasks.modeManual')}
-              </button>
+              </SegmentedButton>
             ))}
-          </div>
+          </SegmentedGroup>
 
           <div>
-            <div className="mb-1.5 text-[12px] font-semibold text-foreground/55">{t('tasks.title')}</div>
-            <input
+            <div className="mb-1.5 text-label font-medium text-secondary">{t('tasks.title')}</div>
+            <Input
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               placeholder={t('tasks.titlePlaceholder')}
-              className="w-full rounded-lg border border-border bg-background px-3 py-2 text-[13.5px] font-semibold outline-none focus:border-foreground/25"
+              className="font-medium"
             />
           </div>
 
           <div>
-            <div className="mb-1.5 flex items-baseline justify-between">
-              <span className="text-[12px] font-semibold text-foreground/55">{t('tasks.goal')}</span>
-              <span className="text-[10.5px] text-foreground/35">{t('tasks.goalHint')}</span>
+            <div className="mb-1.5 flex items-baseline justify-between gap-3">
+              <span className="text-label font-medium text-secondary">{t('tasks.goal')}</span>
+              <span className="text-label-sm text-tertiary">{t('tasks.goalHint')}</span>
             </div>
-            <textarea
+            <Textarea
               value={goal}
               onChange={(e) => setGoal(e.target.value)}
               rows={4}
               placeholder={t('tasks.goalPlaceholder')}
-              className="w-full resize-none rounded-lg border border-border bg-background px-3 py-2 text-[12.5px] leading-relaxed outline-none focus:border-foreground/25 field-sizing-content max-h-48"
+              className="max-h-48 resize-none"
             />
           </div>
 
           <div>
-            <div className="mb-1.5 flex items-baseline justify-between">
-              <span className="text-[12px] font-semibold text-foreground/55">{t('tasks.acceptanceCriteria')}</span>
-              <span className="text-[10.5px] text-foreground/35">{t('tasks.acceptanceCriteriaHint')}</span>
+            <div className="mb-1.5 flex items-baseline justify-between gap-3">
+              <span className="text-label font-medium text-secondary">{t('tasks.acceptanceCriteria')}</span>
+              <span className="text-label-sm text-tertiary">{t('tasks.acceptanceCriteriaHint')}</span>
             </div>
-            <textarea
+            <Textarea
               value={acceptanceCriteria}
               onChange={(e) => setAcceptanceCriteria(e.target.value)}
               rows={3}
               placeholder={t('tasks.acceptanceCriteriaPlaceholder')}
-              className="w-full resize-none rounded-lg border border-border bg-background px-3 py-2 text-[12.5px] leading-relaxed outline-none focus:border-foreground/25 field-sizing-content max-h-48"
+              className="max-h-48 resize-none"
             />
           </div>
 
-          <div className="flex flex-col gap-3">
+          <div className="flex flex-col gap-2">
             <FieldRow label={t('tasks.project')}>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
@@ -1040,15 +1047,15 @@ export function TaskEditor({
                       never unbinds on save, and buildSpec floors a blank pick to the existing project,
                       so showing it for a bound task would be a no-op that implies clearing works. */}
                   {!boundProjectId && (
-                    <DropdownMenuItem className="text-xs" onSelect={() => setProjectId('')}>
+                    <DropdownMenuItem onSelect={() => setProjectId('')}>
                       {t('tasks.noProject')}
-                      {!projectId && <Check className="ml-auto h-3.5 w-3.5" strokeWidth={2} />}
+                      {!projectId && <Check className="ml-auto" strokeWidth={2} />}
                     </DropdownMenuItem>
                   )}
                   {projects.map((p) => (
-                    <DropdownMenuItem key={p.config.id} className="text-xs" onSelect={() => setProjectId(p.config.id)}>
+                    <DropdownMenuItem key={p.config.id} onSelect={() => setProjectId(p.config.id)}>
                       <span className="truncate">{p.config.name}</span>
-                      {projectId === p.config.id && <Check className="ml-auto h-3.5 w-3.5 shrink-0" strokeWidth={2} />}
+                      {projectId === p.config.id && <Check className="ml-auto shrink-0" strokeWidth={2} />}
                     </DropdownMenuItem>
                   ))}
                 </DropdownMenuContent>
@@ -1077,9 +1084,9 @@ export function TaskEditor({
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="min-w-[160px]">
                   {(['allow-all', 'ask', 'safe'] as const).map((m) => (
-                    <DropdownMenuItem key={m} className="text-xs" onSelect={() => setPermissionMode(m)}>
+                    <DropdownMenuItem key={m} onSelect={() => setPermissionMode(m)}>
                       <span className="truncate">{t(`mode.${m}`)}</span>
-                      {permissionMode === m && <Check className="ml-auto h-3.5 w-3.5 shrink-0" strokeWidth={2} />}
+                      {permissionMode === m && <Check className="ml-auto shrink-0" strokeWidth={2} />}
                     </DropdownMenuItem>
                   ))}
                 </DropdownMenuContent>
@@ -1114,7 +1121,7 @@ export function TaskEditor({
             </FieldRow>
 
             <FieldRow label={t('tasks.maxRepairs')}>
-              <input
+              <Input
                 type="number"
                 inputMode="numeric"
                 min={0}
@@ -1123,23 +1130,21 @@ export function TaskEditor({
                 onChange={(e) => setMaxRepairs(e.target.value)}
                 placeholder={String(DEFAULT_REPAIR_ATTEMPTS)}
                 title={t('tasks.maxRepairsHint')}
-                className="h-8 w-[88px] rounded-lg border border-border bg-background px-2.5 text-right text-[12.5px] tabular-nums outline-none focus:border-foreground/25 placeholder:text-foreground/30"
+                className="w-[88px] text-right tabular-nums"
               />
             </FieldRow>
           </div>
         </div>
 
         {/* Right — subtasks (Manual) / scaffold (Generate) */}
-        <div className="flex min-h-0 flex-col rounded-xl border border-border bg-card shadow-minimal">
+        <div className="flex min-h-0 flex-col rounded-lg bg-raised shadow-elev-1">
           {mode === 'manual' ? (
             <>
               <div className="flex shrink-0 items-center gap-2 px-4 pt-4">
-                <span className="text-[15px] font-bold">{t('kanban.subtasks')}</span>
-                <span className="grid h-5 min-w-[20px] place-items-center rounded-full bg-foreground/[0.06] px-1.5 text-[11px] font-bold text-foreground/55">
-                  {subtasks.length}
-                </span>
-                <Btn variant="secondary" className="ml-auto h-7 px-2.5 text-[12px]" onClick={addSubtask}>
-                  <Plus className="h-3.5 w-3.5" strokeWidth={2.5} /> {t('kanban.addSubtask')}
+                <span className="text-label-lg font-semibold">{t('kanban.subtasks')}</span>
+                <span className="text-label-sm tabular-nums text-tertiary">{subtasks.length}</span>
+                <Btn variant="secondary" className="ml-auto" onClick={addSubtask}>
+                  <Plus strokeWidth={2} /> {t('kanban.addSubtask')}
                 </Btn>
               </div>
 
@@ -1159,35 +1164,36 @@ export function TaskEditor({
                 ))}
                 {subtasks.length === 0 && (
                   <button
+                    type="button"
                     onClick={addSubtask}
-                    className="flex w-full items-center justify-center gap-1.5 rounded-[10px] border border-dashed border-border py-2.5 text-[12.5px] font-semibold text-foreground/40 transition-colors hover:border-foreground/30 hover:text-foreground/60"
+                    className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-default py-2.5 text-label font-medium text-tertiary transition-colors duration-micro ease-out-subtle hover:border-strong hover:text-secondary hover:duration-instant"
                   >
-                    <Plus className="h-3.5 w-3.5" strokeWidth={2.5} /> {t('tasks.addFirstSubtask')}
+                    <Plus className="size-4" strokeWidth={2} /> {t('tasks.addFirstSubtask')}
                   </button>
                 )}
               </div>
 
-              <div className="shrink-0 border-t border-border/60 px-4 py-2.5 text-[10.5px] text-foreground/40">
+              <div className="shrink-0 border-t border-subtle px-4 py-2.5 text-caption font-normal text-tertiary">
                 {t('tasks.subtaskFooter')}
               </div>
             </>
           ) : busy ? (
             <div className="flex min-h-full flex-col gap-3 p-4">
-              <div className="flex items-center gap-2 text-[13px] font-semibold text-foreground/70">
+              <div className="flex items-center gap-2 text-label font-medium text-secondary">
                 <LoadingIndicator label={t('tasks.generatingTitle')} showElapsed />
               </div>
-              <p className="text-[12px] leading-relaxed text-foreground/50">{t('tasks.generatingBody')}</p>
+              <p className="text-label-sm text-tertiary">{t('tasks.generatingBody')}</p>
               {/* Skeleton subtask cards: the long author wait reads as "drafting nodes", not frozen. */}
               {[0, 1, 2].map((i) => (
-                <div key={i} className="animate-pulse rounded-[10px] border border-border/70 bg-foreground/[0.015] p-3">
+                <div key={i} className="rounded-lg border border-subtle p-3" aria-hidden>
                   <div className="flex items-start gap-2">
-                    <div className="mt-0.5 h-6 w-6 shrink-0 rounded-full bg-foreground/[0.06]" />
+                    <div className="skeleton mt-0.5 size-6 shrink-0 rounded-full" />
                     <div className="min-w-0 flex-1 space-y-2">
-                      <div className="h-3.5 w-1/2 rounded bg-foreground/[0.06]" />
-                      <div className="h-8 w-full rounded bg-foreground/[0.04]" />
+                      <div className="skeleton h-3.5 w-1/2" />
+                      <div className="skeleton h-8 w-full" />
                       <div className="flex gap-1.5">
-                        <div className="h-7 w-[128px] rounded-lg bg-foreground/[0.05]" />
-                        <div className="h-7 w-[144px] rounded-lg bg-foreground/[0.05]" />
+                        <div className="skeleton h-control w-[128px] rounded-md" />
+                        <div className="skeleton h-control w-[144px] rounded-md" />
                       </div>
                     </div>
                   </div>
@@ -1196,15 +1202,15 @@ export function TaskEditor({
             </div>
           ) : (
             <div className="flex min-h-full flex-col items-center justify-center gap-3 px-6 py-8 text-center">
-              <div className="grid h-12 w-12 place-items-center rounded-full bg-indigo-500/10 text-indigo-500 dark:text-indigo-300">
-                <Sparkles className="h-6 w-6" strokeWidth={2} />
+              <div className="grid size-12 place-items-center rounded-full bg-accent-tint text-accent">
+                <Sparkles className="size-6" strokeWidth={2} />
               </div>
-              <div className="text-[14px] font-bold">{t('tasks.generatePlan')}</div>
-              <p className="max-w-[360px] text-[12.5px] leading-relaxed text-foreground/55">{t('tasks.generateBody')}</p>
-              <Btn variant="primary" onClick={generatePlan} disabled={busy}>
-                <Sparkles className="h-3.5 w-3.5" strokeWidth={2.5} /> {t('tasks.generatePlan')}
+              <div className="text-label-lg font-semibold">{t('tasks.generatePlan')}</div>
+              <p className="max-w-[360px] text-label text-secondary">{t('tasks.generateBody')}</p>
+              <Btn variant="primary" size="lg" onClick={generatePlan} disabled={busy}>
+                <Sparkles strokeWidth={2} /> {t('tasks.generatePlan')}
               </Btn>
-              <span className="text-[11px] text-foreground/40">{t('tasks.generateHint')}</span>
+              <span className="text-label-sm text-tertiary">{t('tasks.generateHint')}</span>
             </div>
           )}
         </div>
@@ -1230,17 +1236,17 @@ function ResultsPanel({
 
   if (loading && !results) {
     return (
-      <div className="flex min-h-0 flex-1 items-center justify-center rounded-xl border border-border bg-card text-foreground/50 shadow-minimal">
-        <Spinner className="text-lg" />
+      <div className="flex min-h-0 flex-1 items-center justify-center rounded-lg bg-raised text-tertiary shadow-elev-1">
+        <Spinner className="text-label-lg" />
       </div>
     )
   }
 
   if (!results || !results.runId || results.nodes.length === 0) {
     return (
-      <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 rounded-xl border border-border bg-card px-6 text-center text-foreground/50 shadow-minimal">
-        <CircleSlash className="h-6 w-6 text-foreground/30" strokeWidth={2} />
-        <p className="text-[12.5px]">{t('tasks.resultsEmpty')}</p>
+      <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 rounded-lg bg-raised px-6 text-center text-tertiary shadow-elev-1">
+        <CircleSlash className="size-6" strokeWidth={2} />
+        <p className="text-label">{t('tasks.resultsEmpty')}</p>
       </div>
     )
   }
@@ -1249,65 +1255,71 @@ function ResultsPanel({
   const verdicts = results.verdicts ?? (verdict ? [verdict] : [])
   const repair = results.repair
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto rounded-xl border border-border bg-card p-4 shadow-minimal">
+    <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto rounded-lg bg-raised p-4 shadow-elev-1">
       {results.acceptanceCriteria && (
-        <div className="rounded-[10px] border border-border/70 bg-foreground/[0.015] px-3 py-2.5">
-          <div className="text-[11px] font-bold uppercase tracking-wide text-foreground/45">{t('tasks.acceptanceCriteria')}</div>
-          <p className="mt-1 text-[12px] leading-relaxed text-foreground/70">{results.acceptanceCriteria}</p>
+        <div className="rounded-lg border border-subtle px-3 py-2.5">
+          <div className="text-label-sm font-medium text-tertiary">{t('tasks.acceptanceCriteria')}</div>
+          <p className="mt-1 text-label text-secondary">{results.acceptanceCriteria}</p>
         </div>
       )}
 
       {verdict && (
+        // Verdict: status tint + hairline in its role (pass = success, fail = destructive, else neutral)
         <div
           className={cn(
-            'flex items-start gap-2.5 rounded-[10px] border px-3 py-2.5',
+            'flex items-start gap-2.5 rounded-lg border px-3 py-2.5',
             verdict.result === 'pass'
-              ? 'border-emerald-500/30 bg-emerald-500/[0.06]'
+              ? 'border-[color:var(--success-border)] bg-success-tint'
               : verdict.result === 'fail'
-                ? 'border-red-500/30 bg-red-500/[0.06]'
-                : 'border-border bg-foreground/[0.03]',
+                ? 'border-[color:var(--destructive-border)] bg-destructive-tint'
+                : 'border-subtle bg-fill-hover',
           )}
         >
           {verdict.result === 'pass' ? (
-            <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" strokeWidth={2.5} />
+            <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-success" strokeWidth={2.5} />
           ) : verdict.result === 'fail' ? (
-            <XCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-500" strokeWidth={2.5} />
+            <XCircle className="mt-0.5 size-4 shrink-0 text-destructive" strokeWidth={2.5} />
           ) : (
-            <CircleSlash className="mt-0.5 h-4 w-4 shrink-0 text-foreground/40" strokeWidth={2.5} />
+            <CircleSlash className="mt-0.5 size-4 shrink-0 text-tertiary" strokeWidth={2.5} />
           )}
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
-              <span className="text-[13px] font-bold">
+              <span className="text-label font-semibold">
                 {verdict.result === 'pass' ? t('tasks.verdictPass') : verdict.result === 'fail' ? t('tasks.verdictFail') : t('tasks.verdictUnparsed')}
               </span>
               {repair && (
-                <span className="ml-auto shrink-0 rounded-full bg-foreground/[0.06] px-2 py-0.5 text-[10.5px] font-bold text-foreground/55">
+                <span className="ml-auto inline-flex h-5 shrink-0 items-center rounded-xs bg-fill-hover px-1.5 text-label-sm font-medium tabular-nums text-secondary">
                   {t('tasks.repairAttempt', { used: repair.used, max: repair.max })}
                 </span>
               )}
             </div>
-            {verdict.reason && <p className="mt-0.5 text-[12px] leading-relaxed text-foreground/65">{verdict.reason}</p>}
+            {verdict.via === 'decision' && (
+              <p className="mt-0.5 text-label-sm text-tertiary">
+                {t('tasks.verdictInferred', { confidence: Math.round((verdict.confidence ?? 0) * 100) })}
+              </p>
+            )}
+            {verdict.reason && <p className="mt-0.5 text-label text-secondary">{verdict.reason}</p>}
             {verdict.nodes && verdict.nodes.length > 0 && (
-              <p className="mt-1 text-[11px] text-foreground/45">{t('tasks.repairNodes', { nodes: verdict.nodes.join(', ') })}</p>
+              <p className="mt-1 text-label-sm text-tertiary">{t('tasks.repairNodes', { nodes: verdict.nodes.join(', ') })}</p>
             )}
           </div>
         </div>
       )}
 
       {verdicts.length > 1 && (
-        <div className="rounded-[10px] border border-border/70 bg-foreground/[0.015] px-3 py-2.5">
-          <div className="mb-1.5 text-[11px] font-bold uppercase tracking-wide text-foreground/45">{t('tasks.verdictHistory')}</div>
+        <div className="rounded-lg border border-subtle px-3 py-2.5">
+          <div className="mb-1.5 text-label-sm font-medium text-tertiary">{t('tasks.verdictHistory')}</div>
           <div className="flex flex-col gap-1">
             {verdicts.map((v, i) => (
-              <div key={i} className="flex items-start gap-2 text-[11.5px]">
+              <div key={i} className="flex items-start gap-2 text-label-sm">
                 {v.result === 'pass' ? (
-                  <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-500" strokeWidth={2.5} />
+                  <CheckCircle2 className="mt-px size-3.5 shrink-0 text-success" strokeWidth={2.5} />
                 ) : v.result === 'fail' ? (
-                  <XCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-red-500" strokeWidth={2.5} />
+                  <XCircle className="mt-px size-3.5 shrink-0 text-destructive" strokeWidth={2.5} />
                 ) : (
-                  <CircleSlash className="mt-0.5 h-3.5 w-3.5 shrink-0 text-foreground/40" strokeWidth={2.5} />
+                  <CircleSlash className="mt-px size-3.5 shrink-0 text-tertiary" strokeWidth={2.5} />
                 )}
-                <span className="min-w-0 flex-1 text-foreground/60">
+                <span className="min-w-0 flex-1 text-secondary">
                   {v.reason || (v.result === 'pass' ? t('tasks.verdictPass') : v.result === 'fail' ? t('tasks.verdictFail') : t('tasks.verdictUnparsed'))}
                 </span>
               </div>
@@ -1319,28 +1331,31 @@ function ResultsPanel({
       {results.nodes.map((node) => {
         const pill = resolveNodeStatePill(node.state)
         return (
-        <div key={node.id} className="rounded-[10px] border border-border/70 bg-foreground/[0.015] p-3">
+        <div key={node.id} className="rounded-lg border border-subtle p-3">
           <div className="flex items-center gap-2">
-            <span className="min-w-0 flex-1 truncate text-[13px] font-semibold">{node.title}</span>
-            <span className={cn('shrink-0 rounded-full border px-2 py-0.5 text-[10.5px] font-bold', pill.className)}>
+            <span className="min-w-0 flex-1 truncate text-label font-semibold">{node.title}</span>
+            <span className={cn('inline-flex h-5 shrink-0 items-center rounded-xs px-1.5 text-label-sm font-medium', pill.className)}>
               {pill.labelKey ? t(pill.labelKey) : node.state}
             </span>
             {node.sessionId && onOpenChildSession && (
-              <button
+              <Button
                 type="button"
+                variant="link"
+                size="sm"
                 onClick={() => onOpenChildSession(node.sessionId!)}
-                className="inline-flex shrink-0 items-center gap-1 rounded text-[11.5px] font-semibold text-indigo-500 hover:underline dark:text-indigo-300"
+                className="shrink-0 gap-1 font-medium"
               >
-                <ExternalLink className="h-3 w-3" strokeWidth={2.5} /> {t('tasks.openSession')}
-              </button>
+                <ExternalLink className="size-3.5" strokeWidth={2} /> {t('tasks.openSession')}
+              </Button>
             )}
           </div>
           {node.output ? (
-            <div className="mt-2 max-h-72 overflow-y-auto rounded-md border border-border/50 bg-background px-3 py-2 text-[12px] leading-relaxed">
+            // Run output reads in a sunken well (tool output material), scrollable past 288px
+            <div className="mt-2 max-h-72 overflow-y-auto rounded-md bg-sunken px-3 py-2 text-label">
               <Markdown>{node.output}</Markdown>
             </div>
           ) : (
-            <p className="mt-1.5 text-[11.5px] text-foreground/40">{t('tasks.noOutput')}</p>
+            <p className="mt-1.5 text-label-sm text-tertiary">{t('tasks.noOutput')}</p>
           )}
         </div>
         )

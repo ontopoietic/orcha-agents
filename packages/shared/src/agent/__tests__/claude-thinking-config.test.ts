@@ -56,6 +56,18 @@ describe('resolveClaudeThinkingOptions', () => {
     })
   })
 
+  it('uses adaptive thinking on Haiku 5.5, which has no budget mode and rejects disabled', () => {
+    expect(resolveClaudeThinkingOptions({
+      thinkingLevel: 'high', model: 'claude-haiku-5-5', providerType: 'anthropic', minimizeThinking: false,
+    })).toEqual({ thinking: { type: 'adaptive' }, effort: 'high' })
+    expect(resolveClaudeThinkingOptions({
+      thinkingLevel: 'off', model: 'claude-haiku-5-5', providerType: 'anthropic', minimizeThinking: false,
+    })).toEqual({ thinking: { type: 'adaptive' }, effort: 'low' })
+    expect(resolveClaudeThinkingOptions({
+      thinkingLevel: 'off', model: 'claude-sonnet-5-5', providerType: 'anthropic', minimizeThinking: false,
+    })).toEqual({ thinking: { type: 'adaptive' }, effort: 'low' })
+  })
+
   it('disables thinking entirely when level is off on adaptive backends', () => {
     const result = resolveClaudeThinkingOptions({
       thinkingLevel: 'off',

@@ -46,7 +46,7 @@ export interface SessionMeta {
   labels?: string[]
   /** Anchors to Orcha framework artifacts (Feature, Befund, Anliegen) */
   anchors?: AnchorRef[]
-  /** Permission mode ('safe', 'ask', 'allow-all') — used by view expressions */
+  /** Permission mode ('safe', 'ask', 'guarded', 'allow-all') — used by view expressions */
   permissionMode?: string
   /** Session status for filtering */
   sessionStatus?: string
@@ -740,6 +740,10 @@ export interface BackgroundTask {
   outputFile?: string
   /** Short summary, set when task_completed arrives */
   summary?: string
+  /** What a running task is doing (task_activity): the agent's one-line summary, its last tool, its step count */
+  activity?: { summary?: string; lastToolName?: string; toolUses?: number }
+  /** A stop was requested; the stopped status arrives as task_completed */
+  stopping?: boolean
 }
 
 /**

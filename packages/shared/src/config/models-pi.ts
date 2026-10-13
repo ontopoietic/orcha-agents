@@ -16,6 +16,7 @@
 import { getProviders, getModels } from '@earendil-works/pi-ai/compat';
 import type { Model, Api } from '@earendil-works/pi-ai';
 import type { ModelDefinition } from './models.ts';
+import { fromPiProviderId, toPiProviderId } from './pi-provider-ids.ts';
 
 // ============================================
 // PI MODEL DISCOVERY
@@ -128,7 +129,7 @@ export function getPiModelsForAuthProvider(piAuthProvider: string): ModelDefinit
   let result: ModelDefinition[] = [];
 
   try {
-    const models = getModels(piAuthProvider as Parameters<typeof getModels>[0]);
+    const models = getModels(toPiProviderId(piAuthProvider) as Parameters<typeof getModels>[0]);
     if (models.length > 0) {
       result = models
         .filter(m => !isExcludedPiModel(m.id))
@@ -198,6 +199,7 @@ const PI_PROVIDER_DISPLAY: Partial<Record<string, { label: string; placeholder: 
   'amazon-bedrock':         { label: 'Amazon Bedrock',     placeholder: 'AKIA...' },
   'azure-openai-responses': { label: 'Azure OpenAI',       placeholder: 'Paste your key here...' },
   'vercel-ai-gateway':      { label: 'Vercel AI Gateway',  placeholder: 'Paste your key here...' },
+  'cloudflare-ai-gateway':  { label: 'Cloudflare AI Gateway', placeholder: 'Cloudflare API token' },
   'huggingface':            { label: 'Hugging Face',       placeholder: 'hf_...' },
   'minimax':                { label: 'Minimax',            placeholder: 'Paste your key here...' },
   'kimi-coding':            { label: 'Kimi (Coding)',      placeholder: 'sk-kimi-...' },
@@ -232,6 +234,7 @@ function formatProviderName(key: string): string {
  */
 export function getPiApiKeyProviders(): PiProviderInfo[] {
   return getProviders()
+    .map(fromPiProviderId)
     .filter(p => !PI_EXCLUDED_PROVIDERS.has(p))
     .map(p => {
       const display = PI_PROVIDER_DISPLAY[p];
@@ -257,7 +260,7 @@ export function getPiApiKeyProviders(): PiProviderInfo[] {
  */
 export function getPiProviderBaseUrl(provider: string): string | undefined {
   try {
-    const models = getModels(provider as Parameters<typeof getModels>[0]);
+    const models = getModels(toPiProviderId(provider) as Parameters<typeof getModels>[0]);
     return models[0]?.baseUrl || undefined;
   } catch {
     return undefined;

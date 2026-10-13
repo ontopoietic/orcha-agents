@@ -8,6 +8,7 @@ type EventHarness = {
   processEvent(managed: ManagedSession, event: AgentEvent): Promise<void>
   pendingDeltas: Map<string, { delta: string; turnId?: string }>
   deltaFlushTimers: Map<string, ReturnType<typeof setTimeout>>
+  sessionActivityListeners: Map<string, Set<() => void>>
   sendEvent(event: SessionEvent, workspaceId?: string): void
   persistSession(managed: ManagedSession): void
   monotonic(): number
@@ -19,6 +20,7 @@ function harness() {
   const events: SessionEvent[] = []
   manager.pendingDeltas = new Map()
   manager.deltaFlushTimers = new Map()
+  manager.sessionActivityListeners = new Map()
   manager.sendEvent = event => { events.push(event) }
   manager.persistSession = () => {}
   manager.monotonic = () => Date.now()

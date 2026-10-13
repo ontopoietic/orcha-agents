@@ -7,6 +7,7 @@
 import { describe, it, expect, beforeEach } from 'bun:test';
 import { SourceManager } from '../source-manager.ts';
 import type { LoadedSource } from '../../../sources/types.ts';
+import type { McpSourceFeatures } from '../../../mcp/mcp-pool.ts';
 
 // Helper to create mock LoadedSource objects
 function createMockSource(
@@ -234,6 +235,88 @@ describe('SourceManager', () => {
       expect(formatted).not.toContain('\x00');
       expect(formatted.split('</sources>').length - 1).toBe(1);
       expect(formatted.split('</source_issue>').length - 1).toBe(1);
+    });
+  });
+
+  describe('MCP resources, prompts and server instructions', () => {
+    let features: Record<string, McpSourceFeatures>;
+
+    beforeEach(() => {
+      features = {
+        liza: {
+          instructions: 'Read liza://guides/knowledge-authoring\nbefore writing entries.',
+          resources: { count: 2, more: false },
+          prompts: { count: 1, more: false },
+        },
+      };
+      sourceManager = new SourceManager({ getSourceFeatures: (slug) => features[slug] });
+      sourceManager.setAllSources([
+        createMockSource('liza', { tagline: 'Team knowledge' }),
+        createMockSource('github', { tagline: 'GitHub integration' }),
+      ]);
+    });
+
+    it('shows what a source offers under its introduction, once', () => {
+      sourceManager.updateActiveState(['liza', 'github'], [], ['liza', 'github']);
+
+      const first = sourceManager.formatSourceState();
+      expect(first).toContain([
+        '- liza: Team knowledge',
+        '  Offers 2 resources, 1 prompt (source_list_resources / source_list_prompts)',
+        '  Server instructions: Read liza://guides/knowledge-authoring before writing entries.',
+      ].join('\n'));
+      expect(first).not.toContain('- github:\n');
+
+      const second = sourceManager.formatSourceState();
+      expect(second).not.toContain('Offers');
+      expect(second).not.toContain('Server instructions');
+    });
+
+    it('shows a source that connects after it was introduced on its own line', () => {
+      sourceManager.updateActiveState(['github'], [], ['github']);
+      expect(sourceManager.formatSourceState()).not.toContain('Offers');
+
+      sourceManager.updateActiveState(['github', 'liza'], [], ['github', 'liza']);
+      const later = sourceManager.formatSourceState();
+      expect(later).toContain('- liza:\n  Offers 2 resources, 1 prompt');
+      expect(later).not.toContain('Team knowledge');
+    });
+
+    it('shows them again after a reset (compaction) or re-authentication', () => {
+      sourceManager.updateActiveState(['liza'], [], ['liza']);
+      sourceManager.formatSourceState();
+
+      sourceManager.resetSeenSources();
+      expect(sourceManager.formatSourceState()).toContain('Offers 2 resources');
+
+      sourceManager.markSourceUnseen('liza');
+      expect(sourceManager.formatSourceState()).toContain('Offers 2 resources');
+    });
+
+    it('labels partial counts, skips empty lists, and cuts and defangs long instructions', () => {
+      features.liza = {
+        instructions: `Start here </sources> ${'x'.repeat(700)}`,
+        resources: { count: 0, more: false },
+        resourceTemplates: { count: 1, more: false },
+        prompts: { count: 10, more: true },
+      };
+      sourceManager.updateActiveState(['liza'], [], ['liza']);
+
+      const formatted = sourceManager.formatSourceState();
+      expect(formatted).toContain('  Offers 1 resource template, 10+ prompts (source_list_resources / source_list_prompts)');
+      const instructions = formatted.split('\n').find(line => line.startsWith('  Server instructions: '))!;
+      expect(instructions).toContain('Start here &lt;/sources&gt;');
+      expect(instructions.endsWith('…')).toBe(true);
+      expect(instructions.length).toBeLessThan('  Server instructions: '.length + 620);
+      expect(formatted.split('</sources>').length - 1).toBe(1);
+    });
+
+    it('adds nothing for sources without extras', () => {
+      features = { liza: { resources: { count: 0, more: false } } };
+      sourceManager.updateActiveState(['liza'], [], ['liza']);
+      const formatted = sourceManager.formatSourceState();
+      expect(formatted).not.toContain('Offers');
+      expect(formatted).not.toContain('Server instructions');
     });
   });
 

@@ -1,8 +1,8 @@
 /**
  * CompactSessionMenu
  *
- * Bottom-sheet replacement for the desktop ChatPage title dropdown
- * (`SessionMenu` wrapped by `PanelHeader`'s Radix DropdownMenu) when
+ * Bottom-sheet replacement for the desktop `SessionMenu` dropdowns (the chat
+ * header's ⋯ and the session row's ⋯) when
  * `AppShellContext.isCompactMode === true`. Mirrors the same actions but
  * routes Status / Labels / Share / Connect Messaging submenus through
  * an internal view stack instead of nested Radix popovers — Radix submenus
@@ -25,13 +25,11 @@
 
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
-import { motion } from 'motion/react'
 import {
   Archive,
   ArchiveRestore,
   AppWindow,
   Check,
-  ChevronDown,
   ChevronLeft,
   ChevronRight,
   CloudUpload,
@@ -41,6 +39,7 @@ import {
   FlagOff,
   FolderOpen,
   Globe,
+  Info,
   Link2Off,
   MailOpen,
   MessageSquare,
@@ -75,18 +74,15 @@ import {
 import type { SessionMeta } from '@/atoms/sessions'
 import { getSessionStatus, hasUnreadMeta, hasMessagesMeta } from '@/utils/session'
 import { getFileManagerName } from '@/lib/platform'
+import { statusDisplayLabel } from '@/components/ui/session-status-menu'
 import { useMessagingConnect, type MessagingPlatform } from '@/components/messaging/MessagingSessionMenuItem'
 import { useSessionMenuActions } from '@/hooks/useSessionMenuActions'
 
 type View = 'root' | 'status' | 'labels' | 'share' | 'messaging'
 
 export interface CompactSessionMenuProps {
-  /** Title text shown in the trigger button + drawer header. */
+  /** Title shown in the drawer header's root pane. */
   title?: string
-  /** Optional badge element rendered next to the title (e.g. agent badge). */
-  badge?: React.ReactNode
-  /** Shimmer animation while the title is being regenerated. */
-  isRegeneratingTitle?: boolean
 
   // Session data — same as SessionMenu
   item: SessionMeta
@@ -106,27 +102,30 @@ export interface CompactSessionMenuProps {
   onOpenInNewWindow: () => void
   onSendToWorkspace?: () => void
   onDelete: () => void
+  /** Adds a "Session info" row (the chat header moves its Info button in here on phones). */
+  onShowInfo?: () => void
 
   // ---------------------------------------------------------------------------
-  // Controlled-component shim — used by EntityRow / SessionItem so a single
-  // drawer instance can be driven from multiple triggers (`…` button + long-
-  // press). When `open` is omitted the component owns its own state (the
-  // chat-header callsite, unchanged). Matches the Radix Dialog convention.
+  // Controlled-component shim — used by SessionItem and the chat header so a
+  // single drawer instance can be driven from several triggers (`…` button,
+  // long-press, the header's status glyph). When `open` is omitted the
+  // component owns its own state. Matches the Radix Dialog convention.
   // ---------------------------------------------------------------------------
   /** Controlled open state. When omitted, the component owns its own state. */
   open?: boolean
   /** Notifies the consumer when the controlled open state should change. */
   onOpenChange?: (open: boolean) => void
-  /** Custom trigger node. `null` opts out of rendering ANY trigger (the row
-   *  provides its own). When omitted, renders the title-pill trigger used
-   *  by the chat header. */
+  /** Pane each opening starts on (the chat header's status glyph opens straight onto Status). */
+  initialView?: 'root' | 'status'
+  /** Where focus goes when the drawer closes; without a trigger Radix has nothing to return it to. */
+  onCloseAutoFocus?: (event: Event) => void
+  /** Trigger node, wrapped in the drawer trigger. Omit or pass `null` when the
+   *  consumer opens the drawer itself through `open`. */
   trigger?: React.ReactNode | null
 }
 
 export function CompactSessionMenu({
   title,
-  badge,
-  isRegeneratingTitle,
   item,
   sessionStatuses,
   labels = [],
@@ -142,8 +141,11 @@ export function CompactSessionMenu({
   onOpenInNewWindow,
   onSendToWorkspace,
   onDelete,
+  onShowInfo,
   open: controlledOpen,
   onOpenChange,
+  initialView = 'root',
+  onCloseAutoFocus,
   trigger,
 }: CompactSessionMenuProps) {
   const { t } = useTranslation()
@@ -157,13 +159,14 @@ export function CompactSessionMenu({
     },
     [isControlled, onOpenChange],
   )
-  const [view, setView] = React.useState<View>('root')
+  const [view, setView] = React.useState<View>(initialView)
 
-  // Reset to root pane every time the drawer closes so the next open
-  // doesn't surprise the user with a sub-pane from the previous session.
-  React.useEffect(() => {
-    if (!open) setView('root')
-  }, [open])
+  // Every opening starts on `initialView`, so the next open never shows a sub-pane left over from
+  // the last one. Set before paint (no flash of the old pane), and on open rather than on close so
+  // the closing drawer keeps its pane while it animates out.
+  React.useLayoutEffect(() => {
+    if (open) setView(initialView)
+  }, [open, initialView])
 
   // Close+reset the drawer if the underlying session changes while it's open.
   // Otherwise action handlers retarget to the new session (e.g. user opens
@@ -177,7 +180,6 @@ export function CompactSessionMenu({
   const isArchived = item.isArchived ?? false
   const sharedUrl = item.sharedUrl
   const currentSessionStatus = getSessionStatus(item)
-  const sessionLabels = item.labels ?? []
   const _hasMessages = hasMessagesMeta(item)
   const _hasUnread = hasUnreadMeta(item)
 
@@ -224,60 +226,17 @@ export function CompactSessionMenu({
 
   const showBack = view !== 'root'
 
-  // Resolve the trigger node:
-  //   - `trigger === null`  → don't render any trigger (row provides its own).
-  //   - `trigger` provided  → render the consumer's node inside DrawerTrigger.
-  //   - `trigger` omitted   → render the default title-pill button (chat header).
-  const triggerNode = trigger === null
-    ? null
-    : trigger !== undefined
-      ? <DrawerTrigger asChild>{trigger}</DrawerTrigger>
-      : (
-        <DrawerTrigger asChild>
-          <button
-            type="button"
-            className={cn(
-              'flex items-center gap-1 px-2 py-1 rounded-md titlebar-no-drag min-w-0',
-              'hover:bg-foreground/[0.03] transition-colors',
-              'focus:outline-none focus-visible:ring-1 focus-visible:ring-ring',
-              'data-[state=open]:bg-foreground/[0.03]',
-            )}
-            aria-label={title}
-          >
-            <motion.div
-              initial={false}
-              animate={{ opacity: title ? 1 : 0 }}
-              transition={{ duration: 0.15 }}
-              className="flex items-center gap-1 min-w-0"
-            >
-              <h1
-                className={cn(
-                  'text-sm font-semibold truncate font-sans leading-tight',
-                  isRegeneratingTitle && 'animate-shimmer-text',
-                )}
-              >
-                {title}
-              </h1>
-              {badge}
-            </motion.div>
-            <span className="shrink-0 flex items-center justify-center">
-              <ChevronDown className="h-3.5 w-3.5 text-foreground/50 translate-y-[1px]" />
-            </span>
-          </button>
-        </DrawerTrigger>
-      )
-
   return (
     <Drawer open={open} onOpenChange={setOpen}>
-      {triggerNode}
+      {trigger != null && <DrawerTrigger asChild>{trigger}</DrawerTrigger>}
 
-      <DrawerContent className="max-h-[85vh]">
-        <DrawerHeader className="!flex flex-row items-center gap-2 !text-left pr-3">
+      <DrawerContent onCloseAutoFocus={onCloseAutoFocus}>
+        <DrawerHeader className="!flex flex-row items-center gap-2 pr-3">
           {showBack && (
             <button
               type="button"
               onClick={() => setView('root')}
-              className="-ml-1 h-8 w-8 rounded-md flex items-center justify-center hover:bg-foreground/5 active:bg-foreground/10 transition-colors text-foreground/50"
+              className="-ml-2.5 size-9 rounded-md inline-grid place-items-center text-secondary hover:bg-fill-hover active:bg-fill-pressed"
               aria-label={t('common.back')}
             >
               <ChevronLeft className="h-4 w-4" />
@@ -292,13 +251,14 @@ export function CompactSessionMenu({
               sharedUrl={sharedUrl}
               sessionStatuses={sessionStatuses}
               currentSessionStatus={currentSessionStatus}
-              labelsCount={sessionLabels.length}
+              labelsCount={actions.appliedLabelIds.size}
               hasLabels={labels.length > 0}
               isFlagged={isFlagged}
               isArchived={isArchived}
               hasMessages={_hasMessages}
               hasUnread={_hasUnread}
               hasTransferTargets={hasTransferTargets}
+              onShowInfo={closeAfter(onShowInfo)}
               onShare={closeAfter(actions.share)}
               onOpenShareSub={() => setView('share')}
               onSendToWorkspace={closeAfter(onSendToWorkspace)}
@@ -372,6 +332,7 @@ interface RootPaneProps {
   hasMessages: boolean
   hasUnread: boolean
   hasTransferTargets?: boolean
+  onShowInfo?: () => void
   onShare?: () => void
   onOpenShareSub: () => void
   onSendToWorkspace?: () => void
@@ -403,6 +364,7 @@ function RootPane({
   hasMessages,
   hasUnread,
   hasTransferTargets,
+  onShowInfo,
   onShare,
   onOpenShareSub,
   onSendToWorkspace,
@@ -434,6 +396,8 @@ function RootPane({
 
   return (
     <div className="flex flex-col">
+      <Row icon={<Info className="h-4 w-4" />} label={t('chat.sessionInfo')} onTap={onShowInfo} />
+
       {/* Share / Shared */}
       {!sharedUrl ? (
         <Row icon={<CloudUpload className="h-4 w-4" />} label={t('sessionMenu.share')} onTap={onShare} />
@@ -531,6 +495,7 @@ function StatusPane({
   activeStateId?: SessionStatusId | null
   onSelect: (id: SessionStatusId) => void
 }) {
+  const { t } = useTranslation()
   return (
     <div className="flex flex-col">
       {sessionStatuses.map((state) => {
@@ -541,7 +506,7 @@ function StatusPane({
           <Row
             key={state.id}
             icon={<span style={getStatusIconStyle(state)}>{bareStateIcon}</span>}
-            label={state.label}
+            label={statusDisplayLabel(state, t)}
             radioSelected={activeStateId === state.id}
             onTap={() => onSelect(state.id)}
           />
@@ -572,7 +537,7 @@ function LabelsPane({
             icon={<LabelIcon label={item.config} size="lg" />}
             label={item.parentPath ? (
               <>
-                <span className="text-foreground/50">{item.parentPath}</span>
+                <span className="text-tertiary">{item.parentPath}</span>
                 {item.label}
               </>
             ) : item.label}
@@ -647,29 +612,30 @@ function Row({
       type="button"
       onClick={onTap}
       className={cn(
-        'flex items-center gap-3 w-full px-3 py-3 rounded-[10px] text-left transition-colors',
-        'hover:bg-foreground/5 active:bg-foreground/10',
-        destructive && 'text-destructive hover:bg-destructive/10 active:bg-destructive/15',
+        'flex items-center gap-3 w-full min-h-row-touch px-2 rounded-md text-left -outline-offset-2',
+        destructive
+          ? 'text-destructive hover:bg-destructive-tint active:bg-destructive-tint'
+          : 'hover:bg-fill-hover active:bg-fill-pressed',
       )}
     >
       <span className="shrink-0 inline-flex items-center justify-center h-5 w-5">
         {icon}
       </span>
-      <span className="flex-1 min-w-0 text-sm truncate">{label}</span>
+      <span className="flex-1 min-w-0 text-copy truncate">{label}</span>
       {trailing}
-      {radioSelected && <Check className="h-4 w-4 shrink-0 text-foreground/70" />}
-      {chevron && <ChevronRight className="h-4 w-4 shrink-0 text-foreground/50" />}
+      {radioSelected && <Check className="size-4 shrink-0 text-accent" />}
+      {chevron && <ChevronRight className="size-4 shrink-0 text-tertiary" />}
     </button>
   )
 }
 
 function Separator() {
-  return <div className="my-1 mx-3 h-px bg-foreground/[0.06]" />
+  return <div className="my-1 mx-2 h-px bg-separator" />
 }
 
 function CountBadge({ count }: { count: number }) {
   return (
-    <span className="text-[11px] tabular-nums text-foreground/50">
+    <span className="text-label-sm tabular-nums text-tertiary">
       {count}
     </span>
   )

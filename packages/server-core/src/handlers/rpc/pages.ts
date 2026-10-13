@@ -27,6 +27,7 @@ export const HANDLED_CHANNELS = [
   RPC_CHANNELS.pages.PUBLISH,
   RPC_CHANNELS.pages.SET_PUBLICATION_PASSWORD,
   RPC_CHANNELS.pages.UNPUBLISH,
+  RPC_CHANNELS.pages.PUBLISH_CLAUDE_ARTIFACT,
   RPC_CHANNELS.pages.GET_THUMBNAIL,
   RPC_CHANNELS.pages.REGENERATE_THUMBNAIL,
 ] as const
@@ -434,6 +435,39 @@ export function registerPagesHandlers(server: RpcServer, deps: HandlerDeps): voi
     deps.sessionManager.notifyConfigFileChange(workspace.rootPath, `pages/${pageSlug}/page.json`)
     await broadcastChanged(workspaceId, workspace.rootPath)
     return { config: result.config, warning: result.warning }
+  })
+
+  // Publish (or update) the page as a claude.ai artifact through Claude Code's
+  // Artifact tool, authenticated with the Claude account connection the
+  // renderer's button is gated on (same credential resolution as chats).
+  server.handle(RPC_CHANNELS.pages.PUBLISH_CLAUDE_ARTIFACT, async (_ctx, workspaceId: string, pageSlug: string) => {
+    const workspace = getWorkspaceByNameOrId(workspaceId)
+    if (!workspace) throw new Error(`Workspace not found: ${workspaceId}`)
+    const { getLlmConnections, getDefaultLlmConnection, getMiniModel, getDefaultSummarizationModel, findClaudeArtifactConnection, resolveAuthEnvVars } =
+      await import('@craft-agent/shared/config')
+    const { CLAUDE_ARTIFACT_AUTH_REQUIRED_MESSAGE, ClaudeArtifactError, publishPageAsClaudeArtifact } =
+      await import('@craft-agent/shared/pages/claude-artifact')
+    const connection = findClaudeArtifactConnection(getLlmConnections(), getDefaultLlmConnection())
+    if (!connection) {
+      throw new ClaudeArtifactError('ARTIFACT_UNAVAILABLE', 'Connect a Claude account in Settings → AI to publish artifacts.')
+    }
+    const { getCredentialManager } = await import('@craft-agent/shared/credentials')
+    const { getValidClaudeOAuthToken } = await import('@craft-agent/shared/auth')
+    const auth = await resolveAuthEnvVars(connection, connection.slug, getCredentialManager(), getValidClaudeOAuthToken)
+    if (!auth.success) {
+      log.warn(`[pages] Claude artifact auth for ${connection.slug} failed: ${auth.warning}`)
+      throw new ClaudeArtifactError('ARTIFACT_AUTH_REQUIRED', CLAUDE_ARTIFACT_AUTH_REQUIRED_MESSAGE)
+    }
+    const updated = await publishPageAsClaudeArtifact({
+      workspaceRootPath: workspace.rootPath,
+      pageSlug,
+      model: getMiniModel(connection) ?? getDefaultSummarizationModel(),
+      authEnv: auth.envVars,
+    })
+    log.info(`[pages] published ${pageSlug} as Claude artifact ${updated.claudeArtifact?.url}`)
+    deps.sessionManager.notifyConfigFileChange(workspace.rootPath, `pages/${pageSlug}/page.json`)
+    await broadcastChanged(workspaceId, workspace.rootPath)
+    return updated
   })
 
   // ------------------------------------------------------------------

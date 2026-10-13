@@ -75,6 +75,14 @@ function sandboxForKind(kind: PageKind): string {
   return kind === 'static' ? '' : 'allow-scripts allow-forms'
 }
 
+/**
+ * The page's own canvas, not app chrome: authored pages (see the starter template in
+ * resources/docs/pages.md) set dark text on an unset background, so the frame keeps a
+ * white canvas in every theme and mode. The chrome around it (PageView) uses roles.
+ */
+// eslint-disable-next-line craft-styles/no-raw-palette-colors -- page canvas, see above
+const PAGE_CANVAS_CLASS = 'h-full w-full border-0 bg-white'
+
 /** Transient user activation, propagated from clicks inside the frame. */
 function hasUserActivation(): boolean {
   const nav = navigator as Navigator & { userActivation?: { isActive?: boolean } }
@@ -323,7 +331,7 @@ export function PageFrame({ workspaceId, page, lease, content, snapshot, classNa
         referrerPolicy="no-referrer"
         srcDoc={content}
         onLoad={postInit}
-        className={className ?? 'h-full w-full border-0 bg-white'}
+        className={className ?? PAGE_CANVAS_CLASS}
       />
       <PageGrantRequestDialog
         pageName={page.config.name}

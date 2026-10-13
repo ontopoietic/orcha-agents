@@ -149,7 +149,7 @@ export function LabelMenuItems({
                 <LabelIcon label={label} size="sm" hasChildren />
                 <span className="flex-1">{label.name}</span>
                 {subtreeCount > 0 && (
-                  <span className="text-[10px] text-foreground/50 tabular-nums -mr-2.5">
+                  <span className="text-caption text-tertiary tabular-nums -mr-2.5">
                     {subtreeCount}
                   </span>
                 )}

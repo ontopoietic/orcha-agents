@@ -28,8 +28,9 @@ function logCall(method: string) {
 
 // Build a minimal value that satisfies the type. Most callbacks are no-ops;
 // only `workspaces` and `activeWorkspaceId` carry real data so
-// `useActiveWorkspace()` resolves to the playground workspace.
-const playgroundValue: AppShellContextType = {
+// `useActiveWorkspace()` resolves to the playground workspace. Demos that need
+// more (the chat header) spread it and override.
+export const playgroundAppShellValue: AppShellContextType = {
   workspaces: [PLAYGROUND_WORKSPACE],
   activeWorkspaceId: PLAYGROUND_WORKSPACE.id,
   activeWorkspaceSlug: PLAYGROUND_WORKSPACE.slug,
@@ -74,5 +75,5 @@ const playgroundValue: AppShellContextType = {
 }
 
 export function PlaygroundAppShellProvider({ children }: { children: React.ReactNode }) {
-  return <AppShellProvider value={playgroundValue}>{children}</AppShellProvider>
+  return <AppShellProvider value={playgroundAppShellValue}>{children}</AppShellProvider>
 }

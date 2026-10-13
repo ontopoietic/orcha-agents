@@ -189,6 +189,14 @@ export const PageShareInfoSchema = z.object({
   lastPublishError: z.string().max(2000).optional(),
 });
 
+export const PageClaudeArtifactInfoSchema = z.object({
+  url: z.string().url(),
+  artifactId: z.string().min(1).optional(),
+  publishedContentDigest: z.string().regex(SHA256_HEX_REGEX, 'Must be a sha256 hex digest'),
+  publishedAt: z.number(),
+  updatedAt: z.number(),
+});
+
 export const PageThumbnailInfoSchema = z.object({
   digest: z.string().regex(SHA256_HEX_REGEX, 'Must be a sha256 hex digest'),
   capturedAt: z.number(),
@@ -212,6 +220,7 @@ export const PageConfigSchema = z.object({
   grants: z.array(PageActionGrantSchema).optional(),
   share: PageShareInfoSchema.optional(),
   thumbnail: PageThumbnailInfoSchema.optional(),
+  claudeArtifact: PageClaudeArtifactInfoSchema.optional(),
 });
 
 // ============================================================================

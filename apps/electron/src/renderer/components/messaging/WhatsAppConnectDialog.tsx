@@ -102,30 +102,32 @@ export function WhatsAppConnectDialog({ open, onOpenChange, onConnected }: Whats
           <DialogDescription>{t('dialog.whatsapp.description')}</DialogDescription>
         </DialogHeader>
 
-        <p className="text-xs text-muted-foreground">
+        <p className="text-label-sm text-tertiary">
           {t('dialog.whatsapp.selfChatHint')}
         </p>
 
         <div className="flex flex-col gap-4 py-2">
           {phase.kind === 'starting' && (
-            <StatusRow icon={<Spinner className="text-[16px]" />}>
+            <StatusRow icon={<Spinner className="text-copy" />}>
               {t('dialog.whatsapp.starting')}
             </StatusRow>
           )}
 
           {phase.kind === 'show_qr' && (
             <div className="flex flex-col items-center gap-3">
+              {/* QR codes scan only as dark-on-white, so the quiet zone stays white in dark mode too */}
+              {/* eslint-disable-next-line craft-styles/no-raw-palette-colors */}
               <div className="rounded-lg bg-white p-4">
                 <QRCodeSVG value={phase.qr} size={240} level="M" />
               </div>
-              <p className="whitespace-pre-line text-center text-sm text-muted-foreground">
+              <p className="whitespace-pre-line text-center text-label text-secondary">
                 {t('dialog.whatsapp.qrInstructions')}
               </p>
             </div>
           )}
 
           {phase.kind === 'connected' && (
-            <StatusRow icon={<Check className="h-4 w-4 text-emerald-500" />}>
+            <StatusRow icon={<Check className="size-4 text-success" />}>
               {phase.name
                 ? t('dialog.whatsapp.connectedAs', { name: phase.name })
                 : t('dialog.whatsapp.connected')}
@@ -133,7 +135,7 @@ export function WhatsAppConnectDialog({ open, onOpenChange, onConnected }: Whats
           )}
 
           {phase.kind === 'error' && (
-            <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+            <div className="rounded-md bg-destructive-tint p-3 text-label text-destructive">
               {phase.message}
             </div>
           )}
@@ -145,7 +147,7 @@ export function WhatsAppConnectDialog({ open, onOpenChange, onConnected }: Whats
 
 function StatusRow({ icon, children }: { icon: React.ReactNode; children: React.ReactNode }) {
   return (
-    <div className="flex items-center gap-2 text-sm">
+    <div className="flex items-center gap-2 text-label">
       {icon}
       <span>{children}</span>
     </div>

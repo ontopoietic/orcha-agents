@@ -5,37 +5,23 @@ import { cn } from '@/lib/utils'
 import { ModelChip } from './ModelChip'
 import type { KanbanSubtask, SubtaskRunState } from './types'
 
-/** Run-state glyph for a spawned subtask: done / running / pending / failed. */
+/**
+ * Run-state glyph for a spawned subtask (design spec §2.4 vocabulary): done (success check),
+ * running (the working mark in accent), pending (quiet ring), failed (destructive cross).
+ * Each state has its own shape, so state is never carried by color alone.
+ */
 function RunStateIcon({ runState }: { runState: SubtaskRunState }) {
   const { t } = useTranslation()
   switch (runState) {
     case 'done':
-      return (
-        <CheckCircle2
-          className="h-3.5 w-3.5 shrink-0"
-          style={{ color: 'var(--success)' }}
-          aria-label={t('common.done')}
-        />
-      )
+      return <CheckCircle2 className="size-3.5 shrink-0 text-success" aria-label={t('common.done')} />
     case 'running':
-      return <Spinner className="text-sm text-[color:var(--info)] shrink-0" />
+      return <Spinner className="shrink-0 text-label text-accent" />
     case 'failed':
-      return (
-        <XCircle
-          className="h-3.5 w-3.5 shrink-0 text-red-500"
-          strokeWidth={2}
-          aria-label={t('common.failed')}
-        />
-      )
+      return <XCircle className="size-3.5 shrink-0 text-destructive" strokeWidth={2} aria-label={t('common.failed')} />
     case 'pending':
     default:
-      return (
-        <Circle
-          className="h-3.5 w-3.5 shrink-0 text-foreground/30"
-          strokeWidth={1.5}
-          aria-label={t('common.pending')}
-        />
-      )
+      return <Circle className="size-3.5 shrink-0 text-tertiary" strokeWidth={1.5} aria-label={t('common.pending')} />
   }
 }
 
@@ -74,14 +60,14 @@ export function SubtaskRow({ subtask, className, onClick }: SubtaskRowProps) {
           : undefined
       }
       className={cn(
-        'flex items-center gap-2 py-1',
+        'flex min-h-6 items-center gap-2 py-0.5',
         interactive &&
-          '-mx-1 cursor-pointer rounded px-1 transition-colors hover:bg-foreground/[0.05] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/50',
+          '-mx-1 cursor-pointer rounded-sm px-1 transition-colors duration-micro ease-out-subtle hover:bg-fill-hover hover:duration-instant',
         className
       )}
     >
       <RunStateIcon runState={subtask.runState} />
-      <span className={cn('flex-1 truncate text-xs', isDone ? 'text-foreground/45 line-through' : 'text-foreground/80')}>
+      <span className={cn('flex-1 truncate text-label-sm', isDone ? 'text-tertiary line-through' : 'text-secondary')}>
         {subtask.title}
       </span>
       <ModelChip model={subtask.model} short className="w-20 shrink-0" />

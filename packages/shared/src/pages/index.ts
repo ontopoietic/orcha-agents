@@ -71,6 +71,7 @@ export {
   type AddPageGrantInput,
   // Share state
   setPageShareState,
+  setPageClaudeArtifactState,
   // Thumbnail (cached poster)
   recordPageThumbnail,
   isThumbnailFresh,

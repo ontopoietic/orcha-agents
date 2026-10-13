@@ -4,11 +4,12 @@
  * Uses real temp directories to exercise actual filesystem operations.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
-import { mkdtempSync, writeFileSync, rmSync, existsSync } from 'fs';
+import { appendFileSync, mkdtempSync, readFileSync, writeFileSync, rmSync, existsSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { estimateTokensDensityAware } from '../../utils/large-response.ts';
 import {
+  appendProjectMemoryEntry,
   createProject,
   getProjectMemoryPath,
   loadProjectMemory,
@@ -67,7 +68,7 @@ describe('loadProjectMemory', () => {
     expect(loadProjectMemory(workspaceRoot, slug)).toBe(content);
   });
 
-  it('head-truncates and appends a marker when over the cap, staying within budget', () => {
+  it('keeps the start and the end with a marker when over the cap, staying within budget', () => {
     const slug = makeProjectSlug();
     const maxTokens = 50;
     // ~2000 chars of plain text => ~500 tokens, well over the 50-token cap.
@@ -78,12 +79,43 @@ describe('loadProjectMemory', () => {
     expect(result).not.toBeNull();
     const text = result as string;
 
-    // Head kept (newest-first authoring), tail dropped.
+    // Older files keep their newest notes at the top; appended notes land at the end.
     expect(text).toContain('TOP-OF-MEMORY');
-    expect(text).not.toContain('BOTTOM-OF-MEMORY');
+    expect(text).toContain('BOTTOM-OF-MEMORY');
 
     // Marker present and budget respected (marker included).
-    expect(text).toContain(`truncated at ${maxTokens}-token cap`);
+    expect(text).toContain(`over the ${maxTokens}-token cap`);
     expect(estimateTokensDensityAware(text)).toBeLessThanOrEqual(maxTokens);
+  });
+});
+
+describe('appendProjectMemoryEntry', () => {
+  it('creates MEMORY.md and appends notes under dated headings without touching earlier content', () => {
+    const slug = makeProjectSlug();
+    const first = appendProjectMemoryEntry(workspaceRoot, slug, '2026-10-11T22:00:00Z — Explore', 'Login needs the staging account.');
+    expect(first.path).toBe(getProjectMemoryPath(workspaceRoot, slug));
+    appendProjectMemoryEntry(workspaceRoot, slug, '2026-10-11T23:00:00Z —\n Persona  tests', '- The consent page needs a JS click.');
+
+    expect(readFileSync(first.path, 'utf-8')).toBe(
+      '## 2026-10-11T22:00:00Z — Explore\n\nLogin needs the staging account.\n\n' +
+      '## 2026-10-11T23:00:00Z — Persona tests\n\n- The consent page needs a JS click.\n',
+    );
+  });
+
+  // Found 2026-10-11: a session rewrote MEMORY.md from its start-of-session snapshot and dropped
+  // notes other sessions had added since.
+  it('never rewrites the file, so notes added by others in between survive', () => {
+    const slug = makeProjectSlug();
+    const path = getProjectMemoryPath(workspaceRoot, slug);
+    writeFileSync(path, '# Lessons\n');
+    appendProjectMemoryEntry(workspaceRoot, slug, 'A', 'first note');
+    appendFileSync(path, '\n## B\n\nadded by another session\n');
+    appendProjectMemoryEntry(workspaceRoot, slug, 'A', 'second note');
+
+    const content = readFileSync(path, 'utf-8');
+    expect(content.startsWith('# Lessons\n')).toBe(true);
+    const order = ['first note', 'added by another session', 'second note'].map(text => content.indexOf(text));
+    expect(order.every(index => index >= 0)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
   });
 });

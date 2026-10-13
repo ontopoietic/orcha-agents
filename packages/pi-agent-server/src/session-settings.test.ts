@@ -61,6 +61,19 @@ describe('createCraftSettingsManager', () => {
     expect(createCraftSettingsManager().getCompactionEnabled()).toBe(true);
   });
 
+  it('warms the prompt cache during chat runs but never for one-shot utility sessions', () => {
+    expect(createCraftSettingsManager().getCacheWarmingMode()).toBe('streaming');
+    expect(createCraftSettingsManager('ephemeral').getCacheWarmingMode()).toBe('off');
+  });
+
+  it('never trusts the working directory as a Pi project', () => {
+    // A trusted project auto-loads <cwd>/.pi/extensions (code), skills, prompts
+    // and SYSTEM.md. The SDK's in-memory default trusts the project.
+    expect(SettingsManager.inMemory().isProjectTrusted()).toBe(true);
+    expect(createCraftSettingsManager().isProjectTrusted()).toBe(false);
+    expect(createCraftSettingsManager('ephemeral').isProjectTrusted()).toBe(false);
+  });
+
   it('ignores a .pi/settings.json in the working directory', () => {
     // A repo used as the session's working directory may ship Pi project
     // settings. The SDK's default SettingsManager.create(cwd, agentDir) merges

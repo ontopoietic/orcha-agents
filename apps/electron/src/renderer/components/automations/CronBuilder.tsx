@@ -96,17 +96,14 @@ interface CronFieldProps {
 function CronField({ field, value, onChange }: CronFieldProps) {
   return (
     <div className="flex flex-col gap-1">
-      <label className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">
+      <label className="text-label-sm font-medium text-tertiary">
         {field.label}
       </label>
       <input
         type="text"
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className={cn(
-          'w-full px-2 py-1.5 text-xs font-mono text-center rounded-md border border-border/50',
-          'bg-background focus:outline-none focus:ring-1 focus:ring-accent/50',
-        )}
+        className="field-surface h-control-lg w-full rounded-md px-2 text-center font-mono text-mono-ui"
         placeholder="*"
       />
     </div>
@@ -177,7 +174,7 @@ export function CronBuilder({
     <div className={cn('space-y-5', className)}>
       {/* Layer 1: Common Schedules */}
       <div className="space-y-2">
-        <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wider pl-1">
+        <h4 className="text-label font-semibold text-foreground">
           Common Schedules
         </h4>
         <div className="flex flex-wrap gap-1.5">
@@ -185,11 +182,12 @@ export function CronBuilder({
             <button
               key={preset.cron}
               onClick={() => handlePreset(preset.cron)}
+              aria-pressed={rawInput === preset.cron}
               className={cn(
-                'px-3 py-1.5 text-xs font-medium rounded-md transition-colors',
+                'motion-press inline-flex h-control items-center rounded-full px-2.5 text-label font-medium',
                 rawInput === preset.cron
-                  ? 'bg-foreground/10 text-foreground ring-1 ring-border/50'
-                  : 'bg-foreground/[0.03] text-foreground/70 hover:bg-foreground/[0.06] shadow-minimal'
+                  ? 'bg-fill-selected text-foreground inset-ring inset-ring-border'
+                  : 'text-secondary inset-ring inset-ring-border hover:bg-fill-hover hover:text-foreground'
               )}
             >
               {preset.label}
@@ -200,7 +198,7 @@ export function CronBuilder({
 
       {/* Layer 2: Custom Schedule */}
       <div className="space-y-2">
-        <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wider pl-1">
+        <h4 className="text-label font-semibold text-foreground">
           Custom Schedule
         </h4>
         <div className="grid grid-cols-5 gap-2">
@@ -217,47 +215,42 @@ export function CronBuilder({
 
       {/* Layer 3: Advanced */}
       <div className="space-y-2">
-        <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wider pl-1">
+        <h4 className="text-label font-semibold text-foreground">
           Advanced
         </h4>
         <input
           type="text"
           value={rawInput}
           onChange={(e) => handleRawChange(e.target.value)}
-          className={cn(
-            'w-full px-3 py-2 text-sm font-mono rounded-md border',
-            'bg-background focus:outline-none focus:ring-1',
-            validationError
-              ? 'border-destructive/50 focus:ring-destructive/30'
-              : 'border-border/50 focus:ring-accent/50'
-          )}
+          aria-invalid={validationError ? true : undefined}
+          className="field-surface h-control-lg w-full rounded-md px-2.5 font-mono text-mono-ui"
           placeholder="* * * * *"
         />
         {validationError && (
-          <div className="flex items-center gap-1.5 text-xs text-destructive">
-            <AlertCircle className="h-3 w-3" />
+          <div className="flex items-center gap-1.5 text-label-sm text-destructive">
+            <AlertCircle className="size-3.5" aria-hidden />
             {validationError}
           </div>
         )}
       </div>
 
       {/* Summary */}
-      <div className="bg-background shadow-minimal rounded-[8px] p-4 space-y-3">
+      <div className="space-y-3 rounded-lg bg-raised p-3.5 shadow-elev-1">
         {/* Human-readable description */}
         <div className="flex items-center gap-2">
-          <Clock className="h-4 w-4 text-muted-foreground" />
-          <span className="text-sm font-medium">{description}</span>
+          <Clock className="size-4 text-tertiary" aria-hidden />
+          <span className="text-label font-medium text-foreground">{description}</span>
         </div>
 
         {/* Next runs */}
         {nextRuns.length > 0 && !validationError && (
           <div className="space-y-1">
-            <span className="text-xs text-muted-foreground">Next runs:</span>
+            <span className="text-label-sm text-tertiary">Next runs:</span>
             <div className="flex flex-col gap-0.5">
               {(() => {
                 const spansYears = nextRuns.length > 1 && nextRuns[0].getFullYear() !== nextRuns[nextRuns.length - 1].getFullYear()
                 return nextRuns.map((date, i) => (
-                  <span key={i} className="text-xs text-foreground/70 tabular-nums">
+                  <span key={i} className="text-label-sm text-secondary tabular-nums">
                     {date.toLocaleDateString('en-US', {
                       weekday: 'short',
                       month: 'short',
@@ -276,9 +269,9 @@ export function CronBuilder({
         )}
 
         {/* Timezone */}
-        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+        <div className="flex items-center gap-2 text-label-sm text-tertiary">
           <span>{t('automations.labelTimezone')}:</span>
-          <span className="font-medium text-foreground/70">{timezone || t('automations.systemDefault')}</span>
+          <span className="font-medium text-secondary">{timezone || t('automations.systemDefault')}</span>
         </div>
       </div>
     </div>

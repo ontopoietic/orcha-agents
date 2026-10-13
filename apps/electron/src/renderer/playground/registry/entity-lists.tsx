@@ -299,8 +299,8 @@ function SessionEntityListPreview({
                         key={i}
                         className="shrink-0 h-[18px] max-w-[120px] px-1.5 text-[10px] font-medium rounded flex items-center whitespace-nowrap"
                         style={{
-                          backgroundColor: 'rgba(var(--foreground-rgb), 0.05)',
-                          color: 'rgba(var(--foreground-rgb), 0.8)',
+                          backgroundColor: 'color-mix(in srgb, var(--fg-base) 5%, transparent)',
+                          color: 'color-mix(in srgb, var(--fg-base) 80%, transparent)',
                         }}
                       >
                         {label}
@@ -439,6 +439,8 @@ function SkillEntityListPreview({
 
 interface MixedEntityListPreviewProps {
   showGroups?: boolean
+  /** Groups collapse from their header, like the session list's date groups */
+  collapsible?: boolean
   selectedIndex?: number
   showEmpty?: boolean
 }
@@ -450,9 +452,12 @@ type MixedEntity =
 
 function MixedEntityListPreview({
   showGroups = true,
+  collapsible = false,
   selectedIndex = -1,
   showEmpty = false,
 }: MixedEntityListPreviewProps) {
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set())
+
   if (showEmpty) {
     return (
       <div className="w-[320px] h-[480px] flex flex-col border border-border rounded-lg overflow-hidden bg-background">
@@ -565,7 +570,9 @@ function MixedEntityListPreview({
       { key: 'sessions', label: 'Sessions', items: allItems.filter(i => i.kind === 'session') },
       { key: 'sources', label: 'Sources', items: allItems.filter(i => i.kind === 'source') },
       { key: 'skills', label: 'Skills', items: allItems.filter(i => i.kind === 'skill') },
-    ]
+    ].map(group => !collapsible ? group : collapsed.has(group.key)
+      ? { ...group, collapsible: true, items: [], collapsedCount: group.items.length }
+      : { ...group, collapsible: true })
 
     // Reset flatIndex for grouped rendering
     flatIndex = -1
@@ -576,6 +583,14 @@ function MixedEntityListPreview({
           groups={groups}
           getKey={getKey}
           renderItem={renderItem}
+          collapsedGroups={collapsed}
+          onToggleCollapse={(key) => setCollapsed(prev => {
+            const next = new Set(prev)
+            if (!next.delete(key)) next.add(key)
+            return next
+          })}
+          onCollapseAll={() => setCollapsed(new Set(groups.map(group => group.key)))}
+          onExpandAll={() => setCollapsed(new Set())}
         />
       </div>
     )
@@ -757,7 +772,7 @@ function InteractiveEntityListPreview({
         {activatedItem && (
           <>
             <span className="text-foreground/20">|</span>
-            <span className="text-success animate-in fade-in">Activated: {activatedItem}</span>
+            <span className="text-success">Activated: {activatedItem}</span>
           </>
         )}
       </div>
@@ -976,6 +991,11 @@ export const entityListComponents: ComponentEntry[] = [
         name: 'Grouped',
         description: 'Items grouped by Sessions, Sources, Skills',
         props: { showGroups: true },
+      },
+      {
+        name: 'Grouped, collapsible',
+        description: 'Group headers collapse their group (hover fill + chevron), like the session list',
+        props: { showGroups: true, collapsible: true },
       },
       {
         name: 'Flat List',

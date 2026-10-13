@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from "react"
+import { Button } from "@/components/ui/button"
 import { useTranslation } from "react-i18next"
 import { useAtomValue, useSetAtom } from "jotai"
 import { isToday, isYesterday, format, startOfDay } from "date-fns"
@@ -41,6 +42,8 @@ import {
   type SessionListRow,
   type SessionMetaLookup,
 } from "./session-list-nesting"
+import { FlipOnChange, SPRING } from "@craft-agent/ui/motion"
+import { useListReorderFlip } from "@/hooks/useListReorderFlip"
 
 // ORCHA §bg-child-sessions (p9): nested child-session row model + pure helpers
 // live in session-list-nesting.ts (unit-tested there).
@@ -972,6 +975,18 @@ export function SessionList({
     sessionOptions, contentSearchResults, activeChatMatchInfo, hasPendingPrompt,
   ])
 
+  // Rows glide to their new place when activity reorders the list (a pure reorder only)
+  const reorderGroups = useMemo(
+    () => rowData.groups.map(group => ({ key: group.key, ids: group.items.map(row => row.item.id) })),
+    [rowData.groups]
+  )
+  const reorderFlip = useListReorderFlip({
+    groups: reorderGroups,
+    container: zoneRef,
+    viewport: scrollViewportRef,
+    rowKeyAttribute: 'data-session-id',
+  })
+
   // --- Empty state (non-search) — render before EntityList ---
   // Don't show empty state when there are collapsed groups with content
   if (flatRows.length === 0 && rowData.groups.length === 0 && !searchActive) {
@@ -993,17 +1008,17 @@ export function SessionList({
         description={t("session.noSessionsYetDesc")}
         className="h-full"
       >
-        <button
+        <Button
+          variant="secondary"
           onClick={() => {
             const params: { status?: string; label?: string } = {}
             if (currentFilter?.kind === 'state') params.status = currentFilter.stateId
             else if (currentFilter?.kind === 'label') params.label = currentFilter.labelId
             navigate(routes.action.newSession(Object.keys(params).length > 0 ? params : undefined))
           }}
-          className="inline-flex items-center h-7 px-3 text-xs font-medium rounded-[8px] bg-background shadow-minimal hover:bg-foreground/[0.03] transition-colors"
         >
           {t("session.newSession")}
-        </button>
+        </Button>
       </EntityListEmptyScreen>
     )
   }
@@ -1012,6 +1027,7 @@ export function SessionList({
   return (
     <div className="flex flex-col flex-1 min-h-0">
       <SessionListProvider value={listContext}>
+      <FlipOnChange value={reorderFlip.value} enabled={reorderFlip.enabled} getTargets={reorderFlip.getTargets} keyOf={reorderFlip.keyOf} spring={SPRING.base} axis="y">
       <EntityList<SessionListRow>
         groups={rowData.groups}
         getKey={(row) => row.item.id}
@@ -1069,7 +1085,7 @@ export function SessionList({
               />
             )}
             {isSearchMode && matchingFilterItems.length === 0 && otherResultItems.length > 0 && (
-              <div className="px-4 py-3 text-sm text-muted-foreground">
+              <div className="px-4 py-3 text-label text-tertiary">
                 {t("session.noResultsInFilter")}
               </div>
             )}
@@ -1077,24 +1093,21 @@ export function SessionList({
         }
         emptyState={
           isSearchMode && !isSearchingContent ? (
-            <div className="flex flex-col items-center justify-center py-12 px-4">
-              <p className="text-sm text-muted-foreground">{t("session.noSessionsFound")}</p>
-              <p className="text-xs text-muted-foreground/60 mt-0.5">
+            <div className="flex flex-col items-center justify-center py-12 px-4 text-center">
+              <p className="text-label text-secondary">{t("session.noSessionsFound")}</p>
+              <p className="text-label-sm text-tertiary mt-0.5">
                 {t("session.noSessionsFoundDesc")}
               </p>
-              <button
-                onClick={() => onSearchChange?.('')}
-                className="text-xs text-foreground hover:underline mt-2"
-              >
+              <Button variant="ghost" size="sm" className="mt-2" onClick={() => onSearchChange?.('')}>
                 {t("session.clearSearch")}
-              </button>
+              </Button>
             </div>
           ) : undefined
         }
         footer={
           hasMore ? (
             <div className="flex justify-center py-4">
-              <Spinner className="text-muted-foreground" />
+              <Spinner className="text-tertiary" />
             </div>
           ) : undefined
         }
@@ -1112,6 +1125,7 @@ export function SessionList({
         onCollapseAll={collapseAllGroups}
         onExpandAll={expandAllGroups}
       />
+      </FlipOnChange>
       </SessionListProvider>
 
       {/* Rename Dialog */}

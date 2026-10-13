@@ -22,6 +22,7 @@ import type { ContentBadge, Session, CreateSessionOptions } from '../../../share
 import { useActiveWorkspace, useAppShellContext, useSession, usePendingPermission, usePendingCredential } from '@/context/AppShellContext'
 import { useEscapeInterrupt } from '@/context/EscapeInterruptContext'
 import { ChatDisplay } from '../app-shell/ChatDisplay'
+import { TWEEN } from '@craft-agent/ui/motion'
 
 /** Rotating placeholder keys for compact mode input - short, action-oriented */
 const COMPACT_PLACEHOLDER_KEYS = [
@@ -452,9 +453,12 @@ const EDIT_CONFIGS: Record<EditContextKey, (location: string) => EditConfig> = {
       label: 'Auto-Apply Rules',
       filePath: `${location}/labels/config.json`,
       context:
-        'The user wants to edit auto-apply rules (regex patterns that auto-tag sessions). ' +
+        'The user wants to edit auto-apply rules (rules that auto-tag sessions from user messages). ' +
         'Rules live inside the autoRules array on individual labels in labels/config.json. ' +
-        'Each rule has: pattern (regex with capture groups), flags (default "gi"), valueTemplate ($1/$2 substitution), description. ' +
+        'A regex rule has: pattern (regex with capture groups), flags (default "gi"), valueTemplate ($1/$2 substitution), description. ' +
+        'A semantic rule has: semantic (a yes/no question for the decision model, e.g. "Is the user asking about billing?"), threshold (0-1, default 0.9), optional value, description — ' +
+        'semantic rules only work when the user enabled the decision model in Settings > AI, and they fire label automations, so keep the threshold high. ' +
+        'Values (valueTemplate, value) are stored only on labels with a valueType; on a plain label a rule just applies the label. ' +
         'Multiple rules on the same label = multiple ways to trigger. The "g" flag is always enforced. ' +
         'Avoid catastrophic backtracking patterns (e.g., (a+)+). ' +
         `Read ${APP_CONFIG_DIR_DISPLAY}/docs/labels.md for full format reference. ` +
@@ -1007,7 +1011,7 @@ export function EditPopover({
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            transition={{ duration: 0.5, ease: 'easeInOut' }}
+            transition={TWEEN.base}
             className="fixed inset-0 bg-black/5 z-40"
           />
         )}
@@ -1107,8 +1111,10 @@ export const EditButton = React.forwardRef<
       ref={ref}
       variant="ghost"
       size="sm"
-      // Merge our base styles with any className from asChild props
-      className={cn("h-8 px-3 rounded-[6px] bg-background shadow-minimal text-foreground/70 hover:text-foreground", className)}
+      // A quiet text action in a section header, not a second box next to the section's card. Its
+      // 8px padding bleeds past the column edge so the word ends on the card's right edge.
+      // Merges any className from asChild props.
+      className={cn("-mr-2 text-secondary hover:text-foreground", className)}
       {...props}
     >
       {t("common.edit")}

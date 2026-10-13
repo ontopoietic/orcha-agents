@@ -146,6 +146,34 @@ describe('attachSessionSelfManagementBindings', () => {
     expect(ctx.setSessionLabels).toBeDefined();
   });
 
+  it('project memory appends resolve from callbacks merged after the context was created', () => {
+    const ctx = createBaseContext(sessionId);
+    attachSessionSelfManagementBindings(ctx, sessionId);
+    expect(ctx.appendProjectMemory).toBeUndefined();
+
+    const appendProjectMemoryFn = async () => ({ path: '/ws/projects/p/MEMORY.md', heading: 'h', bytesAppended: 1 });
+    mergeSessionScopedToolCallbacks(sessionId, { appendProjectMemoryFn });
+    expect(ctx.appendProjectMemory).toBe(appendProjectMemoryFn);
+  });
+
+  it('MCP source resource/prompt callbacks resolve from the registry, so the MCP source tools can run', async () => {
+    const ctx = createBaseContext(sessionId);
+    attachSessionSelfManagementBindings(ctx, sessionId);
+    expect(ctx.mcpSources).toBeUndefined();
+
+    const mcpSources = {
+      listResources: async () => ({ resources: [], resourceTemplates: [] }),
+      readResource: async (_slug: string, uri: string) => `contents of ${uri}`,
+      listPrompts: async () => ({ prompts: [] }),
+      getPrompt: async () => '',
+    };
+    mergeSessionScopedToolCallbacks(sessionId, { mcpSources });
+    expect(ctx.mcpSources).toBe(mcpSources);
+
+    const result = await SESSION_TOOL_REGISTRY.get('source_read_resource')!.handler!(ctx, { sourceSlug: 'liza', uri: 'liza://guides/a' });
+    expect(result.content[0]!.text).toBe('contents of liza://guides/a');
+  });
+
   it('callback replacement is visible without recreating the context', () => {
     const ctx = createBaseContext(sessionId);
     attachSessionSelfManagementBindings(ctx, sessionId);

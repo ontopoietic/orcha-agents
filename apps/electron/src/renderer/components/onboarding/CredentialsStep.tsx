@@ -112,16 +112,16 @@ export function CredentialsStep({
         }
       >
         <div className="space-y-4">
-          <div className="rounded-xl bg-foreground-2 p-4 text-sm text-muted-foreground">
+          <div className="rounded-lg bg-sunken p-4 text-label text-secondary">
             <p>{t("onboarding.credentials.chatGPTInstructions")}</p>
           </div>
           {status === 'error' && errorMessage && (
-            <div className="rounded-lg bg-destructive/10 text-destructive text-sm p-3">
+            <div className="rounded-md bg-destructive-tint text-destructive text-label p-3">
               {errorMessage}
             </div>
           )}
           {status === 'success' && (
-            <div className="rounded-lg bg-success/10 text-success text-sm p-3">
+            <div className="rounded-md bg-success-tint text-success text-label p-3">
               {t("onboarding.credentials.chatGPTConnected")}
             </div>
           )}
@@ -153,39 +153,39 @@ export function CredentialsStep({
       >
         <div className="space-y-4">
           {copilotDeviceCode ? (
-            <div className="rounded-xl bg-foreground-2 p-4 text-sm space-y-3">
-              <p className="text-muted-foreground text-center">
+            <div className="rounded-lg bg-sunken p-4 text-label space-y-3">
+              <p className="text-secondary text-center">
                 {t("onboarding.credentials.enterCodeOnGitHub")}
               </p>
               <div className="flex flex-col items-center justify-center gap-2">
                 <button
                   type="button"
                   onClick={handleCopyCode}
-                  className="text-2xl font-mono font-bold tracking-widest text-foreground px-4 py-2 rounded-lg bg-background border border-border hover:bg-foreground-2 transition-colors cursor-pointer"
+                  className="text-title font-mono font-semibold tracking-widest text-foreground px-4 py-2 rounded-md bg-raised shadow-elev-1 hover:bg-fill-hover cursor-pointer"
                 >
                   {copilotDeviceCode.userCode}
                 </button>
-                <span className={`text-xs text-muted-foreground flex items-center gap-1 transition-opacity ${copiedCode ? 'opacity-100' : 'opacity-0'}`}>
+                <span className={`text-label-sm text-tertiary flex items-center gap-1 transition-opacity ${copiedCode ? 'opacity-100' : 'opacity-0'}`}>
                   <Check className="size-3" />
                   {t("onboarding.credentials.copiedToClipboard")}
                 </span>
               </div>
-              <p className="text-muted-foreground text-xs text-center">
+              <p className="text-tertiary text-label-sm text-center">
                 {t("onboarding.credentials.browserOpenedGitHub")}
               </p>
             </div>
           ) : (
-            <div className="rounded-xl bg-foreground-2 p-4 text-sm text-muted-foreground text-center">
+            <div className="rounded-lg bg-sunken p-4 text-label text-secondary text-center">
               <p>{t("onboarding.credentials.clickToSignInGitHub")}</p>
             </div>
           )}
           {status === 'error' && errorMessage && (
-            <div className="rounded-lg bg-destructive/10 text-destructive text-sm p-3 text-center">
+            <div className="rounded-md bg-destructive-tint text-destructive text-label p-3 text-center">
               {errorMessage}
             </div>
           )}
           {status === 'success' && (
-            <div className="rounded-lg bg-success/10 text-success text-sm p-3 text-center">
+            <div className="rounded-md bg-success-tint text-success text-label p-3 text-center">
               {t("onboarding.credentials.copilotConnected")}
             </div>
           )}

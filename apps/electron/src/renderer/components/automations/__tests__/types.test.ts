@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'bun:test'
 import { parseAutomationsConfig } from '../types'
+import { computeNextRuns } from '../utils'
 
 describe('parseAutomationsConfig', () => {
   it('returns [] for null input', () => {
@@ -209,5 +210,28 @@ describe('parseAutomationsConfig', () => {
     expect(items[0].matcher).toBe('urgent')
     expect(items[0].permissionMode).toBe('ask')
     expect(items[0].labels).toEqual(['important'])
+  })
+})
+
+describe('cron next-run timezone', () => {
+  // A zone that is never the machine's own, so the test fails if the cron is evaluated in the local zone.
+  const tz = 'Pacific/Kiritimati'
+
+  it('computes next runs in the automation timezone, like the scheduler', () => {
+    const [next] = computeNextRuns('0 9 * * *', 1, tz)
+    expect(next).toBeDefined()
+    const hour = next!.toLocaleString('en-US', { hour: 'numeric', hourCycle: 'h23', timeZone: tz })
+    expect(Number(hour)).toBe(9)
+  })
+
+  it('shows the next run of a zoned automation at its own wall-clock time', () => {
+    const [item] = parseAutomationsConfig({
+      version: 2,
+      automations: {
+        SchedulerTick: [{ cron: '30 9 * * *', timezone: tz, actions: [{ type: 'prompt', prompt: 'standup' }] }],
+      },
+    })
+    expect(item!.summary).toContain('9:30 AM')
+    expect(item!.summary).toContain('(Kiritimati)')
   })
 })

@@ -25,6 +25,7 @@ import { AutomationAvatar } from './AutomationAvatar'
 import { SendResourceToWorkspaceDialog } from '@/components/app-shell/SendResourceToWorkspaceDialog'
 import { useAppShellContext } from '@/context/AppShellContext'
 import { cn } from '@/lib/utils'
+import { Button } from '@/components/ui/button'
 import { automationSelection } from '@/hooks/useEntitySelection'
 import { APP_EVENTS, AGENT_EVENTS, getEventDisplayName, type AutomationListItem, type AutomationListFilter } from './types'
 import { formatShortRelativeTime } from './utils'
@@ -33,15 +34,6 @@ const {
   useSelection: useAutomationSelection,
 } = automationSelection
 
-
-/** Tiny inline badge used for event name and action type in automation rows */
-function MicroBadge({ children, colorClass }: { children: React.ReactNode; colorClass: string }) {
-  return (
-    <span className={cn('shrink-0 px-1.5 py-0.5 text-[10px] font-medium rounded', colorClass)}>
-      {children}
-    </span>
-  )
-}
 
 // ============================================================================
 // Automation Item
@@ -100,36 +92,28 @@ function AutomationItem({
 
   return (
     <EntityRow
-      className={cn('automation-item', !automation.enabled && 'opacity-50')}
+      className="automation-item"
+      // Disabled automations read dimmer through the solved tertiary text (AA), not a 50% opacity row
+      titleClassName={!automation.enabled ? 'text-tertiary' : undefined}
       showSeparator={!isFirst}
       separatorClassName="pl-10 pr-4"
       isSelected={isSelected}
       isInMultiSelect={isInMultiSelect}
       onMouseDown={handleClick}
-      icon={<AutomationAvatar event={automation.event} size="sm" />}
+      icon={<AutomationAvatar event={automation.event} size="sm" className={!automation.enabled ? 'opacity-50' : undefined} />}
       title={automation.name}
-      badges={
-        <>
-          <MicroBadge colorClass="bg-foreground/8 text-foreground/60">
-            {getEventDisplayName(automation.event)}
-          </MicroBadge>
-          {automation.actions.some(a => a.type === 'prompt') && (
-            <MicroBadge colorClass="bg-accent/10 text-accent">
-              {t('automations.badgePrompt')}
-            </MicroBadge>
-          )}
-          {automation.actions.some(a => a.type === 'webhook') && (
-            <MicroBadge colorClass="bg-orange-500/10 text-orange-600 dark:text-orange-400">
-              {t('automations.badgeWebhook')}
-            </MicroBadge>
-          )}
-        </>
-      }
-      trailing={
+      // Trigger · actions as one quiet line (it was two pills per row): the same anatomy as the session
+      // and source rows, with the last run as the title line's meta.
+      subtitle={[
+        getEventDisplayName(automation.event),
+        automation.actions.some(a => a.type === 'prompt') ? t('automations.badgePrompt') : null,
+        automation.actions.some(a => a.type === 'webhook') ? t('automations.badgeWebhook') : null,
+      ].filter(Boolean).join(' · ')}
+      titleTrailing={
         automation.lastExecutedAt ? (
           <Tooltip>
             <TooltipTrigger asChild>
-              <span className="shrink-0 text-[11px] text-foreground/40 whitespace-nowrap cursor-default">
+              <span className="shrink-0 cursor-default whitespace-nowrap text-label-sm text-tertiary tabular-nums">
                 {formatShortRelativeTime(automation.lastExecutedAt)}
               </span>
             </TooltipTrigger>
@@ -265,9 +249,9 @@ export function AutomationsListPanel({
             <EditPopover
               align="center"
               trigger={
-                <button className="inline-flex items-center h-7 px-3 text-xs font-medium rounded-[8px] bg-background shadow-minimal hover:bg-foreground/[0.03] transition-colors">
+                <Button variant="secondary" size="md">
                   {t('automations.addAutomation')}
-                </button>
+                </Button>
               }
               {...getEditConfig('automation-config', workspaceRootPath)}
             />
@@ -296,13 +280,13 @@ export function AutomationsListPanel({
       {/* Filtered empty state */}
       {filteredAutomations.length === 0 ? (
         <div className="flex-1 flex flex-col items-center justify-center gap-1">
-          <p className="text-sm text-muted-foreground">
+          <p className="text-label text-tertiary">
             {isSearchMode ? t('automations.noAutomationsFound') : t('automations.noAutomationsConfigured')}
           </p>
           {isSearchMode && (
             <button
               onClick={() => setSearchQuery('')}
-              className="text-xs text-foreground hover:underline"
+              className="rounded-xs text-label-sm text-accent hover:underline"
             >
               {t('automations.clearSearch')}
             </button>

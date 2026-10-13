@@ -120,26 +120,26 @@ export function TelegramConnectDialog({
 
           <div className="flex items-center gap-2">
             <Button
-              variant="outline"
+              variant="secondary"
               size="sm"
               onClick={handleTest}
               disabled={!token.trim() || test.state === 'testing' || saving}
             >
-              {test.state === 'testing' && <Spinner className="mr-1 text-[14px]" />}
+              {test.state === 'testing' && <Spinner className="text-label" />}
               {t('settings.messaging.telegram.testConnection')}
             </Button>
 
             {test.state === 'success' && (
-              <span className="inline-flex items-center gap-1 text-xs text-emerald-600 dark:text-emerald-400">
-                <Check className="h-3.5 w-3.5" />
+              <span className="inline-flex items-center gap-1 text-label-sm text-success">
+                <Check className="size-3.5" />
                 {t('settings.messaging.telegram.validBot', {
                   username: test.botUsername ?? test.botName ?? 'bot',
                 })}
               </span>
             )}
             {test.state === 'error' && (
-              <span className="inline-flex items-center gap-1 text-xs text-destructive">
-                <X className="h-3.5 w-3.5" />
+              <span className="inline-flex items-center gap-1 text-label-sm text-destructive">
+                <X className="size-3.5" />
                 {test.error}
               </span>
             )}
@@ -147,16 +147,15 @@ export function TelegramConnectDialog({
         </div>
 
         <DialogFooter>
-          <Button variant="outline" size="sm" onClick={() => onOpenChange(false)} disabled={saving}>
+          <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={saving}>
             {t('common.cancel')}
           </Button>
           <Button
-            variant="outline"
-            size="sm"
+            variant="primary"
             onClick={handleSave}
             disabled={!token.trim() || test.state !== 'success' || saving}
           >
-            {saving && <Spinner className="mr-1 text-[14px]" />}
+            {saving && <Spinner className="text-label" />}
             {t('settings.messaging.telegram.save')}
           </Button>
         </DialogFooter>

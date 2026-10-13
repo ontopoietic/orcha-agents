@@ -15,6 +15,7 @@ import {
   Info_Alert,
   Info_Badge,
   Info_Markdown,
+  Info_HeaderMenu,
 } from '@/components/info'
 import { EditPopover, EditButton, getEditConfig } from '@/components/ui/EditPopover'
 import { useActiveWorkspace } from '@/context/AppShellContext'
@@ -56,7 +57,7 @@ export function AutomationInfoPage({
 }: AutomationInfoPageProps) {
   const { t } = useTranslation()
   const workspace = useActiveWorkspace()
-  const nextRuns = automation.cron ? computeNextRuns(automation.cron) : []
+  const nextRuns = automation.cron ? computeNextRuns(automation.cron, 3, automation.timezone) : []
 
   // Lightweight per-mount fetch — mirrors the pattern used in MessagingSettingsPage.
   // Only fired when the matcher actually declares a topic to avoid unnecessary IPC.
@@ -87,35 +88,35 @@ export function AutomationInfoPage({
 
   return (
     <Info_Page className={className}>
+      {/* The name lives in the hero; the header carries the actions menu (same items as before) */}
       <Info_Page.Header
-        title={automation.name}
-        titleMenu={
-          <AutomationMenu
-            automationId={automation.id}
-            automationName={automation.name}
-            enabled={automation.enabled}
-            onToggleEnabled={onToggleEnabled}
-            onTest={onTest}
-            onDuplicate={onDuplicate}
-            onDelete={onDelete}
-          />
+        actions={
+          <Info_HeaderMenu>
+            <AutomationMenu
+              automationId={automation.id}
+              automationName={automation.name}
+              enabled={automation.enabled}
+              onToggleEnabled={onToggleEnabled}
+              onTest={onTest}
+              onDuplicate={onDuplicate}
+              onDelete={onDelete}
+            />
+          </Info_HeaderMenu>
         }
       />
 
       <Info_Page.Content>
         {/* Hero */}
-        <div className="flex items-start justify-between">
-          <Info_Page.Hero
-            avatar={<AutomationAvatar event={automation.event} fluid />}
-            title={automation.name}
-            tagline={automation.summary}
-          />
-          {editActions}
-        </div>
+        <Info_Page.Hero
+          avatar={<AutomationAvatar event={automation.event} fluid />}
+          title={automation.name}
+          tagline={automation.summary}
+          actions={editActions}
+        />
 
         {/* Disabled warning */}
         {!automation.enabled && (
-          <Info_Alert variant="warning" icon={<PauseCircle className="h-4 w-4" />}>
+          <Info_Alert variant="warning" icon={<PauseCircle />}>
             <Info_Alert.Title>{t('automations.pausedTitle')}</Info_Alert.Title>
             <Info_Alert.Description>
               {t('automations.pausedDescription')}
@@ -138,7 +139,7 @@ export function AutomationInfoPage({
             </Info_Table.Row>
             {automation.matcher && (
               <Info_Table.Row label={t('automations.labelOnlyWhenMatching')}>
-                <code className="text-xs font-mono bg-foreground/5 px-1.5 py-0.5 rounded">
+                <code className="rounded-xs bg-fill-hover px-1.5 py-0.5 font-mono text-mono-ui [overflow-wrap:anywhere]">
                   {automation.matcher}
                 </code>
               </Info_Table.Row>
@@ -147,7 +148,7 @@ export function AutomationInfoPage({
               <>
                 <Info_Table.Row label={t('automations.labelRepeats')} value={describeCron(automation.cron)} />
                 <Info_Table.Row label={t('automations.labelScheduleExpression')}>
-                  <code className="text-xs font-mono bg-foreground/5 px-1.5 py-0.5 rounded">
+                  <code className="rounded-xs bg-fill-hover px-1.5 py-0.5 font-mono text-mono-ui">
                     {automation.cron}
                   </code>
                 </Info_Table.Row>
@@ -157,9 +158,9 @@ export function AutomationInfoPage({
                       {(() => {
                         const spansYears = nextRuns.length > 1 && nextRuns[0].getFullYear() !== nextRuns[nextRuns.length - 1].getFullYear()
                         return nextRuns.map((date, i) => (
-                          <span key={i} className="text-sm text-foreground/70">
-                            {date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', ...(spansYears && { year: 'numeric' }) })}{' '}
-                            {date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })}
+                          <span key={i} className="text-label text-secondary tabular-nums">
+                            {date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: automation.timezone, ...(spansYears && { year: 'numeric' }) })}{' '}
+                            {date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: automation.timezone })}
                           </span>
                         ))
                       })()}
@@ -182,7 +183,7 @@ export function AutomationInfoPage({
             <Info_Table>
               {flattenConditions(automation.conditions).map((row, i) => (
                 <Info_Table.Row key={i} label={row.label}>
-                  <span className="text-sm text-foreground/70">
+                  <span className="text-label text-secondary">
                     {row.description}
                   </span>
                 </Info_Table.Row>
@@ -197,7 +198,7 @@ export function AutomationInfoPage({
           description={t('automations.sectionThenDescription', { count: automation.actions.length })}
           actions={editActions}
         >
-          <div className="divide-y divide-border/30">
+          <div className="divide-y divide-separator">
             {automation.actions.map((action, i) => (
               <AutomationActionRow key={i} action={action} index={i} />
             ))}
@@ -214,7 +215,7 @@ export function AutomationInfoPage({
           <Info_Table>
             <Info_Table.Row label={t('automations.labelAccessLevel')} value={getPermissionDisplayName(automation.permissionMode)} />
             <Info_Table.Row label={t('automations.labelStatus')}>
-              <Info_Badge color={automation.enabled ? 'success' : 'muted'}>
+              <Info_Badge color={automation.enabled ? 'success' : 'default'} dot>
                 {automation.enabled ? t('automations.statusActive') : t('automations.statusDisabled')}
               </Info_Badge>
             </Info_Table.Row>
@@ -231,10 +232,10 @@ export function AutomationInfoPage({
               <Info_Table.Row label={t('automations.labelTelegramTopic')}>
                 <div className="flex flex-col gap-1">
                   <div className="inline-flex items-center gap-1.5 text-foreground">
-                    <Hash className="size-3.5 text-foreground/50" />
-                    <span className="font-mono text-xs">{automation.telegramTopic}</span>
+                    <Hash className="size-3.5 text-tertiary" aria-hidden />
+                    <span className="font-mono text-mono-ui">{automation.telegramTopic}</span>
                   </div>
-                  <span className="text-xs text-foreground/50">
+                  <span className="text-label-sm text-tertiary">
                     {hasSupergroup === false
                       ? t('automations.telegramTopicHintNoSupergroup')
                       : t('automations.telegramTopicHintBound')}
@@ -255,7 +256,7 @@ export function AutomationInfoPage({
 
         {/* Section: Raw config (JSON) */}
         <Info_Section title={t('automations.sectionRawConfig')}>
-          <div className="rounded-[8px] shadow-minimal overflow-hidden [&_pre]:!bg-transparent [&_.relative]:!bg-transparent [&_.relative]:!border-0 [&_.relative>div:first-child]:!bg-transparent [&_.relative>div:first-child]:!border-0">
+          <div className="overflow-hidden [&_pre]:!bg-transparent [&_.relative]:!bg-transparent [&_.relative]:!border-0 [&_.relative>div:first-child]:!bg-transparent [&_.relative>div:first-child]:!border-0">
             <Info_Markdown maxHeight={300} fullscreen>
               {`\`\`\`json\n${JSON.stringify({
                 event: automation.event,

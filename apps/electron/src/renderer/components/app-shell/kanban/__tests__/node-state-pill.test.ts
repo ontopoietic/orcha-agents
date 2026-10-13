@@ -9,10 +9,10 @@ describe('resolveNodeStatePill', () => {
     const done = resolveNodeStatePill('done')
     const failed = resolveNodeStatePill('failed')
 
-    // Color distinction: a failed node must not look like a done node.
+    // Color distinction: a failed node must not look like a done node (solved status roles).
     expect(done.className).not.toBe(failed.className)
-    expect(done.className).toContain('emerald')
-    expect(failed.className).toContain('red')
+    expect(done.className).toContain('success')
+    expect(failed.className).toContain('destructive')
 
     // Distinct label keys, both resolvable to the expected EN strings.
     expect(done.labelKey).toBe('tasks.nodeStateDone')
@@ -27,9 +27,10 @@ describe('resolveNodeStatePill', () => {
     const pending = resolveNodeStatePill('pending')
 
     expect(cancelled.className).toBe(pending.className)
-    expect(cancelled.className).not.toContain('red')
-    expect(cancelled.className).not.toContain('emerald')
-    expect(cancelled.className).not.toContain('amber')
+    expect(cancelled.className).not.toContain('destructive')
+    expect(cancelled.className).not.toContain('success')
+    expect(cancelled.className).not.toContain('accent')
+    expect(cancelled.className).not.toContain('info')
     expect(cancelled.labelKey).toBe('tasks.nodeStateCancelled')
     expect(messages[cancelled.labelKey!]).toBe('Cancelled')
   })

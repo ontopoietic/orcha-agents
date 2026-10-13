@@ -225,7 +225,7 @@ CREATE TABLE IF NOT EXISTS timeseries (series TEXT NOT NULL, t INTEGER NOT NULL,
 
 ## Sharing
 
-Users publish pages from the page's **Share** button (feature-flagged): password-protectable public URL, opt-in data snapshot, instant revocation. You don't publish pages yourself — but remember: published copies block all network egress and disable source actions, which is why inline-everything authoring matters. `delete_page` unpublishes first (best effort) and reports `publicCopyMayRemain` if that could not be confirmed.
+Users publish pages from the page's **Share** button (feature-flagged): password-protectable public URL, opt-in data snapshot, instant revocation. With a Claude account connected, the desktop app's **Publish as Claude artifact** puts the page on claude.ai (with its current data snapshot, view-only). You don't publish pages yourself — but remember: published copies block all network egress and disable source actions, which is why inline-everything authoring matters. `delete_page` unpublishes first (best effort) and reports `publicCopyMayRemain` if that could not be confirmed.
 
 ## Starter template
 

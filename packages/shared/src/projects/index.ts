@@ -26,6 +26,7 @@ export {
   saveProjectConfig,
   // Memory operations
   loadProjectMemory,
+  appendProjectMemoryEntry,
   // Load operations
   loadProject,
   loadProjectById,

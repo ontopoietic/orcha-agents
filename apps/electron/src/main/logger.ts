@@ -1,6 +1,7 @@
 import log from 'electron-log/main'
 import { appendFileSync, existsSync, mkdirSync, renameSync, rmSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+// Leaf import: the logger initializes before the rest of shared config is loaded.
 import { CONFIG_DIR } from '@craft-agent/shared/config/paths'
 import type {
   MessagingLogContext,

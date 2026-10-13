@@ -325,4 +325,11 @@ describe('generator-prompt', () => {
     expect(prompt).toContain('- root: second problem');
     expect(prompt).toContain('Output ONLY the YAML');
   });
+
+  // Found 2026-10-11: four generations in a row timed out at 180 s; the authoring turns read the
+  // project's files and a source guide before writing anything.
+  it('keeps the authoring and repair turns off tools', () => {
+    expect(buildGeneratorPrompt('Decompose the goal')).toContain('Do not use tools');
+    expect(buildRepairPrompt([{ path: 'root', message: 'x' }])).toContain('Do not use tools');
+  });
 });

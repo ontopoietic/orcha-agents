@@ -58,7 +58,7 @@ export function Sidebar({ categories, selectedId, onSelect }: SidebarProps) {
               {/* Category header */}
               <button
                 onClick={() => toggleCategory(category.name)}
-                className="w-full flex items-center gap-1.5 px-2 py-1.5 text-xs font-semibold text-muted-foreground uppercase tracking-wider hover:text-foreground transition-colors"
+                className="w-full flex items-center gap-1.5 px-2 py-1.5 text-label-sm font-semibold text-tertiary uppercase tracking-wider hover:text-foreground transition-colors duration-micro hover:duration-instant"
               >
                 <ChevronRight
                   className={cn(
@@ -67,7 +67,7 @@ export function Sidebar({ categories, selectedId, onSelect }: SidebarProps) {
                   )}
                 />
                 {category.name}
-                <span className="ml-auto text-[10px] font-normal opacity-60">
+                <span className="ml-auto text-caption font-normal tabular-nums text-tertiary">
                   {category.components.length}
                 </span>
               </button>
@@ -80,10 +80,10 @@ export function Sidebar({ categories, selectedId, onSelect }: SidebarProps) {
                       key={component.id}
                       onClick={() => onSelect(component.id)}
                       className={cn(
-                        'w-full text-left px-3 py-1.5 rounded-md text-sm transition-colors',
+                        'w-full text-left px-3 py-1.5 rounded-md text-label transition-colors duration-micro hover:duration-instant',
                         selectedId === component.id
-                          ? 'bg-foreground/10 text-foreground font-medium'
-                          : 'text-muted-foreground hover:bg-foreground/5 hover:text-foreground'
+                          ? 'bg-fill-selected text-foreground font-medium'
+                          : 'text-secondary hover:bg-fill-hover hover:text-foreground'
                       )}
                     >
                       {component.name}

@@ -22,6 +22,7 @@ import type { McpClientPool } from '../../mcp/mcp-pool.ts';
 import type { Workspace } from '../../config/storage.ts';
 import type { SessionConfig as Session } from '../../sessions/storage.ts';
 import type { SourceManager } from '../core/source-manager.ts';
+import type { GuardedModeCheck } from '../core/guarded-mode.ts';
 
 // Import AbortReason and RecoveryMessage from core module (single source of truth)
 import { AbortReason, type RecoveryMessage } from '../core/index.ts';
@@ -80,6 +81,8 @@ export type PermissionCallback = (request: {
   rememberForMinutes?: number;
   commandHash?: string;
   approvalTtlSeconds?: number;
+  /** `false` when "Always Allow" would remember nothing (e.g. Guarded-mode prompts). */
+  canRemember?: boolean;
 }) => void;
 
 /**
@@ -121,27 +124,6 @@ export interface PostInitResult {
   authWarning?: string;
   /** Severity level for the warning */
   authWarningLevel?: 'error' | 'warning' | 'info';
-}
-
-/**
- * Context for applying bridge/config updates mid-session.
- * Used when sources change, tokens refresh, or auth completes.
- */
-export interface BridgeUpdateContext {
-  /** Path to the session folder */
-  sessionPath: string;
-  /** Currently enabled sources */
-  enabledSources: LoadedSource[];
-  /** Pre-built MCP server configs */
-  mcpServers: Record<string, SdkMcpServerConfig>;
-  /** Session ID */
-  sessionId: string;
-  /** Workspace root path */
-  workspaceRootPath: string;
-  /** Descriptive context for logging (e.g., 'token refresh', 'source enable') */
-  context: string;
-  /** URL of the McpPoolServer HTTP endpoint */
-  poolServerUrl?: string;
 }
 
 /**
@@ -299,6 +281,12 @@ export interface ChatOptions {
   isRetry?: boolean;
   /** Override thinking level for this message only */
   thinkingOverride?: ThinkingLevel;
+  /**
+   * Transient host guidance for this turn only (an interruption notice, a
+   * decision-model suggestion). The model sees it after the message; it is not
+   * part of the stored message or of the resend after a source activation.
+   */
+  turnContext?: string;
 }
 
 /**
@@ -379,11 +367,25 @@ export interface AgentBackend {
   forceAbort(reason: AbortReason): void;
 
   /**
+   * Stop the running turn but keep the session's background work (background agents, Workflows,
+   * shells) alive, like Esc in Claude Code. Returns false when the backend can't (no live
+   * keep-alive turn); the caller then hard-stops with forceAbort.
+   */
+  stopTurn?(): boolean;
+
+  /**
    * WS2: register a sink for background task events that arrive BETWEEN turns
    * (when no chat() generator is being consumed) under keep-alive mode. Backends
    * without a persistent cross-turn query may leave this unimplemented.
    */
   setBackgroundEventSink?(sink: ((event: AgentEvent) => void) | null): void;
+
+  /**
+   * Stop one background task (shell, agent or workflow) by its task id. Resolves false when there is
+   * no live query to ask, so the task cannot still be running. Backends without background tasks
+   * leave it unimplemented.
+   */
+  stopBackgroundTask?(taskId: string): Promise<boolean>;
 
   /**
    * Interrupt the current turn because control is being handed to the UI.
@@ -413,6 +415,21 @@ export interface AgentBackend {
    */
   redirect(message: string, metadata?: RedirectMetadata): boolean;
 
+  /**
+   * Whether a manual context compaction owns the current turn.
+   *
+   * While true there is no agent loop consuming steers, so a mid-stream text
+   * message must be queued for replay after `complete` instead of handed to
+   * redirect() (OSS #1058). Optional: backends without the concept report false.
+   */
+  isCompactionInFlight?(): boolean;
+
+  /**
+   * Whether redirect() would deliver into a live turn right now, without its
+   * abort fallback. Optional: backends without it are treated as "no".
+   */
+  canSteerNow?(): boolean;
+
   /** Transfer undelivered text steers to the host before handoff/teardown. */
   takePendingSteers?(): PendingSteer[];
 
@@ -438,16 +455,6 @@ export interface AgentBackend {
    * Called after construction and callback wiring, before first chat().
    */
   postInit(): Promise<PostInitResult>;
-
-  /**
-   * Apply bridge/config updates mid-session.
-   * Called when sources change, tokens refresh, or auth completes.
-   * Each backend implements its own strategy:
-   * - Codex: regenerates config.toml and queues reconnect
-   * - Copilot: writes bridge-config.json and credential cache
-   * - Claude/Pi: no-op (they don't use bridge-mcp-server)
-   */
-  applyBridgeUpdates(context: BridgeUpdateContext): Promise<void>;
 
   /**
    * Ensure branch sessions are backend-ready before first user message.
@@ -619,6 +626,9 @@ export interface AgentBackend {
 
   /** Called when a tool requires permission */
   onPermissionRequest: PermissionCallback | null;
+
+  /** Guarded-mode risk check (decision model): may turn an allowed call into a permission prompt, never the reverse */
+  guardedModeCheck: GuardedModeCheck | null;
 
   /** Called when agent submits a plan */
   onPlanSubmitted: PlanCallback | null;

@@ -16,7 +16,7 @@
  */
 
 import * as React from 'react'
-import { motion, AnimatePresence } from 'motion/react'
+import { AnimatedCollapsibleContent } from '@craft-agent/ui'
 import { useAtomValue, useSetAtom } from 'jotai'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -35,9 +35,7 @@ import {
   Settings2,
   Trash2,
 } from 'lucide-react'
-import { PanelHeader } from '@/components/app-shell/PanelHeader'
-import { ScrollArea } from '@/components/ui/scroll-area'
-import { Button } from '@/components/ui/button'
+import { Button, IconButton } from '@/components/ui/button'
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -47,7 +45,7 @@ import {
   StyledDropdownMenuItem,
   StyledDropdownMenuSeparator,
 } from '@/components/ui/styled-dropdown'
-import { SettingsSection, SettingsCard } from '@/components/settings'
+import { SettingsPage, SettingsCard, SettingsCardDivider } from '@/components/settings'
 import { MessagingPlatformIcon } from '@/components/messaging/MessagingPlatformIcon'
 import { TelegramConnectDialog } from '@/components/messaging/TelegramConnectDialog'
 import { LarkConnectDialog } from '@/components/messaging/LarkConnectDialog'
@@ -109,25 +107,21 @@ export default function MessagingSettingsPage() {
 
   if (!activeWorkspace) return null
 
+  // The page title already says "Messaging", so the platform cards stack without a group heading.
   return (
-    <div className="flex h-full flex-col">
-      <PanelHeader title={t('settings.messaging.title')} />
-      <ScrollArea className="flex-1">
-        <div className="space-y-6 p-6">
-          <SettingsSection title={t('settings.messaging.title')}>
-            <SettingsCard>
-              <PlatformRow platform="telegram" workspaceId={activeWorkspace.id} />
-            </SettingsCard>
-            <SettingsCard>
-              <PlatformRow platform="whatsapp" workspaceId={activeWorkspace.id} />
-            </SettingsCard>
-            <SettingsCard>
-              <PlatformRow platform="lark" workspaceId={activeWorkspace.id} />
-            </SettingsCard>
-          </SettingsSection>
-        </div>
-      </ScrollArea>
-    </div>
+    <SettingsPage title={t('settings.messaging.title')} description={t('settings.messaging.description')}>
+      <div className="space-y-2">
+        <SettingsCard>
+          <PlatformRow platform="telegram" workspaceId={activeWorkspace.id} />
+        </SettingsCard>
+        <SettingsCard>
+          <PlatformRow platform="whatsapp" workspaceId={activeWorkspace.id} />
+        </SettingsCard>
+        <SettingsCard>
+          <PlatformRow platform="lark" workspaceId={activeWorkspace.id} />
+        </SettingsCard>
+      </div>
+    </SettingsPage>
   )
 }
 
@@ -144,7 +138,7 @@ const PLATFORM_LABEL_KEYS: Record<Platform, string> = {
 }
 
 // Row column geometry shared across the bot header and all child rows.
-// 16px outer padding (`px-4`) + 22px icon slot + 12px gap (`gap-3`).
+// 14px outer padding (`px-3.5`) + 22px icon slot + 12px gap (`gap-3`).
 // Secondary icons render at 16px inside the same 22px slot for a clean
 // visual hierarchy without the column edge shifting.
 const ROW_ICON_SIZE = 22
@@ -175,7 +169,7 @@ function SubRowIcon({
       style={{ width: ROW_ICON_SIZE, height: ROW_ICON_SIZE }}
     >
       <Icon
-        className="text-foreground/50"
+        className="text-tertiary"
         strokeWidth={strokeWidth}
         style={{ width: size, height: size }}
       />
@@ -184,7 +178,7 @@ function SubRowIcon({
 }
 
 function CardSeparator() {
-  return <div className="mx-4 h-px bg-border/50" />
+  return <SettingsCardDivider />
 }
 
 function PlatformRow({ platform, workspaceId }: { platform: Platform; workspaceId: string }) {
@@ -339,11 +333,11 @@ function PlatformRow({ platform, workspaceId }: { platform: Platform; workspaceI
   return (
     <>
       <div>
-        <div className="flex items-center gap-3 px-4 py-3.5">
+        <div className="flex min-h-14 items-center gap-3 px-3.5 py-2.5">
           <MessagingPlatformIcon platform={platform} size={22} />
           <div className="min-w-0 flex-1">
-            <div className="text-sm font-medium">{label}</div>
-            <div className="mt-0.5 truncate text-xs text-muted-foreground">
+            <div className="text-label font-medium text-foreground">{label}</div>
+            <div className="mt-px text-label-sm text-secondary [overflow-wrap:anywhere]">
               {t(`settings.messaging.${platform}.apiType`)} · {description}
             </div>
           </div>
@@ -351,13 +345,10 @@ function PlatformRow({ platform, workspaceId }: { platform: Platform; workspaceI
           {runtime.connected ? (
             <DropdownMenu modal={false} open={menuOpen} onOpenChange={setMenuOpen}>
               <DropdownMenuTrigger asChild>
-                <button
-                  className="rounded-md p-1.5 transition-colors hover:bg-foreground/[0.05] data-[state=open]:bg-foreground/[0.05]"
-                  data-state={menuOpen ? 'open' : 'closed'}
+                <IconButton
                   aria-label={t('common.more')}
-                >
-                  <MoreHorizontal className="h-4 w-4 text-muted-foreground" />
-                </button>
+                  icon={<MoreHorizontal className="size-4" />}
+                />
               </DropdownMenuTrigger>
               <StyledDropdownMenuContent align="end">
                 {platform === 'telegram' ? (
@@ -398,8 +389,8 @@ function PlatformRow({ platform, workspaceId }: { platform: Platform; workspaceI
               </StyledDropdownMenuContent>
             </DropdownMenu>
           ) : (
-            <Button variant="outline" size="sm" onClick={handleConnect}>
-              <Plus className="h-3.5 w-3.5" />
+            <Button variant="secondary" size="md" onClick={handleConnect}>
+              <Plus className="size-3.5" />
               {t('common.connect')}
             </Button>
           )}
@@ -437,7 +428,7 @@ function PlatformRow({ platform, workspaceId }: { platform: Platform; workspaceI
         ) : platformBindings.length > 0 ? (
           <>
             <CardSeparator />
-            <div className="divide-y divide-border/50">
+            <div className="divide-y divide-separator">
               {platformBindings.map((binding) => (
                 <FlatBindingRow
                   key={binding.id}
@@ -550,7 +541,7 @@ function TelegramBindingsBody({
       {directBindings.length > 0 && (
         <>
           <CardSeparator />
-          <div className="divide-y divide-border/50">
+          <div className="divide-y divide-separator">
             {directBindings.map((binding) => (
               <DirectSessionRow
                 key={binding.id}
@@ -607,15 +598,15 @@ function DirectSessionRow({
   // ("Direct message session") is the primary label, the session name drops
   // to the subtitle. Keeps Direct and Supergroup rows visually parallel.
   return (
-    <div className="flex items-center gap-3 px-4 py-2.5">
+    <div className="flex items-center gap-3 px-3.5 py-2.5">
       <SubRowIcon icon={MessageSquare} />
       <div className="min-w-0 flex-1">
-        <div className="truncate text-sm">
+        <div className="truncate text-label text-foreground">
           {t('settings.messaging.telegram.directSessionSubtitle', {
             defaultValue: 'Direct message session',
           })}
         </div>
-        <div className="mt-0.5 truncate text-xs text-foreground/50">{sessionLabel}</div>
+        <div className="mt-px truncate text-label-sm text-tertiary">{sessionLabel}</div>
       </div>
       <BindingAllowListPopover
         access={bindingToAccess(binding)}
@@ -630,20 +621,20 @@ function DirectSessionRow({
 function UnpairedSupergroupRow({ onPair }: { onPair: () => void }) {
   const { t } = useTranslation()
   return (
-    <div className="flex items-center gap-3 px-4 py-2.5">
+    <div className="flex items-center gap-3 px-3.5 py-2.5">
       <SubRowIcon icon={MessagesSquare} />
       <div className="min-w-0 flex-1">
-        <div className="text-sm">
+        <div className="text-label text-foreground">
           {t('settings.messaging.telegram.supergroup.label', { defaultValue: 'Supergroup' })}
         </div>
-        <div className="mt-0.5 truncate text-xs text-foreground/50">
+        <div className="mt-px truncate text-label-sm text-tertiary">
           {t('settings.messaging.telegram.supergroup.notConfigured', {
             defaultValue: 'Not configured',
           })}
         </div>
       </div>
-      <Button variant="outline" size="sm" onClick={onPair}>
-        <Plus className="h-3.5 w-3.5" />
+      <Button variant="secondary" size="md" onClick={onPair}>
+        <Plus className="size-3.5" />
         {t('settings.messaging.telegram.supergroup.pair', { defaultValue: 'Pair Supergroup' })}
       </Button>
     </div>
@@ -687,74 +678,61 @@ function PairedSupergroupSection({
     <div>
       <button
         type="button"
+        aria-expanded={isExpanded}
         onClick={() => setIsExpanded((v) => !v)}
-        className="flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-foreground/[0.02]"
+        className="flex w-full items-center gap-3 px-3.5 py-2.5 text-left -outline-offset-2 transition-colors duration-micro ease-out-subtle hover:bg-fill-hover hover:duration-instant"
       >
         <SubRowIcon icon={MessagesSquare} />
         <div className="min-w-0 flex-1">
           <div className="flex items-baseline gap-2">
-            <div className="truncate text-sm font-medium">{supergroup.title}</div>
-            <div className="truncate text-xs text-foreground/50">({supergroup.chatId})</div>
+            <div className="truncate text-label font-medium text-foreground">{supergroup.title}</div>
+            <div className="truncate text-label-sm text-tertiary">({supergroup.chatId})</div>
           </div>
-          <div className="mt-0.5 truncate text-xs text-foreground/50">{subtitle}</div>
+          <div className="mt-px truncate text-label-sm text-tertiary">{subtitle}</div>
         </div>
         {isExpanded ? (
-          <ChevronDown className="h-4 w-4 shrink-0 text-foreground/50" />
+          <ChevronDown className="size-4 shrink-0 text-tertiary" aria-hidden />
         ) : (
-          <ChevronRight className="h-4 w-4 shrink-0 text-foreground/50" />
+          <ChevronRight className="size-4 shrink-0 text-tertiary" aria-hidden />
         )}
       </button>
 
-      <AnimatePresence initial={false}>
-        {isExpanded && (
-          <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: 'auto', opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.2, ease: [0.4, 0, 0.2, 1] }}
-            className="overflow-hidden"
-          >
-            <div className="border-t border-border/50">
-              {topicBindings.length === 0 ? (
-                <div className="flex items-start gap-3 px-4 py-3 text-xs text-foreground/50">
-                  <IconSpacer />
-                  <span>
-                    {t('settings.messaging.telegram.supergroup.noTopicsHint', {
-                      defaultValue:
-                        'No topics bound yet — automations with `telegramTopic` will create them.',
-                    })}
-                  </span>
-                </div>
-              ) : (
-                <div className="divide-y divide-border/50">
-                  {topicBindings.map((binding) => (
-                    <TopicBindingRow
-                      key={binding.id}
-                      binding={binding}
-                      sessionMetaMap={sessionMetaMap}
-                      workspaceOwners={workspaceOwners}
-                      onOpen={() => onOpenSession(binding)}
-                      onUnbind={() => onUnbindTopic(binding)}
-                      onAccessChange={(next) => onAccessChange(binding.id, next)}
-                    />
-                  ))}
-                </div>
-              )}
-              <div className="flex items-center gap-3 px-4 py-2">
-                <IconSpacer />
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="text-destructive hover:text-destructive"
-                  onClick={onUnpair}
-                >
-                  {t('common.disconnect')}
-                </Button>
-              </div>
+      {/* Expands in place: content swaps once, fades with a 4px drop (no height animation) */}
+      <AnimatedCollapsibleContent isOpen={isExpanded}>
+        <div className="border-t border-subtle">
+          {topicBindings.length === 0 ? (
+            <div className="flex items-start gap-3 px-3.5 py-3 text-label-sm text-tertiary">
+              <IconSpacer />
+              <span>
+                {t('settings.messaging.telegram.supergroup.noTopicsHint', {
+                  defaultValue:
+                    'No topics bound yet — automations with `telegramTopic` will create them.',
+                })}
+              </span>
             </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+          ) : (
+            <div className="divide-y divide-separator">
+              {topicBindings.map((binding) => (
+                <TopicBindingRow
+                  key={binding.id}
+                  binding={binding}
+                  sessionMetaMap={sessionMetaMap}
+                  workspaceOwners={workspaceOwners}
+                  onOpen={() => onOpenSession(binding)}
+                  onUnbind={() => onUnbindTopic(binding)}
+                  onAccessChange={(next) => onAccessChange(binding.id, next)}
+                />
+              ))}
+            </div>
+          )}
+          <div className="flex items-center gap-3 px-3.5 py-2">
+            <IconSpacer />
+            <Button variant="danger" size="sm" onClick={onUnpair}>
+              {t('common.disconnect')}
+            </Button>
+          </div>
+        </div>
+      </AnimatedCollapsibleContent>
     </div>
   )
 }
@@ -778,14 +756,14 @@ function TopicBindingRow({
   const sessionLabel = meta ? getSessionTitle(meta) : binding.channelName || binding.channelId
   const topicName = binding.channelName || binding.channelId
   return (
-    <div className="flex items-center gap-3 px-4 py-2.5">
+    <div className="flex items-center gap-3 px-3.5 py-2.5">
       <IconSpacer />
       <div className="min-w-0 flex-1">
-        <div className="truncate text-sm">{sessionLabel}</div>
-        <div className="mt-0.5 flex items-center gap-1.5 text-xs text-foreground/50">
-          <Hash className="h-3 w-3" />
+        <div className="truncate text-label text-foreground">{sessionLabel}</div>
+        <div className="mt-px flex items-center gap-1.5 text-label-sm text-tertiary">
+          <Hash className="size-3" aria-hidden />
           <span className="truncate">
-            {topicName} <span className="text-foreground/30">·</span> Topic #{binding.threadId}
+            {topicName} <span aria-hidden>·</span> Topic #{binding.threadId}
           </span>
         </div>
       </div>
@@ -815,8 +793,8 @@ function FlatBindingRow({
   const meta = sessionMetaMap.get(binding.sessionId)
   const sessionLabel = meta ? getSessionTitle(meta) : binding.channelName || binding.channelId
   return (
-    <div className="flex items-center justify-between gap-4 px-4 py-2.5 pl-[52px]">
-      <div className="min-w-0 truncate text-sm">{sessionLabel}</div>
+    <div className="flex items-center justify-between gap-4 py-2.5 pl-12 pr-3.5">
+      <div className="min-w-0 truncate text-label text-foreground">{sessionLabel}</div>
       <RowActions onOpen={onOpen} onUnbind={onUnbind} />
     </div>
   )
@@ -827,15 +805,10 @@ function RowActions({ onOpen, onUnbind }: { onOpen: () => void; onUnbind: () => 
   return (
     <div className="flex items-center gap-1">
       <Button variant="ghost" size="sm" onClick={onOpen}>
-        <ArrowUpRight className="h-3.5 w-3.5" />
+        <ArrowUpRight className="size-3.5" />
         {t('settings.messaging.bindings.openSession')}
       </Button>
-      <Button
-        variant="ghost"
-        size="sm"
-        className="text-destructive hover:text-destructive"
-        onClick={onUnbind}
-      >
+      <Button variant="danger" size="sm" onClick={onUnbind}>
         {t('common.disconnect')}
       </Button>
     </div>

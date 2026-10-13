@@ -22,6 +22,8 @@ import type {
   PermissionModeState,
   UnreadSummary,
   ShareResult,
+  BackgroundTaskOutput,
+  StopBackgroundTaskResult,
 } from '@craft-agent/shared/protocol'
 import type { SessionBundle, DispatchMode } from '@craft-agent/shared/sessions'
 import type { EventSink } from '../transport'
@@ -120,8 +122,10 @@ export interface ISessionManager {
     rpcContext?: { callerClientId?: string },
   ): Promise<void>
   cancelProcessing(sessionId: string, silent?: boolean): Promise<void>
-  killShell(sessionId: string, shellId: string): Promise<{ success: boolean; error?: string }>
-  getTaskOutput(taskId: string): Promise<string | null>
+  /** What a background task of the session has written so far, digested; null when there is nothing to read. */
+  getBackgroundTaskOutput(sessionId: string, taskId: string, kind?: 'agent' | 'shell' | 'workflow'): Promise<BackgroundTaskOutput | null>
+  /** Stop one background task (shell, agent or workflow) of the session through its live agent. */
+  stopBackgroundTask(sessionId: string, taskId: string): Promise<StopBackgroundTaskResult>
 
   // --- Tasks Conductor seams (in-process; not renderer events, not agent-facing) ---
   /**
@@ -132,8 +136,8 @@ export interface ISessionManager {
   onSessionComplete(
     listener: (evt: import('../sessions/SessionManager').SessionCompletionEvent) => void,
   ): () => void
-  /** Read a session's final assistant message text (Conductor output reader). */
-  getSessionFinalText(sessionId: string): string | undefined
+  /** Called for every event a session's agent emits; lets callers time out only a stalled turn. */
+  onSessionActivity(sessionId: string, listener: () => void): () => void
   addMessageAnnotation(sessionId: string, messageId: string, annotation: AnnotationV1): void
   removeMessageAnnotation(sessionId: string, messageId: string, annotationId: string): void
   updateMessageAnnotation(
@@ -278,6 +282,17 @@ export interface ISessionManager {
    */
   refreshConnectionRuntime(connectionSlug: string): Promise<void>
   completeAuthRequest(sessionId: string, result: AuthResult): Promise<void>
+  /**
+   * After a successful OAuth sign-in for a source, complete the auth request of every session
+   * in the workspace waiting on it and resume each one. `boundRequests` are the cards that
+   * started or joined the sign-in. Returns the ids of the sessions it resumed.
+   */
+  completeAuthRequestsForSource(
+    workspaceId: string,
+    sourceSlug: string,
+    result: { email?: string; workspace?: string },
+    boundRequests?: Array<{ sessionId: string; authRequestId: string }>,
+  ): string[]
   executePromptAutomation(input: ExecutePromptAutomationInput): Promise<{ sessionId: string }>
 
   /**
@@ -325,6 +340,12 @@ export interface ExecutePromptAutomationInput {
   /** Override the workspace default thinking level for the spawned session. */
   thinkingLevel?: ThinkingLevel
   automationName?: string
+  /** Matcher id of the automation (stored on the session for the loop guard). */
+  automationId?: string
+  /** Event that fired the automation. */
+  triggerEvent?: string
+  /** Chain depth of the new session (see `automationLoopGuard`); 1 when omitted. */
+  chainDepth?: number
   /**
    * Optional Telegram forum-topic name. When set and the workspace has a
    * paired supergroup, the new session is bound to a topic of this name

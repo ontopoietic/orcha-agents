@@ -4,7 +4,17 @@ import { Command as CommandPrimitive } from 'cmdk'
 import { Check, Minimize2 } from 'lucide-react'
 import { Icon_Folder } from '@craft-agent/ui'
 import { cn } from '@/lib/utils'
-import { PERMISSION_MODE_CONFIG, PERMISSION_MODE_ORDER, type PermissionMode } from '@craft-agent/shared/agent/modes'
+import {
+  INLINE_MENU_FOOTER,
+  INLINE_MENU_ITEM,
+  INLINE_MENU_ITEM_SELECTED,
+  INLINE_MENU_LIST,
+  INLINE_MENU_ORIGIN,
+  INLINE_MENU_SECTION_LABEL,
+  INLINE_MENU_SEPARATOR,
+  INLINE_MENU_SURFACE,
+} from './inline-menu-styles'
+import { DEFAULT_PERMISSION_MODES, PERMISSION_MODE_CONFIG, PERMISSION_MODE_ORDER, isPermissionMode, type PermissionMode } from '@craft-agent/shared/agent/modes'
 
 // ============================================================================
 // Types
@@ -55,8 +65,8 @@ interface PermissionModeIconProps {
   className?: string
 }
 
-function PermissionModeIcon({ mode, className }: PermissionModeIconProps) {
-  const config = PERMISSION_MODE_CONFIG[mode]
+export function PermissionModeIcon({ mode, className }: PermissionModeIconProps) {
+  const config = PERMISSION_MODE_CONFIG[mode] ?? PERMISSION_MODE_CONFIG.ask
   return (
     <svg
       viewBox="0 0 24 24"
@@ -76,19 +86,26 @@ function PermissionModeIcon({ mode, className }: PermissionModeIconProps) {
 // Default Commands
 // ============================================================================
 
-// Icon size constant
-const MENU_ICON_SIZE = 'h-3.5 w-3.5'
+// Icon size constant (16px menu icons, spec §7.10)
+const MENU_ICON_SIZE = 'size-4'
 
-// Generate permission mode commands from centralized config
-const permissionModeCommands: SlashCommand[] = PERMISSION_MODE_ORDER.map(mode => {
-  const config = PERMISSION_MODE_CONFIG[mode]
-  return {
+// Permission mode commands from centralized config, one per mode
+const PERMISSION_MODE_COMMANDS = new Map<PermissionMode, SlashCommand>(PERMISSION_MODE_ORDER.map(mode => {
+  const config = PERMISSION_MODE_CONFIG[mode] ?? PERMISSION_MODE_CONFIG.ask
+  return [mode, {
     id: mode,
     label: config.displayName,
     description: config.description,
     icon: <PermissionModeIcon mode={mode} className={MENU_ICON_SIZE} />,
-  }
-})
+  }]
+}))
+
+/** Commands for the modes a picker offers (see `useAvailablePermissionModes`), in the given order. */
+export function permissionModeCommandsFor(modes: readonly PermissionMode[]): SlashCommand[] {
+  return modes.flatMap(mode => PERMISSION_MODE_COMMANDS.get(mode) ?? [])
+}
+
+const permissionModeCommands = permissionModeCommandsFor(DEFAULT_PERMISSION_MODES)
 
 const compactCommand: SlashCommand = {
   id: 'compact',
@@ -107,14 +124,22 @@ export const DEFAULT_SLASH_COMMAND_GROUPS: CommandGroup[] = [
 ]
 
 // ============================================================================
-// Shared Styles
+// Shared Styles (floating menu material: inline-menu-styles.ts)
 // ============================================================================
 
-const MENU_CONTAINER_STYLE = 'min-w-[200px] overflow-hidden rounded-[8px] bg-background text-foreground shadow-modal-small'
-const MENU_LIST_STYLE = 'max-h-[260px] overflow-y-auto py-1'
-const MENU_ITEM_STYLE = 'flex cursor-pointer select-none items-center gap-2 rounded-[6px] mx-1 px-2 py-1.5 text-[13px]'
-const MENU_ITEM_SELECTED = 'bg-foreground/5'
-const MENU_SECTION_HEADER = 'px-3 py-1.5 mb-0.5 text-[12px] font-medium text-muted-foreground border-b border-foreground/5'
+const MENU_CONTAINER_STYLE = cn(INLINE_MENU_SURFACE, 'min-w-[200px]')
+const MENU_LIST_STYLE = INLINE_MENU_LIST
+const MENU_ITEM_STYLE = INLINE_MENU_ITEM
+const MENU_ITEM_SELECTED = INLINE_MENU_ITEM_SELECTED
+const MENU_SECTION_HEADER = INLINE_MENU_SECTION_LABEL
+
+/** Short per-mode descriptions (literal keys keep the i18n coverage check effective). */
+const MODE_DESCRIPTION_KEYS: Record<PermissionMode, string> = {
+  safe: 'mode.exploreDesc',
+  ask: 'mode.askDesc',
+  guarded: 'mode.guardedDesc',
+  'allow-all': 'mode.executeDesc',
+}
 
 // ============================================================================
 // Shared: Filter utilities
@@ -162,19 +187,22 @@ function flattenSections(sections: SlashSection[]): (SlashCommand | SlashFolderI
 // Shared: Command Item Content
 // ============================================================================
 
-const MODE_COMMAND_IDS = new Set<string>(['safe', 'ask', 'allow-all'])
-
-function CommandItemContent({ command, isActive }: { command: SlashCommand; isActive: boolean }) {
+function CommandItemContent({ command, isActive, showDescription = false }: { command: SlashCommand; isActive: boolean; showDescription?: boolean }) {
   const { t } = useTranslation()
-  const label = MODE_COMMAND_IDS.has(command.id) ? t(`mode.${command.id}`, command.label) : command.label
+  const isMode = isPermissionMode(command.id)
+  const label = isMode ? t(`mode.${command.id}`, command.label) : command.label
+  const description = showDescription && isMode && Object.hasOwn(MODE_DESCRIPTION_KEYS, command.id)
+    ? t(MODE_DESCRIPTION_KEYS[command.id as PermissionMode])
+    : null
   return (
     <>
-      <div className="shrink-0 text-muted-foreground">{command.icon}</div>
-      <div className="flex-1 min-w-0">{label}</div>
+      <div className="shrink-0 text-secondary">{command.icon}</div>
+      <div className="flex-1 min-w-0 truncate">
+        {label}
+        {description && <span className="text-tertiary"> — {description}</span>}
+      </div>
       {isActive && (
-        <div className="shrink-0 h-4 w-4 rounded-full bg-current flex items-center justify-center">
-          <Check className="h-2.5 w-2.5 text-white dark:text-black" strokeWidth={3} />
-        </div>
+        <Check className="size-4 shrink-0 text-secondary" aria-hidden="true" />
       )}
     </>
   )
@@ -194,6 +222,12 @@ export interface SlashCommandMenuProps {
   showFilter?: boolean
   filterPlaceholder?: string
   className?: string
+  /** Render without its own floating material (the host popover already draws it) */
+  bare?: boolean
+  /** Show each mode's one-line description after its name */
+  showDescriptions?: boolean
+  /** Non-interactive hint row under the list (e.g. the mode-cycling shortcut) */
+  footer?: React.ReactNode
 }
 
 export function SlashCommandMenu({
@@ -204,6 +238,9 @@ export function SlashCommandMenu({
   showFilter = false,
   filterPlaceholder,
   className,
+  bare = false,
+  showDescriptions = false,
+  footer,
 }: SlashCommandMenuProps) {
   const { t } = useTranslation()
   const effectiveFilterPlaceholder = filterPlaceholder ?? t("commands.searchCommands")
@@ -258,34 +295,35 @@ export function SlashCommandMenu({
         className={cn(
           MENU_ITEM_STYLE,
           'outline-none',
-          'data-[selected=true]:bg-foreground/5'
+          'data-[selected=true]:bg-fill-hover'
         )}
       >
-        <CommandItemContent command={cmd} isActive={isActive} />
+        <CommandItemContent command={cmd} isActive={isActive} showDescription={showDescriptions} />
       </CommandPrimitive.Item>
     )
   }
 
   return (
     <CommandPrimitive
-      className={cn(MENU_CONTAINER_STYLE, className)}
+      label={effectiveFilterPlaceholder}
+      className={cn(bare ? 'min-w-[220px] overflow-hidden text-foreground' : MENU_CONTAINER_STYLE, className)}
       shouldFilter={false}
       defaultValue={defaultValue}
     >
       {showFilter && (
-        <div className="border-b border-border/50 px-3 py-2">
+        <div className="flex h-control-xl items-center border-b border-subtle px-3">
           <CommandPrimitive.Input
             ref={inputRef}
             value={filter}
             onValueChange={setFilter}
             placeholder={effectiveFilterPlaceholder}
-            className="w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+            className="w-full bg-transparent text-label outline-none placeholder:text-tertiary"
           />
         </div>
       )}
       <CommandPrimitive.List className={MENU_LIST_STYLE}>
         {allFilteredCommands.length === 0 ? (
-          <CommandPrimitive.Empty className="py-4 text-center text-sm text-muted-foreground">
+          <CommandPrimitive.Empty className="py-4 text-center text-label text-tertiary">
             No commands found
           </CommandPrimitive.Empty>
         ) : filteredGroups ? (
@@ -295,7 +333,7 @@ export function SlashCommandMenu({
               {group.commands.map(renderCommandItem)}
               {/* Separator: only show if there's another group after this one */}
               {groupIndex < filteredGroups.length - 1 && (
-                <div className="h-px bg-border/50 my-1 mx-2" />
+                <div className={INLINE_MENU_SEPARATOR} />
               )}
             </React.Fragment>
           ))
@@ -304,6 +342,12 @@ export function SlashCommandMenu({
           filteredCommands?.map(renderCommandItem)
         )}
       </CommandPrimitive.List>
+      {footer && (
+        <>
+          <div className="bg-separator h-px" />
+          <div className={INLINE_MENU_FOOTER}>{footer}</div>
+        </>
+      )}
     </CommandPrimitive>
   )
 }
@@ -427,7 +471,7 @@ export function InlineSlashCommand({
     <div
       ref={menuRef}
       data-inline-menu
-      className={cn('fixed z-dropdown', MENU_CONTAINER_STYLE, className)}
+      className={cn('fixed z-dropdown', MENU_CONTAINER_STYLE, INLINE_MENU_ORIGIN, className)}
       style={{ left: Math.round(position.x) - 10, bottom: bottomPosition, minWidth: 220, maxWidth: 260 }}
     >
       <div ref={listRef} className={MENU_LIST_STYLE}>
@@ -456,12 +500,12 @@ export function InlineSlashCommand({
                       isSelected && MENU_ITEM_SELECTED
                     )}
                   >
-                    <div className="shrink-0 text-muted-foreground">
+                    <div className="shrink-0 text-secondary">
                       <Icon_Folder className={MENU_ICON_SIZE} strokeWidth={1.75} />
                     </div>
                     <div className="flex-1 min-w-0 truncate">
                       <span>{item.label}</span>
-                      <span className="text-muted-foreground ml-1.5">{item.description}</span>
+                      <span className="text-tertiary ml-1.5">{item.description}</span>
                     </div>
                   </div>
                 )
@@ -489,8 +533,8 @@ export function InlineSlashCommand({
         ))}
       </div>
       {/* Always-visible footer hint for @ mentions */}
-      <div className="h-px bg-border/50 mx-2" />
-      <div className="px-3 py-2.5 select-none text-xs text-muted-foreground">
+      <div className="bg-separator h-px" />
+      <div className={INLINE_MENU_FOOTER}>
         Use @ for skills and files
       </div>
     </div>
@@ -529,6 +573,8 @@ function getFolderName(path: string): string {
 export interface UseInlineSlashCommandOptions {
   /** Ref to input element (textarea or RichTextInput handle) */
   inputRef: React.RefObject<SlashCommandInputElement | null>
+  /** Permission modes to offer (defaults to Explore, Ask, Execute) */
+  modes?: readonly PermissionMode[]
   onSelectCommand: (commandId: SlashCommandId) => void
   onSelectFolder: (path: string) => void
   activeCommands?: SlashCommandId[]
@@ -550,6 +596,7 @@ export interface UseInlineSlashCommandReturn {
 
 export function useInlineSlashCommand({
   inputRef,
+  modes = DEFAULT_PERMISSION_MODES,
   onSelectCommand,
   onSelectFolder,
   activeCommands = [],
@@ -571,7 +618,7 @@ export function useInlineSlashCommand({
     result.push({
       id: 'modes',
       label: 'Modes',
-      items: permissionModeCommands,
+      items: permissionModeCommandsFor(modes),
     })
 
     // Commands section
@@ -604,7 +651,7 @@ export function useInlineSlashCommand({
     }
 
     return result
-  }, [recentFolders, homeDir])
+  }, [modes, recentFolders, homeDir])
 
   const handleInputChange = React.useCallback((value: string, cursorPosition: number) => {
     // Store current state for handleSelect

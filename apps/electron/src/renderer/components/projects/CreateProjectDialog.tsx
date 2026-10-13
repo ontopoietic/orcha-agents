@@ -15,6 +15,7 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
+import { Kbd } from '@/components/ui/kbd'
 import { Input } from '@/components/ui/input'
 import { useRegisterModal } from '@/context/ModalContext'
 
@@ -56,27 +57,27 @@ export function CreateProjectDialog({ open, onCancel, onSubmit }: CreateProjectD
           <DialogTitle>{t('projectsList.createDialogTitle')}</DialogTitle>
         </DialogHeader>
 
-        <div className="pt-2">
-          <Input
-            autoFocus
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder={t('projectsList.createDialogNamePlaceholder')}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && canSubmit) {
-                e.preventDefault()
-                handleSubmit()
-              }
-            }}
-          />
-        </div>
+        <Input
+          autoFocus
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder={t('projectsList.createDialogNamePlaceholder')}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && canSubmit) {
+              e.preventDefault()
+              handleSubmit()
+            }
+          }}
+        />
 
-        <DialogFooter className="gap-2 sm:gap-0">
-          <Button variant="outline" onClick={handleCancel}>
+        <DialogFooter>
+          <Button variant="ghost" onClick={handleCancel}>
             {t('common.cancel')}
           </Button>
-          <Button disabled={!canSubmit} onClick={handleSubmit}>
+          {/* Enter in the field submits (see onKeyDown); the keycap shows it */}
+          <Button variant="primary" disabled={!canSubmit} onClick={handleSubmit}>
             {t('projectsList.createButton')}
+            <Kbd aria-hidden>↵</Kbd>
           </Button>
         </DialogFooter>
       </DialogContent>

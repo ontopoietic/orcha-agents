@@ -1,5 +1,5 @@
 import { cn } from '@/lib/utils'
-import type { KanbanSubtask } from './types'
+import type { KanbanSubtask, SubtaskRunState } from './types'
 
 interface SubtaskProgressProps {
   subtasks: KanbanSubtask[]
@@ -9,19 +9,27 @@ interface SubtaskProgressProps {
    * count and bar stay stable instead of growing as children appear.
    */
   total?: number
-  /** Accent color for done/running segments (the tile's column color). */
+  /**
+   * @deprecated Segments now take their color from the run-state roles (done = success,
+   * running = accent, failed = destructive); kept so existing callers still type-check.
+   */
   accent?: string
   className?: string
 }
 
-const PENDING_TRACK = 'color-mix(in srgb, currentColor 12%, transparent)'
+/** One status vocabulary (design spec §2.4): segment color = run-state role, pending = quiet track. */
+const SEGMENT_CLASS: Record<SubtaskRunState, string> = {
+  done: 'bg-current text-success',
+  running: 'bg-current text-accent',
+  failed: 'bg-current text-destructive',
+  pending: 'bg-fill-pressed',
+}
 
 /**
- * One segment per subtask: done/running segments fill with the accent (running
- * ones pulse), pending segments stay a faint track. A trailing `done/total`
- * count gives the exact tally. Renders nothing when there are no subtasks.
+ * One segment per subtask, colored by run state, with a trailing `done/total` count for the exact
+ * tally (so progress is never read from color alone). Renders nothing when there are no subtasks.
  */
-export function SubtaskProgress({ subtasks, total: totalProp, accent = 'var(--primary)', className }: SubtaskProgressProps) {
+export function SubtaskProgress({ subtasks, total: totalProp, className }: SubtaskProgressProps) {
   const revealed = subtasks.length
   // Never let the denominator drop below what's already revealed (guards a stale/low total).
   const total = Math.max(totalProp ?? revealed, revealed)
@@ -39,28 +47,13 @@ export function SubtaskProgress({ subtasks, total: totalProp, accent = 'var(--pr
         aria-valuemax={total}
       >
         {subtasks.map(subtask => (
-          <span
-            key={subtask.id}
-            className={cn('h-1 flex-1 rounded-full', subtask.runState === 'running' && 'animate-pulse')}
-            style={{
-              backgroundColor:
-                subtask.runState === 'failed'
-                  ? '#ef4444' // red-500, matches the failed glyph in SubtaskRow
-                  : subtask.runState === 'pending'
-                    ? PENDING_TRACK
-                    : accent,
-            }}
-          />
+          <span key={subtask.id} className={cn('h-1 flex-1 rounded-full', SEGMENT_CLASS[subtask.runState])} />
         ))}
         {Array.from({ length: unrevealed }, (_, i) => (
-          <span
-            key={`pending-${i}`}
-            className="h-1 flex-1 rounded-full"
-            style={{ backgroundColor: PENDING_TRACK }}
-          />
+          <span key={`pending-${i}`} className={cn('h-1 flex-1 rounded-full', SEGMENT_CLASS.pending)} />
         ))}
       </div>
-      <span className="shrink-0 text-[11px] font-medium tabular-nums text-foreground/50">
+      <span className="shrink-0 text-label-sm font-medium tabular-nums text-tertiary">
         {done}/{total}
       </span>
     </div>

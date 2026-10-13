@@ -92,12 +92,28 @@ export interface SessionScopedToolCallbacks {
   createTaskFn?: (
     input: import('@craft-agent/session-tools-core').CreateTaskInput
   ) => Promise<import('@craft-agent/session-tools-core').CreateTaskResult>;
+  /** Append a dated note to the session's project MEMORY.md (project_memory_append). */
+  appendProjectMemoryFn?: (
+    input: import('@craft-agent/session-tools-core').ProjectMemoryAppendInput
+  ) => Promise<import('@craft-agent/session-tools-core').ProjectMemoryAppendResult>;
   /**
    * Pages tools (list/get/create/update/write data/delete) — grouped in one
    * object because the six operations always ship together. Wired by
    * SessionManager to the invoking session's workspace.
    */
   pages?: import('@craft-agent/session-tools-core').PagesToolCallbacks;
+  /**
+   * MCP source resources & prompts tools (source_list_resources/read_resource/
+   * list_prompts/get_prompt). Wired by SessionManager to the session's MCP pool,
+   * read at call time; only the session's enabled, connected sources are reachable.
+   */
+  mcpSources?: import('@craft-agent/session-tools-core').McpSourceToolCallbacks;
+  /**
+   * Decision-layer callback for the `decide` tool (Jev / System One). Wired by
+   * SessionManager from `@craft-agent/shared/decisions`; gating (Settings switch,
+   * feature toggle, key) happens inside the callback at call time.
+   */
+  decide?: import('@craft-agent/session-tools-core').DecisionToolCallbacks;
 }
 
 // Registry of callbacks keyed by sessionId

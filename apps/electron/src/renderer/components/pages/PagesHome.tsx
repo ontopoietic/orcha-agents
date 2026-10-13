@@ -6,8 +6,10 @@ import { useTranslation } from 'react-i18next'
 import { useAppShellContext } from '@/context/AppShellContext'
 import { useNavigation } from '@/contexts/NavigationContext'
 import { routes } from '@/lib/navigate'
+import { cn } from '@/lib/utils'
 import { pagesAtom, pagesProjectFilterAtom, PAGES_UNASSIGNED_PROJECT } from '@/atoms/pages'
 import { projectsAtom } from '@/atoms/projects'
+import { Button } from '@/components/ui/button'
 import { EntityListEmptyScreen } from '@/components/ui/entity-list-empty'
 import {
   ProjectMultiSelectFilter,
@@ -125,29 +127,33 @@ export function PagesHome() {
   }, [activeWorkspaceId, pendingDelete, t])
 
   return (
-    <div className="flex h-full flex-col bg-background">
-      {/* Sticky header: title + count, project filter, primary action */}
-      <div className="flex items-center justify-between gap-2 border-b border-border/50 px-4 py-2.5">
-        <div className="flex min-w-0 items-center gap-2.5">
-          <span className="text-sm font-medium">{t('sidebar.pages')}</span>
-          <span className="text-xs text-foreground/40">{pages.length}</span>
+    // No surface of its own: the panel card (paper) shows through, as in the board view.
+    <div className="flex h-full flex-col">
+      {/* Header (48px, like the panel headers): title + count, project filter, New Page. Both ends sit
+          on the gutter, the same edge as the tile grid below (the New Page button is a bordered box). */}
+      <div className="flex h-12 shrink-0 items-center justify-between gap-2 px-gutter">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="truncate text-label-lg font-semibold">{t('sidebar.pages')}</span>
+          <span className="text-label-sm tabular-nums text-tertiary">{pages.length}</span>
           {(projectOptions.length > 0 || projectFilter.length > 0) && (
             <ProjectMultiSelectFilter
               projects={projectOptions}
               value={projectFilter}
               onChange={setProjectFilter}
               unassignedId={PAGES_UNASSIGNED_PROJECT}
+              className="ml-1"
             />
           )}
         </div>
-        <button
+        <Button
           type="button"
+          variant="secondary"
           onClick={handleCreatePage}
           disabled={!activeWorkspaceId}
-          className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 text-[12.5px] font-semibold text-foreground transition-colors hover:bg-foreground/[0.03] disabled:opacity-50"
+          className="@max-mobile/shell:h-9"
         >
-          <Plus className="h-3.5 w-3.5" strokeWidth={2.5} /> {t('pages.newPage')}
-        </button>
+          <Plus /> {t('pages.newPage')}
+        </Button>
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
@@ -157,25 +163,28 @@ export function PagesHome() {
             title={t('pages.emptyTitle')}
             description={t('pages.emptyDescription')}
           >
-            <button
-              onClick={handleAskAgent}
-              className="inline-flex h-7 items-center gap-1.5 rounded-[8px] bg-foreground/[0.02] px-3 text-xs font-medium shadow-minimal transition-colors hover:bg-foreground/[0.05]"
-            >
-              <Sparkles className="h-3.5 w-3.5" /> {t('pages.askAgent')}
-            </button>
-            <button
-              onClick={handleCreatePage}
-              className="inline-flex h-7 items-center gap-1.5 rounded-[8px] bg-foreground/[0.02] px-3 text-xs font-medium shadow-minimal transition-colors hover:bg-foreground/[0.05]"
-            >
-              <Plus className="h-3.5 w-3.5" /> {t('pages.createBlank')}
-            </button>
+            <Button type="button" variant="secondary" onClick={handleAskAgent}>
+              <Sparkles /> {t('pages.askAgent')}
+            </Button>
+            <Button type="button" variant="secondary" onClick={handleCreatePage}>
+              <Plus /> {t('pages.createBlank')}
+            </Button>
           </EntityListEmptyScreen>
         ) : visiblePages.length === 0 ? (
-          <div className="flex h-full items-center justify-center text-sm text-foreground/50">
+          <div className="flex h-full items-center justify-center text-label text-tertiary">
             {t('pages.noMatches')}
           </div>
         ) : (
-          <div className="mx-auto grid w-full max-w-[1440px] grid-cols-[repeat(auto-fill,minmax(260px,1fr))] gap-4 p-5">
+          // auto-fill 240px tiles, 16px gap, inset on the panel gutter (where the title starts). Compact
+          // (shell < 768px) tightens the gap to 10px; below the width where auto-fill would drop to one
+          // column, two columns are kept.
+          <div
+            className={cn(
+              'mx-auto grid w-full max-w-[1440px] grid-cols-[repeat(auto-fill,minmax(240px,1fr))] gap-4 px-gutter pt-1.5 pb-8',
+              '@max-mobile/shell:gap-2.5 @max-mobile/shell:pb-6',
+              '@max-[33.5rem]/panel:grid-cols-2 @max-[33.5rem]/panel:gap-2.5 @max-[33.5rem]/panel:pb-6',
+            )}
+          >
             {visiblePages.map(page => (
               <PageTile
                 key={page.config.id}

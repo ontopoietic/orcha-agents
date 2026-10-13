@@ -27,6 +27,7 @@ export type {
   PageActionRequest,
   PageActionResult,
   PageShareInfo,
+  PageClaudeArtifactInfo,
   PageThumbnailInfo,
   PageConfig,
 } from '@craft-agent/core';

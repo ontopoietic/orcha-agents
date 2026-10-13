@@ -14,6 +14,7 @@ mock.module('../../config/preferences.ts', () => ({
 import {
   getDateTimeContext,
   getMiniAgentSystemPrompt,
+  getPermissionModesSection,
   getSystemPrompt,
   getWorkingDirectoryContext,
   formatProjectContextForPrompt,
@@ -43,8 +44,15 @@ describe('system prompt guidance', () => {
 
     expect(prompt).toContain('If permissionMode is **Explore**')
     expect(prompt).toContain('For edits outside those folders, write a plan file there, call `SubmitPlan`, then stop for user approval.')
-    expect(prompt).toContain('If permissionMode is **Ask to Edit** or **Execute**')
     expect(prompt).toContain('Use `SubmitPlan` only when the user asks for a plan or the change is broad/risky.')
+    expect(prompt).toContain('If permissionMode is **Ask to Edit**, **Guarded** or **Execute**')
+  })
+
+  it('always lists Guarded mode (the prompt is snapshotted per session) and keeps Execute prompt-free', () => {
+    const section = getPermissionModesSection()
+    expect(section).toContain('| **Guarded** | Autonomous execution; a call the decision model judges risky')
+    expect(section).toContain('While the decision model is off it behaves like Ask to Edit.')
+    expect(section).toContain('| **Execute** | Full autonomous execution. No prompts. |')
   })
 
   it('includes required MCP metadata guidance in the mini-agent prompt', () => {
@@ -98,6 +106,15 @@ describe('system prompt guidance', () => {
 
     expect(prompt).toContain('The subtask needs file/shell tools (for example, Read or Bash)')
     expect(prompt).not.toContain('The subtask needs tools (Read, Bash, Grep)')
+  })
+
+  it('points at the MCP resource and prompt tools for existing sources on every backend', () => {
+    for (const backend of [undefined, 'Pi']) {
+      const prompt = getSystemPrompt(undefined, undefined, '/tmp/workspace', '/tmp/workspace', undefined, backend)
+
+      expect(prompt).toContain('Use `source_list_resources` / `source_read_resource` / `source_list_prompts` / `source_get_prompt`')
+      expect(prompt).toContain('read guide resources a source points at before using its tools')
+    }
   })
 })
 
@@ -208,6 +225,14 @@ describe('formatProjectContextForPrompt', () => {
     expect(block).toContain('- spec.pdf (application/pdf, 2.0 KB)')
     expect(block).toContain('- notes.txt (text/plain, 512 B)')
     expect(block).toContain('lists reference files')
+  })
+
+  // Found 2026-10-11: sessions rewrote MEMORY.md from their snapshot and dropped other sessions' notes.
+  it('points memory writes at the append-only tool, never at rewriting the file', () => {
+    const block = formatProjectContextForPrompt(baseCtx())
+    expect(block).toContain('project_memory_append')
+    expect(block).toContain('Never')
+    expect(block).not.toContain('via Write/Edit')
   })
 
   it('omits the manifest entirely when there are no assets', () => {

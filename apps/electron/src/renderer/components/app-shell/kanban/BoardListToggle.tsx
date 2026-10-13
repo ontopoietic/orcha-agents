@@ -1,5 +1,6 @@
 import { LayoutGrid, List } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@craft-agent/ui'
 import { cn } from '@/lib/utils'
 
 export type BoardListValue = 'list' | 'board'
@@ -14,13 +15,17 @@ interface BoardListToggleProps {
  * List ⇄ Board view switch. Rendered both in the sessions navigator header (list
  * mode) and in the board's own header (board mode), since the navigator is hidden
  * while the board is open and would otherwise have nowhere to host the switch.
+ *
+ * A segmented control (spec §4/A5): neutral well, the selected segment is raised. Icon segments
+ * carry their name as tooltip + accessible name.
  */
 export function BoardListToggle({ value, onChange, className }: BoardListToggleProps) {
   const { t } = useTranslation()
   return (
     <div
+      role="group"
       className={cn(
-        'inline-flex items-center gap-0.5 rounded-lg border border-border/60 bg-foreground/[0.02] p-0.5',
+        'titlebar-no-drag inline-flex items-center gap-0.5 rounded-md bg-fill-hover p-0.5',
         className
       )}
     >
@@ -47,17 +52,23 @@ function ToggleButton({
   onClick: () => void
 }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-pressed={active}
-      className={cn(
-        'inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium transition-colors',
-        active ? 'bg-card text-foreground shadow-sm' : 'text-foreground/50 hover:text-foreground/80'
-      )}
-    >
-      <Icon className="h-3.5 w-3.5" strokeWidth={2} />
-      {label}
-    </button>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          onClick={onClick}
+          aria-pressed={active}
+          aria-label={label}
+          className={cn(
+            'inline-grid h-control-sm w-7 place-items-center rounded-sm',
+            'transition-[background-color,color,box-shadow] duration-micro ease-out-subtle hover:duration-instant',
+            active ? 'bg-floating text-foreground shadow-elev-1' : 'text-secondary hover:text-foreground'
+          )}
+        >
+          <Icon className="size-3.5" strokeWidth={2} />
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="bottom">{label}</TooltipContent>
+    </Tooltip>
   )
 }

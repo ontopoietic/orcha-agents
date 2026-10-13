@@ -8,6 +8,7 @@ import { sessionMetaMapAtom, updateSessionMetaAtom, type SessionMeta } from '@/a
 import { projectsAtom } from '@/atoms/projects'
 import { kanbanProjectFilterAtom, kanbanColumnStatusAtom, kanbanEditorTargetAtom } from '@/atoms/kanban'
 import { useNavigation } from '@/contexts/NavigationContext'
+import { Button } from '@/components/ui/button'
 import { useProjectColorTreatment } from '@/hooks/useProjectColorTreatment'
 import { useLabels } from '@/hooks/useLabels'
 import { getSessionTitle } from '@/utils/session'
@@ -557,34 +558,43 @@ export function KanbanBoardContainer() {
   }
 
   return (
-    <div className="flex h-full flex-col bg-background">
-      <div className="flex items-center justify-between gap-2 border-b border-border/50 px-4 py-2.5">
-        <div className="flex min-w-0 items-center gap-2.5">
-          <span className="text-sm font-medium">{t('kanban.allTasks')}</span>
+    // No surface of its own: the panel card (paper) shows through; columns are neutral wells on it.
+    <div className="flex h-full flex-col">
+      {/* Header (48px, like the panel headers): title, project filter … List/Board, New Task. Both ends
+          sit on the gutter, the board columns' edge (the trailing New Task button is a bordered box). */}
+      <div className="flex h-12 shrink-0 items-center justify-between gap-2 px-gutter">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="truncate text-label-lg font-semibold">{t('kanban.allTasks')}</span>
           {projectOptions.length > 0 && (
-            <KanbanProjectFilter projects={projectOptions} value={projectFilter} onChange={setProjectFilter} />
+            <KanbanProjectFilter
+              projects={projectOptions}
+              value={projectFilter}
+              onChange={setProjectFilter}
+              className="ml-1"
+            />
           )}
           {usingProjectColumns && editingProject && (
-            <span className="truncate text-[11px] text-foreground/45">
+            <span className="truncate text-label-sm text-tertiary">
               {t('kanban.column.columnsFrom', { project: editingProject.config.name })}
             </span>
           )}
         </div>
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => setEditorTarget({ mode: 'create', initialProjectId: projectFilter[0] })}
-            disabled={!activeWorkspaceId}
-            className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 text-[12.5px] font-semibold text-foreground transition-colors hover:bg-foreground/[0.03] disabled:opacity-50"
-          >
-            <Plus className="h-3.5 w-3.5" strokeWidth={2.5} /> {t('kanban.newTask')}
-          </button>
+        <div className="flex shrink-0 items-center gap-1.5">
           <BoardListToggle
             value="board"
             onChange={view => {
               if (view === 'list') navigate(routes.view.allSessions())
             }}
           />
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={() => setEditorTarget({ mode: 'create', initialProjectId: projectFilter[0] })}
+            disabled={!activeWorkspaceId}
+            className="@max-mobile/shell:h-9"
+          >
+            <Plus /> {t('kanban.newTask')}
+          </Button>
         </div>
       </div>
       <div className="min-h-0 flex-1">

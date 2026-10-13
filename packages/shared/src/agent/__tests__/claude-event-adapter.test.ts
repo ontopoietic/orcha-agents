@@ -5,7 +5,7 @@
  * Each test provides mock SDKMessage objects and verifies the AgentEvents produced.
  */
 import { describe, it, expect, beforeEach } from 'bun:test';
-import { ClaudeEventAdapter, buildWindowsSkillsDirError, type ClaudeAdapterCallbacks } from '../backend/claude/event-adapter.ts';
+import { ClaudeEventAdapter, DETACHED_TOOL_CALL_RESULT, buildWindowsSkillsDirError, type ClaudeAdapterCallbacks } from '../backend/claude/event-adapter.ts';
 import type { AgentEvent } from '@craft-agent/core/types';
 
 // Helper: create default callbacks
@@ -279,6 +279,25 @@ describe('ClaudeEventAdapter', () => {
   });
 
   describe('user message (tool results)', () => {
+    it('shows a status instead of the model-directed placeholder for a detached call (SDK >=0.3.287)', async () => {
+      await adapter.adapt({
+        type: 'assistant',
+        message: { content: [{ type: 'tool_use', id: 'toolu_wf', name: 'WebFetch', input: { url: 'https://example.com' } }], usage: {} },
+        parent_tool_use_id: null,
+        session_id: 'sess-1',
+      } as any);
+      const events = await adapter.adapt({
+        type: 'user',
+        message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_wf', content: '[This call is still running. Its result will arrive in a later turn; never say you cancelled it.]' }] },
+        tool_use_result: { detachedToolCall: true },
+        parent_tool_use_id: null,
+        session_id: 'sess-1',
+      } as any);
+
+      const result = events.find(e => e.type === 'tool_result');
+      expect(result).toMatchObject({ type: 'tool_result', toolUseId: 'toolu_wf', result: DETACHED_TOOL_CALL_RESULT, isError: false });
+    });
+
     it('should skip replayed user messages', async () => {
       const events = await adapter.adapt({
         type: 'user',
@@ -310,6 +329,28 @@ describe('ClaudeEventAdapter', () => {
         toolUseId: 'parent-1', // Uses parent_tool_use_id
         elapsedSeconds: 5.2,
       });
+    });
+
+    // SDK 0.3.280 sends a heartbeat every 30 s for a long tool; each one used to add a
+    // "Running call_llm…" row that never finished.
+    it('reports heartbeat progress on the running tool without adding a tool row', async () => {
+      await adapter.adapt({
+        type: 'assistant',
+        message: { id: 'msg-1', content: [{ type: 'tool_use', id: 'toolu_1', name: 'mcp__session__call_llm', input: { prompt: 'x' } }] },
+        parent_tool_use_id: null,
+        session_id: 'sess-1',
+      } as any);
+      const events = await adapter.adapt({
+        type: 'tool_progress',
+        tool_use_id: 'toolu_1-heartbeat-0',
+        tool_name: 'mcp__session__call_llm',
+        parent_tool_use_id: 'toolu_1',
+        elapsed_time_seconds: 30,
+        session_id: 'sess-1',
+      } as any);
+
+      expect(events.filter(e => e.type === 'tool_start')).toEqual([]);
+      expect(events.find(e => e.type === 'task_progress')).toMatchObject({ toolUseId: 'toolu_1', elapsedSeconds: 30 });
     });
 
     it('should use tool_use_id when no parent', async () => {
@@ -933,5 +974,17 @@ describe('buildWindowsSkillsDirError', () => {
   it('should return null for non-matching errors', () => {
     expect(buildWindowsSkillsDirError('Connection refused')).toBeNull();
     expect(buildWindowsSkillsDirError('ENOENT: no such file, /tmp/other')).toBeNull();
+  });
+});
+
+describe('ClaudeEventAdapter manual compaction flag', () => {
+  it('reports a requested manual compaction until the next turn starts (#1058)', () => {
+    const adapter = new ClaudeEventAdapter(createCallbacks());
+    adapter.startTurn();
+    expect(adapter.isManualCompactionRequested()).toBe(false);
+    adapter.expectManualCompaction();
+    expect(adapter.isManualCompactionRequested()).toBe(true);
+    adapter.startTurn();
+    expect(adapter.isManualCompactionRequested()).toBe(false);
   });
 });

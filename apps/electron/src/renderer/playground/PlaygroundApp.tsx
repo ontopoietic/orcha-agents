@@ -21,7 +21,9 @@ const SELECTED_STORAGE_KEY = 'playground-selected-component'
 const VARIANTS_SIDEBAR_KEY = 'playground-variants-sidebar-open'
 
 const FALLBACK_THEME_OPTIONS = [
-  { value: 'default', label: 'Default' },
+  { value: 'default', label: 'Craft Agents' },
+  { value: 'craft', label: 'Craft' },
+  { value: 'paper', label: 'Paper' },
   { value: 'catppuccin', label: 'Catppuccin' },
   { value: 'dracula', label: 'Dracula' },
   { value: 'ghostty', label: 'Ghostty' },
@@ -134,6 +136,19 @@ export function PlaygroundApp() {
     }
   }, [selectedId])
 
+  // A crashing preview must not reopen on every reload: drop it from the persisted selection
+  // (it stays selected in this tab, showing the preview's error panel).
+  const handlePreviewCrash = React.useCallback((componentId: string, error: Error) => {
+    console.error(`[Playground] Preview "${componentId}" crashed:`, error)
+    try {
+      if (localStorage.getItem(SELECTED_STORAGE_KEY) === componentId) {
+        localStorage.removeItem(SELECTED_STORAGE_KEY)
+      }
+    } catch {
+      // Ignore storage errors
+    }
+  }, [])
+
   // Persist variants sidebar state
   React.useEffect(() => {
     try {
@@ -244,6 +259,7 @@ export function PlaygroundApp() {
           <ComponentPreview
             component={selectedComponent}
             props={props}
+            onCrash={handlePreviewCrash}
           />
         ) : (
           <div className="flex-1 flex items-center justify-center text-muted-foreground">

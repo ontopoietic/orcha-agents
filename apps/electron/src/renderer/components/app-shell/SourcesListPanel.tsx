@@ -1,10 +1,12 @@
 import * as React from 'react'
+import { Button } from '@/components/ui/button'
 import { useTranslation } from 'react-i18next'
 import { DatabaseZap } from 'lucide-react'
 import { SourceAvatar } from '@/components/ui/source-avatar'
 import { deriveConnectionStatus } from '@/components/ui/source-status-indicator'
 import { EntityPanel } from '@/components/ui/entity-panel'
-import { EntityListBadge } from '@/components/ui/entity-list-badge'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@craft-agent/ui'
+import { cn } from '@/lib/utils'
 import { EntityListEmptyScreen } from '@/components/ui/entity-list-empty'
 import { sourceSelection } from '@/hooks/useEntitySelection'
 import { SourceMenu } from './SourceMenu'
@@ -13,18 +15,20 @@ import { useAppShellContext } from '@/context/AppShellContext'
 import { EditPopover, getEditConfig, type EditContextKey } from '@/components/ui/EditPopover'
 import type { LoadedSource, SourceConnectionStatus, SourceFilter } from '../../../shared/types'
 
-const SOURCE_TYPE_CONFIG: Record<string, { labelKey: string; colorClass: string }> = {
-  mcp: { labelKey: 'sourcesList.typeMcp', colorClass: 'bg-accent/10 text-accent' },
-  api: { labelKey: 'sourcesList.typeApi', colorClass: 'bg-success/10 text-success' },
-  local: { labelKey: 'sourcesList.typeLocal', colorClass: 'bg-info/10 text-info' },
+/** Source type, shown as the row's trailing meta (MCP · API · Folder) */
+const SOURCE_TYPE_LABEL_KEYS: Record<string, string> = {
+  mcp: 'sourcesList.typeMcp',
+  api: 'sourcesList.typeApi',
+  local: 'sourcesList.typeLocal',
 }
 
-const SOURCE_STATUS_CONFIG: Record<string, { labelKey: string; colorClass: string } | null> = {
+/** A state other than connected replaces the description on the second line, in its status color */
+const SOURCE_STATUS_CONFIG: Record<SourceConnectionStatus, { labelKey: string; textClass: string } | null> = {
   connected: null,
-  needs_auth: { labelKey: 'sourcesList.statusAuthRequired', colorClass: 'bg-warning/10 text-warning' },
-  failed: { labelKey: 'sourcesList.statusDisconnected', colorClass: 'bg-destructive/10 text-destructive' },
-  untested: { labelKey: 'sourcesList.statusNotTested', colorClass: 'bg-foreground/10 text-foreground/50' },
-  local_disabled: { labelKey: 'sourcesList.statusDisabled', colorClass: 'bg-foreground/10 text-foreground/50' },
+  needs_auth: { labelKey: 'sourcesList.statusAuthRequired', textClass: 'text-info' },
+  failed: { labelKey: 'sourcesList.statusDisconnected', textClass: 'text-destructive' },
+  untested: { labelKey: 'sourcesList.statusNotTested', textClass: 'text-tertiary' },
+  local_disabled: { labelKey: 'sourcesList.statusDisabled', textClass: 'text-tertiary' },
 }
 
 const SOURCE_TYPE_FILTER_LABEL_KEYS: Record<string, string> = {
@@ -98,9 +102,9 @@ export function SourcesListPanel({
             <EditPopover
               align="center"
               trigger={
-                <button className="inline-flex items-center h-7 px-3 text-xs font-medium rounded-[8px] bg-background shadow-minimal hover:bg-foreground/[0.03] transition-colors">
+                <Button variant="secondary">
                   {t('sourcesList.addSource')}
-                </button>
+                </Button>
               }
               {...getEditConfig(
                 sourceFilter?.kind === 'type' ? `add-source-${sourceFilter.sourceType}` as EditContextKey : 'add-source',
@@ -112,23 +116,26 @@ export function SourcesListPanel({
       }
       mapItem={(source) => {
         const connectionStatus = deriveConnectionStatus(source, localMcpEnabled)
-        const typeConfig = SOURCE_TYPE_CONFIG[source.config.type]
+        const typeLabelKey = SOURCE_TYPE_LABEL_KEYS[source.config.type]
         const statusConfig = SOURCE_STATUS_CONFIG[connectionStatus]
-        const subtitle = source.config.tagline || source.config.provider || ''
+        const description = source.config.tagline || source.config.provider || ''
+        const connectionError = source.config.connectionError
         return {
           icon: <SourceAvatar source={source} size="sm" />,
           title: source.config.name,
-          badges: (
-            <>
-              {typeConfig && <EntityListBadge colorClass={typeConfig.colorClass}>{t(typeConfig.labelKey)}</EntityListBadge>}
-              {statusConfig && (
-                <EntityListBadge colorClass={statusConfig.colorClass} tooltip={source.config.connectionError || undefined} className="cursor-default">
-                  {t(statusConfig.labelKey)}
-                </EntityListBadge>
-              )}
-              {subtitle && <span className="truncate">{subtitle}</span>}
-            </>
-          ),
+          titleTrailing: typeLabelKey ? t(typeLabelKey) : undefined,
+          subtitle: statusConfig ? (
+            connectionError ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className={cn('cursor-default', statusConfig.textClass)}>{t(statusConfig.labelKey)}</span>
+                </TooltipTrigger>
+                <TooltipContent side="top" className="max-w-xs">{connectionError}</TooltipContent>
+              </Tooltip>
+            ) : (
+              <span className={statusConfig.textClass}>{t(statusConfig.labelKey)}</span>
+            )
+          ) : description || undefined,
           menu: (
             <SourceMenu
               sourceSlug={source.config.slug}

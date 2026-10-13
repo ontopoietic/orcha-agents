@@ -17,6 +17,9 @@ import noDirectFileOpen from './eslint-rules/no-direct-file-open.cjs'
 import noInlineSourceAuthCheck from './eslint-rules/no-inline-source-auth-check.cjs'
 import noHardcodedZIndex from './eslint-rules/no-hardcoded-z-index.cjs'
 import noNonstandardShadows from './eslint-rules/no-nonstandard-shadows.cjs'
+// Design-system guardrails shared with packages/ui (one implementation)
+import noMotionAntipatterns from '../../packages/ui/eslint-rules/no-motion-antipatterns.cjs'
+import noRawPaletteColors from '../../packages/ui/eslint-rules/no-raw-palette-colors.cjs'
 
 export default [
   // Ignore patterns
@@ -83,6 +86,8 @@ export default [
         rules: {
           'no-hardcoded-z-index': noHardcodedZIndex,
           'no-nonstandard-shadows': noNonstandardShadows,
+          'no-motion-antipatterns': noMotionAntipatterns,
+          'no-raw-palette-colors': noRawPaletteColors,
         },
       },
     },
@@ -120,6 +125,10 @@ export default [
         allowedClasses: [
           'shadow-none',
           'shadow-xs',
+          'shadow-elev-0',
+          'shadow-elev-1',
+          'shadow-elev-2',
+          'shadow-elev-3',
           'shadow-minimal',
           'shadow-tinted',
           'shadow-thin',
@@ -127,11 +136,16 @@ export default [
           'shadow-strong',
           'shadow-panel-focused',
           'shadow-modal-small',
+          'shadow-dragging',
           'shadow-bottom-border',
           'shadow-bottom-border-thin',
         ],
         allowInlineNone: true,
       }],
+
+      // Design-system guardrails (implementation plan A0): warn until the class codemod (A3–B9) lands
+      'craft-styles/no-motion-antipatterns': 'warn',
+      'craft-styles/no-raw-palette-colors': 'warn',
 
       // Enforce centralized action registry for keyboard shortcuts
       'no-restricted-imports': ['error', {
@@ -156,6 +170,14 @@ export default [
     ],
     rules: {
       'craft-styles/no-nonstandard-shadows': 'off',
+    },
+  },
+
+  // Playground demos show raw colors on purpose (swatches, before/after)
+  {
+    files: ['src/renderer/playground/**/*.{ts,tsx}'],
+    rules: {
+      'craft-styles/no-raw-palette-colors': 'off',
     },
   },
 

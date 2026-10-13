@@ -14,13 +14,11 @@
 
 /* Viewer-specific overrides */
 
-/* Override background to pure white (cards/buttons pop on the off-white page) */
-:root {
-  --background: white;
-}
-
+/* The page is the navigator canvas (App.tsx bg-navigator); legacy bg-background cards and
+   buttons render as paper so they sit one step above it in both modes. */
+:root,
 .dark {
-  --background: oklch(0.26 0.01 270);
+  --background: var(--surface-paper);
 }
 
 html, body, #root {
@@ -30,7 +28,9 @@ html, body, #root {
 
 /* Drop zone styling */
 .drop-zone {
-  transition: all 0.2s ease;
+  transition:
+    border-color var(--dur-fast) var(--ease-out-subtle),
+    background-color var(--dur-fast) var(--ease-out-subtle);
 }
 
 .drop-zone.active {

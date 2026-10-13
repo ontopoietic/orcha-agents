@@ -65,6 +65,8 @@ export function createPromptHistoryEntry(opts: {
   sessionId?: string;
   prompt?: string;
   error?: string;
+  /** Why the run was skipped (e.g. its semantic condition was not met); not an error. */
+  skipped?: string;
 }): Record<string, unknown> {
   return {
     id: opts.matcherId,
@@ -73,6 +75,7 @@ export function createPromptHistoryEntry(opts: {
     ...(opts.sessionId ? { sessionId: opts.sessionId } : {}),
     ...(opts.prompt ? { prompt: opts.prompt.slice(0, HISTORY_FIELD_MAX_LENGTH) } : {}),
     ...(opts.error ? { error: opts.error.slice(0, HISTORY_FIELD_MAX_LENGTH) } : {}),
+    ...(opts.skipped ? { skipped: opts.skipped.slice(0, HISTORY_FIELD_MAX_LENGTH) } : {}),
   };
 }
 

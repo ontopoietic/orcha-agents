@@ -5,11 +5,11 @@
  * Uses the same code path as actual agent sessions (query() with maxTurns:1).
  *
  * Follows the pattern established in ClaudeAgent.runMiniCompletion() — env-based
- * credential injection, no tools, minimal system prompt.
+ * credential injection, no tools (getTextCompletionOptions), minimal system prompt.
  */
 
 import { query } from '@anthropic-ai/claude-agent-sdk';
-import { getDefaultOptions } from '../agent/options.ts';
+import { getTextCompletionOptions } from '../agent/options.ts';
 import { debug } from '../utils/debug.ts';
 
 export interface LlmValidationConfig {
@@ -64,12 +64,11 @@ export async function validateAnthropicConnection(
 
   try {
     const options = {
-      ...getDefaultOptions(envOverrides),
+      ...getTextCompletionOptions(envOverrides),
       model: config.model,
       maxTurns: 1,
       abortController,
       systemPrompt: 'Reply with OK.',
-      tools: [] as string[], // No tools
       persistSession: false,
     };
 

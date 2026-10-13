@@ -231,13 +231,13 @@ export function SharePageDialog({
               <div className="flex flex-col gap-1.5">
                 <label className="flex items-start justify-between gap-3">
                   <span className="flex flex-col gap-0.5">
-                    <span className="text-sm">{t('pages.share.includeData')}</span>
-                    <span className="text-xs text-foreground/50">{t('pages.share.includeDataHint')}</span>
+                    <span className="text-label font-medium">{t('pages.share.includeData')}</span>
+                    <span className="text-label-sm text-tertiary">{t('pages.share.includeDataHint')}</span>
                   </span>
                   <Switch checked={includeData} onCheckedChange={setIncludeData} disabled={busy !== null} />
                 </label>
                 {secretCandidates.length > 0 && (
-                  <span className="text-xs text-amber-500">
+                  <span className="text-label-sm text-info">
                     {t('pages.share.dataSecretWarning', { keys: secretKeysPreview })}
                   </span>
                 )}
@@ -245,7 +245,7 @@ export function SharePageDialog({
             )}
 
             <div className="flex flex-col gap-1.5">
-              <span className="text-sm">{t('pages.share.passwordLabel')}</span>
+              <span className="text-label font-medium">{t('pages.share.passwordLabel')}</span>
               <Input
                 type="password"
                 autoComplete="new-password"
@@ -254,7 +254,7 @@ export function SharePageDialog({
                 placeholder={t('pages.share.passwordPlaceholder')}
                 disabled={busy !== null}
               />
-              <span className={`text-xs ${passwordTooShort ? 'text-amber-500' : 'text-foreground/50'}`}>
+              <span className={passwordTooShort ? 'text-label-sm text-info' : 'text-label-sm text-tertiary'}>
                 {passwordTooShort
                   ? t('pages.share.passwordTooShort', { min: PAGE_PASSWORD_MIN_LENGTH })
                   : t('pages.share.passwordHint', { min: PAGE_PASSWORD_MIN_LENGTH })}
@@ -264,10 +264,10 @@ export function SharePageDialog({
             {scriptGrants.length > 0 ? (
               <ScriptGrantsBlock grants={scriptGrants} busyGrantId={busyGrantId} onRemove={removeGrant} />
             ) : hasUsableActionGrants ? (
-              <label className="flex items-start justify-between gap-3 rounded-md border border-amber-500/30 bg-amber-500/5 p-3">
+              <label className="flex items-start justify-between gap-3 rounded-lg border border-[color:var(--info-border)] bg-info-tint p-3">
                 <span className="flex flex-col gap-0.5">
-                  <span className="text-sm">{t('pages.share.actionsAckLabel')}</span>
-                  <span className="text-xs text-foreground/60">{t('pages.share.actionsAck')}</span>
+                  <span className="text-label font-medium">{t('pages.share.actionsAckLabel')}</span>
+                  <span className="text-label-sm text-secondary">{t('pages.share.actionsAck')}</span>
                 </span>
                 <Switch checked={ackViewOnly} onCheckedChange={setAckViewOnly} disabled={busy !== null} />
               </label>
@@ -279,18 +279,23 @@ export function SharePageDialog({
           // ------------------------------------------------------------
           <div className="flex flex-col gap-4">
             <div className="flex flex-col gap-1.5">
-              <span className="text-sm">{t('pages.share.linkLabel')}</span>
+              <span className="text-label font-medium">{t('pages.share.linkLabel')}</span>
               <div className="flex items-center gap-2">
-                <Input readOnly value={share.url} onFocus={e => e.currentTarget.select()} className="font-mono text-xs" />
-                <Button variant="outline" size="sm" onClick={copyLink} className="shrink-0">
-                  {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                <Input
+                  readOnly
+                  value={share.url}
+                  onFocus={e => e.currentTarget.select()}
+                  className="font-mono text-mono-ui md:text-mono-ui"
+                />
+                <Button variant="secondary" size="lg" onClick={copyLink} className="shrink-0">
+                  {copied ? <Check /> : <Copy />}
                   {t('pages.share.copyLink')}
                 </Button>
               </div>
-              <span className="inline-flex items-center gap-1.5 text-xs text-foreground/50">
+              <span className="inline-flex items-center gap-1.5 text-label-sm text-tertiary">
                 {share.passwordProtected
-                  ? <><Lock className="h-3 w-3" /> {t('pages.share.passwordProtected')}</>
-                  : <><Globe2 className="h-3 w-3" /> {t('pages.share.noPassword')}</>}
+                  ? <><Lock className="size-3.5" /> {t('pages.share.passwordProtected')}</>
+                  : <><Globe2 className="size-3.5" /> {t('pages.share.noPassword')}</>}
               </span>
             </div>
 
@@ -310,31 +315,31 @@ export function SharePageDialog({
 
                 {/* Republish carries the previous includeData choice — same heads-up applies */}
                 {secretCandidates.length > 0 && (
-                  <span className="text-xs text-amber-500">
+                  <span className="text-label-sm text-info">
                     {t('pages.share.dataSecretWarning', { keys: secretKeysPreview })}
                   </span>
                 )}
 
                 {/* Content revision */}
-                <div className="flex items-center justify-between gap-3 rounded-md border border-border/60 p-3">
-                  <span className="text-xs text-foreground/60">
+                <div className="flex items-center justify-between gap-3 rounded-lg border border-subtle p-3">
+                  <span className="text-label-sm text-secondary">
                     {contentDrifted ? t('pages.share.contentUpdateAvailable') : t('pages.share.contentUpToDate')}
                   </span>
                   <Button
-                    variant={contentDrifted ? 'default' : 'outline'}
+                    variant={contentDrifted ? 'primary' : 'secondary'}
                     size="sm"
                     onClick={runPublish}
                     disabled={busy !== null || scriptGrants.length > 0}
                     className="shrink-0"
                   >
-                    {busy === 'publish' && <Spinner className="text-xs" />}
+                    {busy === 'publish' && <Spinner className="text-label-sm" />}
                     {t('pages.share.republish')}
                   </Button>
                 </div>
 
                 {/* Password management */}
-                <div className="flex flex-col gap-2 rounded-md border border-border/60 p-3">
-                  <span className="text-sm">{t('pages.share.passwordLabel')}</span>
+                <div className="flex flex-col gap-2 rounded-lg border border-subtle p-3">
+                  <span className="text-label font-medium">{t('pages.share.passwordLabel')}</span>
                   <div className="flex items-center gap-2">
                     <Input
                       type="password"
@@ -345,18 +350,18 @@ export function SharePageDialog({
                       disabled={busy !== null}
                     />
                     <Button
-                      variant="outline"
-                      size="sm"
+                      variant="secondary"
+                      size="lg"
                       onClick={() => void runSetPassword(password)}
                       disabled={busy !== null || password.length === 0 || passwordTooShort}
                       className="shrink-0"
                     >
-                      {busy === 'password' && <Spinner className="text-xs" />}
+                      {busy === 'password' && <Spinner className="text-label-sm" />}
                       {t('pages.share.savePassword')}
                     </Button>
                   </div>
                   {passwordTooShort && (
-                    <span className="text-xs text-amber-500">
+                    <span className="text-label-sm text-info">
                       {t('pages.share.passwordTooShort', { min: PAGE_PASSWORD_MIN_LENGTH })}
                     </span>
                   )}
@@ -366,7 +371,7 @@ export function SharePageDialog({
                       size="sm"
                       onClick={() => void runSetPassword(null)}
                       disabled={busy !== null}
-                      className="self-start text-foreground/60"
+                      className="self-start text-secondary"
                     >
                       {t('pages.share.removePassword')}
                     </Button>
@@ -374,35 +379,36 @@ export function SharePageDialog({
                 </div>
               </>
             ) : (
-              <span className="text-xs text-foreground/50">{t('pages.share.disabledNote')}</span>
+              <span className="text-label-sm text-tertiary">{t('pages.share.disabledNote')}</span>
             )}
           </div>
         )}
 
-        <DialogFooter className="gap-2 sm:gap-2">
+        <DialogFooter>
           {share ? (
             <>
-              <span className="mr-auto text-xs text-foreground/40 self-center hidden sm:block">
+              <span className="mr-auto hidden self-center text-label-sm text-tertiary sm:block">
                 {t('pages.share.unpublishHint')}
               </span>
+              {/* Two-step: the first click arms, the confirm is the destructive-solid treatment */}
               {confirmingUnpublish ? (
-                <Button variant="destructive" onClick={runUnpublish} disabled={busy !== null}>
-                  {busy === 'unpublish' && <Spinner className="text-xs" />}
+                <Button variant="danger-solid" onClick={runUnpublish} disabled={busy !== null}>
+                  {busy === 'unpublish' && <Spinner className="text-label-sm" />}
                   {t('pages.share.unpublish')}
                 </Button>
               ) : (
-                <Button variant="outline" onClick={() => setConfirmingUnpublish(true)} disabled={busy !== null}>
+                <Button variant="danger" onClick={() => setConfirmingUnpublish(true)} disabled={busy !== null}>
                   {t('pages.share.unpublish')}
                 </Button>
               )}
             </>
           ) : (
             <>
-              <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy !== null}>
+              <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={busy !== null}>
                 {t('common.cancel')}
               </Button>
-              <Button onClick={runPublish} disabled={busy !== null || publishBlocked || passwordTooShort || !sharingEnabled}>
-                {busy === 'publish' && <Spinner className="text-xs" />}
+              <Button variant="primary" onClick={runPublish} disabled={busy !== null || publishBlocked || passwordTooShort || !sharingEnabled}>
+                {busy === 'publish' && <Spinner className="text-label-sm" />}
                 {t('pages.share.publish')}
               </Button>
             </>
@@ -429,31 +435,32 @@ function ScriptGrantsBlock({
 }) {
   const { t } = useTranslation()
   return (
-    <div className="flex flex-col gap-2 rounded-md border border-red-500/40 bg-red-500/[0.06] p-3">
+    // Blocked state: destructive tint + hairline (spec §7.7 inline marker), rows on the floating surface
+    <div className="flex flex-col gap-2 rounded-lg border border-[color:var(--destructive-border)] bg-destructive-tint p-3">
       <div className="flex items-start gap-2">
-        <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-red-600 dark:text-red-500" />
-        <div className="min-w-0 text-sm">
+        <ShieldAlert className="mt-0.5 size-4 shrink-0 text-destructive" />
+        <div className="min-w-0 text-label">
           <div className="font-medium">{t('pages.share.scriptBlockedTitle')}</div>
-          <div className="mt-0.5 text-xs text-foreground/60">{t('pages.share.scriptBlocked')}</div>
+          <div className="mt-0.5 text-label-sm text-secondary">{t('pages.share.scriptBlocked')}</div>
         </div>
       </div>
       <ul className="flex flex-col gap-1.5">
         {grants.map(grant => (
           <li
             key={grant.id}
-            className="flex items-center gap-2 rounded-md border border-border/60 bg-background/60 px-2.5 py-1.5"
+            className="flex items-center gap-2 rounded-md bg-floating px-2.5 py-1.5 shadow-elev-0"
           >
-            <span className="min-w-0 flex-1 break-words text-xs font-medium">
+            <span className="min-w-0 flex-1 break-words text-label-sm font-medium">
               {describeGrantAction(grant.action, t)}
             </span>
             <Button
-              variant="outline"
+              variant="secondary"
               size="sm"
               className="shrink-0"
               disabled={busyGrantId !== null}
               onClick={() => void onRemove(grant.id)}
             >
-              {busyGrantId === grant.id && <Spinner className="text-xs" />}
+              {busyGrantId === grant.id && <Spinner className="text-label-sm" />}
               {t('pages.grants.remove')}
             </Button>
           </li>

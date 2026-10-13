@@ -21,6 +21,7 @@ import { useAtomValue } from 'jotai'
 import { useTranslation } from 'react-i18next'
 import { Panel } from './Panel'
 import { MultiSelectPanel } from './MultiSelectPanel'
+import { DetailEmptyState, SessionsEmptyState } from './DetailEmptyState'
 import { useAppShellContext } from '@/context/AppShellContext'
 import { sessionMetaMapAtom, type SessionMeta } from '@/atoms/sessions'
 import { StoplightProvider } from '@/context/StoplightContext'
@@ -279,9 +280,7 @@ export function MainContentPanel({
     // No source selected - empty state
     return wrapWithStoplight(
       <Panel variant="grow" className={className}>
-        <div className="flex items-center justify-center h-full text-muted-foreground">
-          <p className="text-sm">{t("sourcesList.noSourcesConfigured")}</p>
-        </div>
+        <DetailEmptyState message={t("sourcesList.noSourcesConfigured")} />
       </Panel>
     )
   }
@@ -314,9 +313,7 @@ export function MainContentPanel({
     // No skill selected - empty state
     return wrapWithStoplight(
       <Panel variant="grow" className={className}>
-        <div className="flex items-center justify-center h-full text-muted-foreground">
-          <p className="text-sm">{t("skillsList.noSkillsConfigured")}</p>
-        </div>
+        <DetailEmptyState message={t("skillsList.noSkillsConfigured")} />
       </Panel>
     )
   }
@@ -356,9 +353,8 @@ export function MainContentPanel({
     }
     return wrapWithStoplight(
       <Panel variant="grow" className={className}>
-        <div className="flex items-center justify-center h-full text-muted-foreground">
-          <p className="text-sm">{t("automations.noAutomationsConfigured")}</p>
-        </div>
+        {/* "None configured" next to a list of automations contradicted the list */}
+        <DetailEmptyState message={automations.length > 0 ? t("automations.selectAutomation") : t("automations.noAutomationsConfigured")} />
       </Panel>
     )
   }
@@ -397,9 +393,7 @@ export function MainContentPanel({
     }
     return wrapWithStoplight(
       <Panel variant="grow" className={className}>
-        <div className="flex items-center justify-center h-full text-muted-foreground">
-          <p className="text-sm">{t("projectsList.noProjectSelected")}</p>
-        </div>
+        <DetailEmptyState message={t("projectsList.noProjectSelected")} />
       </Panel>
     )
   }
@@ -444,9 +438,7 @@ export function MainContentPanel({
     // No session selected - empty state
     return wrapWithStoplight(
       <Panel variant="grow" className={className}>
-        <div className="flex items-center justify-center h-full text-muted-foreground">
-          <p className="text-sm">{t("session.noSessionSelected")}</p>
-        </div>
+        <SessionsEmptyState hasSessions={sessionMetaMap.size > 0} />
       </Panel>
     )
   }
@@ -454,8 +446,8 @@ export function MainContentPanel({
   // Fallback (should not happen with proper NavigationState)
   return wrapWithStoplight(
     <Panel variant="grow" className={className}>
-      <div className="flex items-center justify-center h-full text-muted-foreground">
-        <p className="text-sm">{t("session.selectConversation")}</p>
+      <div className="flex items-center justify-center h-full text-tertiary">
+        <p className="text-label">{t("session.selectConversation")}</p>
       </div>
     </Panel>
   )

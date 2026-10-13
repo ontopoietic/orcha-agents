@@ -24,9 +24,7 @@ import {
 function createMockPermissionManager(): PermissionManagerLike {
   return {
     isCommandWhitelisted: () => false,
-    isDangerousCommand: () => false,
     getBaseCommand: (cmd: string) => cmd.split(/\s+/)[0] || cmd,
-    extractDomainFromNetworkCommand: () => null,
     isDomainWhitelisted: () => false,
   };
 }

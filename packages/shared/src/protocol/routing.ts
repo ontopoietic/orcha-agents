@@ -236,6 +236,8 @@ export const REMOTE_ELIGIBLE_CHANNELS = new Set<string>([
   RPC_CHANNELS.sessions.SEND_MESSAGE,
   RPC_CHANNELS.sessions.CANCEL,
   RPC_CHANNELS.sessions.KILL_SHELL,
+  RPC_CHANNELS.sessions.GET_BACKGROUND_TASK_OUTPUT,
+  RPC_CHANNELS.sessions.STOP_BACKGROUND_TASK,
   RPC_CHANNELS.sessions.RESPOND_TO_PERMISSION,
   RPC_CHANNELS.sessions.RESPOND_TO_CREDENTIAL,
   RPC_CHANNELS.sessions.COMMAND,
@@ -263,7 +265,6 @@ export const REMOTE_ELIGIBLE_CHANNELS = new Set<string>([
   RPC_CHANNELS.transfer.ABORT,
 
   // tasks — workspace content (Conductor DAG runs on the workspace server)
-  RPC_CHANNELS.tasks.GET_OUTPUT,
   RPC_CHANNELS.tasks.VALIDATE,
   RPC_CHANNELS.tasks.CREATE,
   RPC_CHANNELS.tasks.GENERATE,
@@ -333,6 +334,17 @@ export const REMOTE_ELIGIBLE_CHANNELS = new Set<string>([
   RPC_CHANNELS.settings.GET_DEFAULT_THINKING_LEVEL,
   RPC_CHANNELS.settings.SET_DEFAULT_THINKING_LEVEL,
 
+  // decisions — the decision layer's settings and keys live on the server whose sessions ask the
+  // model (it can reuse that server's LLM connections); the Laya probe tests what that server reaches
+  RPC_CHANNELS.decisions.GET_SETTINGS,
+  RPC_CHANNELS.decisions.SET_SETTINGS,
+  RPC_CHANNELS.decisions.GET_STATUS,
+  RPC_CHANNELS.decisions.SET_API_KEY,
+  RPC_CHANNELS.decisions.DELETE_API_KEY,
+  RPC_CHANNELS.decisions.TEST,
+  RPC_CHANNELS.decisions.PROBE_SERVER,
+  RPC_CHANNELS.decisions.GET_USAGE,
+
   // pi — provider config on workspace server
   RPC_CHANNELS.pi.GET_API_KEY_PROVIDERS,
   RPC_CHANNELS.pi.GET_PROVIDER_BASE_URL,
@@ -362,6 +374,7 @@ export const REMOTE_ELIGIBLE_CHANNELS = new Set<string>([
   RPC_CHANNELS.oauth.START,
   RPC_CHANNELS.oauth.COMPLETE,
   RPC_CHANNELS.oauth.CANCEL,
+  RPC_CHANNELS.oauth.STATUS,
   RPC_CHANNELS.oauth.REVOKE,
 
   // workspace — workspace config + images (sharp on headless)
@@ -447,6 +460,8 @@ export const REMOTE_ELIGIBLE_CHANNELS = new Set<string>([
   RPC_CHANNELS.pages.PUBLISH,
   RPC_CHANNELS.pages.SET_PUBLICATION_PASSWORD,
   RPC_CHANNELS.pages.UNPUBLISH,
+  // claude.ai artifact: runs Claude Code where the page files and the Claude credential live.
+  RPC_CHANNELS.pages.PUBLISH_CLAUDE_ARTIFACT,
   // Thumbnails: the poster file lives on the workspace server; regeneration is
   // a no-op unless that host injected a capturer (Electron main).
   RPC_CHANNELS.pages.GET_THUMBNAIL,

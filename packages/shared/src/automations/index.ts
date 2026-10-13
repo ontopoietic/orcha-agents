@@ -43,6 +43,7 @@ export type {
   SessionMetadataSnapshot,
   TimeCondition,
   StateCondition,
+  SemanticCondition,
   LogicalCondition,
   AutomationCondition,
 } from './types.ts';

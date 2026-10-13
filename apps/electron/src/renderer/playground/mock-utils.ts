@@ -228,9 +228,43 @@ export const mockElectronAPI = {
     return null
   },
 
-  getTaskOutput: async (taskId: string) => {
-    console.log('[Playground] getTaskOutput called:', taskId)
-    return `Output for task ${taskId}:\n\nThis is a mock output in the playground.\nIn the real app, this would show the actual task output.`
+  getBackgroundTaskOutput: async (sessionId: string, taskId: string) => {
+    console.log('[Playground] getBackgroundTaskOutput called:', sessionId, taskId)
+    if (taskId.startsWith('agent-')) {
+      const done = taskId.includes('done')
+      return {
+        kind: 'agent' as const,
+        message: done
+          ? '**Radix popovers trap focus while open.** Hand focus back after unmount in a `requestAnimationFrame`, and pass `onCloseAutoFocus` when the trigger unmounts with the content.\n\n- `forwardRef` on portal children, or exit animations cannot run.'
+          : 'Starting with the evaluator: `newAutoLabelEntries` is only called from SessionManager, so the merge rules hold.',
+        steps: [
+          { tool: 'Read', label: 'evaluator.ts' },
+          { tool: 'Grep', label: 'newAutoLabelEntries' },
+          { tool: 'Bash', label: 'Run label tests' },
+          { tool: 'mcp__github__search_code', label: 'Search Code' },
+        ],
+        truncated: false,
+      }
+    }
+    if (taskId.includes('fail')) {
+      return { kind: 'text' as const, text: '$ eslint src\nsrc/a.ts\n  12:7  error  Unexpected any  @typescript-eslint/no-explicit-any\n\n✖ 1 problem (1 error, 0 warnings)\n', truncated: false }
+    }
+    return { kind: 'text' as const, text: `bun test v1.3.10\n\nsrc/labels/values.test.ts:\n✓ LabelEntrySet > a plain entry is present [0.02ms]\n✓ LabelEntrySet > values keep everything [0.01ms]\n\n 89 pass\n 0 fail\nRan 89 tests across 9 files. [150.00ms]\n\nWatching for file changes…\n`, truncated: false }
+  },
+
+  stopBackgroundTask: async (sessionId: string, taskId: string) => {
+    console.log('[Playground] stopBackgroundTask called:', sessionId, taskId)
+    return { success: true }
+  },
+
+  // Transport reconnects: SessionFilesSection re-reads the folder on reconnect (returns an unsubscribe)
+  onReconnected: (_callback: () => void) => () => {},
+
+  // Session actions from the chat header (share, regenerate title, show in Finder, …). No `openUrl`
+  // mock: the Browser UI demo copies to the clipboard when it is absent.
+  sessionCommand: async (sessionId: string, command: { type: string }) => {
+    console.log('[Playground] sessionCommand called:', sessionId, command.type)
+    return { success: false, error: 'Not available in the playground' }
   },
 
   // Session files API used by SessionFilesSection (Info popover)
@@ -275,6 +309,12 @@ export const mockElectronAPI = {
   // NavigationProvider subscribes to deep-link IPC on mount; in the playground
   // there is no main process firing these events, so the listener is a no-op.
   onDeepLinkNavigate: (_callback: unknown) => {
+    void _callback
+    return () => {}
+  },
+
+  // useLabels/useViews subscribe on mount (mobile WebUI demos); labels never change in the playground.
+  onLabelsChanged: (_callback: (workspaceId: string) => void) => {
     void _callback
     return () => {}
   },
@@ -834,8 +874,3 @@ export const mockAttachmentCallbacks = {
   },
 }
 
-export const mockBackgroundTaskCallbacks = {
-  onKillTask: (taskId: string) => {
-    console.log('[Playground] Kill task:', taskId)
-  },
-}

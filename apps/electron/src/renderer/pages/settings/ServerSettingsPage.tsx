@@ -9,14 +9,13 @@ import { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Copy, Eye, EyeOff, AlertTriangle, RotateCw } from 'lucide-react'
 import { toast } from 'sonner'
-import { PanelHeader } from '@/components/app-shell/PanelHeader'
-import { ScrollArea } from '@/components/ui/scroll-area'
-import { Button } from '@/components/ui/button'
+import { Button, IconButton } from '@/components/ui/button'
 import { Spinner } from '@craft-agent/ui'
 import type { DetailsPageMeta } from '@/lib/navigation-registry'
 import type { ServerConfig, ServerStatus } from '@craft-agent/shared/config/server-config'
 
 import {
+  SettingsPage,
   SettingsSection,
   SettingsCard,
   SettingsCardFooter,
@@ -157,7 +156,7 @@ export default function ServerSettingsPage() {
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-full">
-        <Spinner />
+        <Spinner className="text-tertiary" />
       </div>
     )
   }
@@ -167,132 +166,135 @@ export default function ServerSettingsPage() {
   const showServerDetails = form.enabled || savedForm.enabled
 
   return (
-    <div className="flex flex-col h-full">
-      <PanelHeader title={t("settings.server.title")} />
-      <ScrollArea className="flex-1">
-        <div className="px-5 py-7 max-w-3xl mx-auto space-y-5">
+    <SettingsPage title={t("settings.server.title")} description={t("settings.server.description")}>
 
-          {/* Enable toggle + restart banner */}
-          <SettingsSection title={t("settings.server.remoteAccess")}>
-            <SettingsCard>
-              <SettingsToggle
-                label={t("settings.server.enableServerMode")}
-                description={t("settings.server.allowRemoteConnections")}
-                checked={form.enabled}
-                onCheckedChange={(enabled) => setForm(f => ({ ...f, enabled }))}
-              />
-            </SettingsCard>
+      {/* Enable toggle + restart banner */}
+      <SettingsSection title={t("settings.server.remoteAccess")}>
+        <SettingsCard>
+          <SettingsToggle
+            label={t("settings.server.enableServerMode")}
+            description={t("settings.server.allowRemoteConnections")}
+            checked={form.enabled}
+            onCheckedChange={(enabled) => setForm(f => ({ ...f, enabled }))}
+          />
+        </SettingsCard>
 
-            {needsRestart && (
-              <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-warning/10 border border-warning/20 text-xs text-warning">
-                <RotateCw className="h-3.5 w-3.5 shrink-0" />
-                <span className="flex-1">{t("settings.server.restartRequired")}</span>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="h-6 text-[11px] px-2"
-                  onClick={() => window.electronAPI.relaunchApp()}
-                >
-                  {t("settings.server.restartNow")}
+        {needsRestart && (
+          <div className="flex items-center gap-2.5 rounded-lg bg-info-tint px-3.5 py-2.5 inset-ring inset-ring-[var(--info-border)]">
+            <RotateCw className="size-4 shrink-0 text-info" aria-hidden />
+            <span className="flex-1 text-label text-foreground">{t("settings.server.restartRequired")}</span>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => window.electronAPI.relaunchApp()}
+            >
+              {t("settings.server.restartNow")}
+            </Button>
+          </div>
+        )}
+      </SettingsSection>
+
+      {/* Connection + TLS — only visible when server mode is relevant */}
+      {showServerDetails && (
+        <SettingsSection title={t("settings.server.connectionSection")}>
+          <SettingsCard>
+            <SettingsInputRow
+              label={t("settings.server.port")}
+              value={form.port}
+              onChange={(port) => setForm(f => ({ ...f, port }))}
+              placeholder="9100"
+            />
+
+            {status && form.enabled && (
+              <>
+                <SettingsRow label={t("common.url")}>
+                  <div className="flex items-center gap-1">
+                    <code className="rounded-xs bg-fill-hover px-1.5 py-0.5 font-mono text-mono-ui text-secondary">
+                      {status.url}
+                    </code>
+                    <IconButton
+                      size="sm"
+                      aria-label={t("common.copy")}
+                      icon={<Copy className="size-3.5" />}
+                      onClick={() => handleCopy(status.url, 'URL')}
+                    />
+                  </div>
+                </SettingsRow>
+
+                <SettingsRow label={t("settings.server.token")}>
+                  <div className="flex items-center gap-1">
+                    <code className="max-w-[180px] truncate rounded-xs bg-fill-hover px-1.5 py-0.5 font-mono text-mono-ui text-secondary">
+                      {tokenVisible ? status.token : '••••••••••••••••'}
+                    </code>
+                    <IconButton
+                      size="sm"
+                      aria-label={tokenVisible ? t("common.hide") : t("common.show")}
+                      aria-pressed={tokenVisible}
+                      icon={tokenVisible ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
+                      onClick={() => setTokenVisible(v => !v)}
+                    />
+                    <IconButton
+                      size="sm"
+                      aria-label={t("common.copy")}
+                      icon={<Copy className="size-3.5" />}
+                      onClick={() => handleCopy(status.token, 'Token')}
+                    />
+                  </div>
+                </SettingsRow>
+              </>
+            )}
+
+            <SettingsRow label={t("settings.server.certificate")}>
+              <div className="flex items-center gap-2">
+                <span className="max-w-[200px] truncate text-label-sm text-tertiary">
+                  {form.tlsCertPath || 'Not configured'}
+                </span>
+                <Button variant="secondary" size="sm" onClick={handleBrowseCert}>
+                  {t("common.browse")}
                 </Button>
               </div>
-            )}
-          </SettingsSection>
+            </SettingsRow>
 
-          {/* Connection + TLS — only visible when server mode is relevant */}
-          {showServerDetails && (
-            <SettingsSection title={t("settings.server.connectionSection")}>
-              <SettingsCard>
-                <SettingsInputRow
-                  label={t("settings.server.port")}
-                  value={form.port}
-                  onChange={(port) => setForm(f => ({ ...f, port }))}
-                  placeholder="9100"
-                />
+            <SettingsRow label={t("settings.server.privateKey")}>
+              <div className="flex items-center gap-2">
+                <span className="max-w-[200px] truncate text-label-sm text-tertiary">
+                  {form.tlsKeyPath || 'Not configured'}
+                </span>
+                <Button variant="secondary" size="sm" onClick={handleBrowseKey}>
+                  {t("common.browse")}
+                </Button>
+              </div>
+            </SettingsRow>
+          </SettingsCard>
 
-                {status && form.enabled && (
-                  <>
-                    <SettingsRow label={t("common.url")}>
-                      <div className="flex items-center gap-1.5">
-                        <code className="text-xs font-mono text-muted-foreground bg-muted px-2 py-0.5 rounded">
-                          {status.url}
-                        </code>
-                        <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={() => handleCopy(status.url, 'URL')}>
-                          <Copy className="h-3 w-3" />
-                        </Button>
-                      </div>
-                    </SettingsRow>
-
-                    <SettingsRow label={t("settings.server.token")}>
-                      <div className="flex items-center gap-1.5">
-                        <code className="text-xs font-mono text-muted-foreground bg-muted px-2 py-0.5 rounded max-w-[180px] truncate">
-                          {tokenVisible ? status.token : '••••••••••••••••'}
-                        </code>
-                        <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={() => setTokenVisible(v => !v)}>
-                          {tokenVisible ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
-                        </Button>
-                        <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={() => handleCopy(status.token, 'Token')}>
-                          <Copy className="h-3 w-3" />
-                        </Button>
-                      </div>
-                    </SettingsRow>
-                  </>
-                )}
-
-                <SettingsRow label={t("settings.server.certificate")}>
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-muted-foreground truncate max-w-[200px]">
-                      {form.tlsCertPath || 'Not configured'}
-                    </span>
-                    <Button variant="outline" size="sm" className="h-6 text-[11px] px-2 shrink-0" onClick={handleBrowseCert}>
-                      Browse
-                    </Button>
-                  </div>
-                </SettingsRow>
-
-                <SettingsRow label={t("settings.server.privateKey")}>
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-muted-foreground truncate max-w-[200px]">
-                      {form.tlsKeyPath || 'Not configured'}
-                    </span>
-                    <Button variant="outline" size="sm" className="h-6 text-[11px] px-2 shrink-0" onClick={handleBrowseKey}>
-                      Browse
-                    </Button>
-                  </div>
-                </SettingsRow>
-              </SettingsCard>
-
-              {form.enabled && !hasTls && (
-                <div className="flex items-start gap-2 px-3 py-2 rounded-lg bg-warning/10 border border-warning/20 text-xs text-warning">
-                  <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
-                  <span>
-                    {status?.insecureWarning
-                      ? t("settings.server.insecureWarning")
-                      : t("settings.server.noTlsWarning")}
-                  </span>
-                </div>
-              )}
-            </SettingsSection>
+          {form.enabled && !hasTls && (
+            <div className="flex items-start gap-2.5 rounded-lg bg-info-tint px-3.5 py-2.5 inset-ring inset-ring-[var(--info-border)]">
+              <AlertTriangle className="mt-px size-4 shrink-0 text-info" aria-hidden />
+              <span className="text-label text-foreground">
+                {status?.insecureWarning
+                  ? t("settings.server.insecureWarning")
+                  : t("settings.server.noTlsWarning")}
+              </span>
+            </div>
           )}
+        </SettingsSection>
+      )}
 
-          {/* Save/Reset */}
-          {error && (
-            <p className="text-xs text-destructive px-1">{error}</p>
-          )}
-          {(isDirty || error) && (
-            <SettingsCardFooter>
-              <Button variant="outline" size="sm" onClick={handleReset} disabled={isSaving}>
-                Reset
-              </Button>
-              <Button size="sm" onClick={handleSave} disabled={isSaving}>
-                {isSaving ? <Spinner className="mr-1.5" /> : null}
-                Save
-              </Button>
-            </SettingsCardFooter>
-          )}
-
-        </div>
-      </ScrollArea>
-    </div>
+      {/* Save/Reset */}
+      {error && (
+        <p className="text-label-sm text-destructive">{error}</p>
+      )}
+      {(isDirty || error) && (
+        <SettingsCardFooter className="px-0">
+          <Button variant="ghost" size="md" onClick={handleReset} disabled={isSaving}>
+            {t("common.reset")}
+          </Button>
+          <Button variant="primary" size="md" onClick={handleSave} disabled={isSaving}>
+            {isSaving ? <Spinner /> : null}
+            {t("common.save")}
+          </Button>
+        </SettingsCardFooter>
+      )}
+    </SettingsPage>
   )
 }

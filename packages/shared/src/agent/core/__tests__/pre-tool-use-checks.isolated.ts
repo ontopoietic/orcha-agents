@@ -25,11 +25,17 @@ let mockIsReadOnlyBashCommandWithConfig = mock(
 
 let mockEffectivePermissionMode: 'safe' | 'ask' | 'allow-all' = 'safe';
 
+// Minimal glob support for allowedWritePaths tests: `dir/**` prefix or exact path.
+let mockMatchesAllowedWritePath = mock((filePath: string, patterns: string[]) =>
+  patterns.some((p) => (p.endsWith('/**') ? filePath.startsWith(p.slice(0, -2)) : filePath === p))
+);
+
 // Paths resolve from THIS file's location (core/__tests__/)
 mock.module('../../mode-manager.ts', () => ({
   shouldAllowToolInMode: (a: any, b: any, c: any, d?: any) => mockShouldAllowToolInMode(a, b, c, d),
   isApiEndpointAllowed: (a: any, b: any, c?: any) => mockIsApiEndpointAllowed(a, b, c),
   isReadOnlyBashCommandWithConfig: (a: any, b: any) => mockIsReadOnlyBashCommandWithConfig(a, b),
+  matchesAllowedWritePath: (a: any, b: any) => mockMatchesAllowedWritePath(a, b),
   getPermissionModeDiagnostics: () => ({
     permissionMode: mockEffectivePermissionMode,
     modeVersion: 7,
@@ -38,13 +44,15 @@ mock.module('../../mode-manager.ts', () => ({
   }),
 }));
 
-// Mock permissionsConfigCache for read-only bash pattern checks
+// Mock permissionsConfigCache for read-only bash pattern and allowedWritePaths checks
 let mockReadOnlyBashPatterns: Array<{ regex: RegExp }> = [];
+let mockAllowedWritePaths: string[] = [];
 
 mock.module('../../permissions-config.ts', () => ({
   permissionsConfigCache: {
     getMergedConfig: () => ({
       readOnlyBashPatterns: mockReadOnlyBashPatterns,
+      allowedWritePaths: mockAllowedWritePaths,
     }),
   },
 }));
@@ -114,9 +122,7 @@ import {
 function createMockPermissionManager(overrides?: Partial<PermissionManagerLike>): PermissionManagerLike {
   return {
     isCommandWhitelisted: () => false,
-    isDangerousCommand: () => false,
     getBaseCommand: (cmd: string) => cmd.split(/\s+/)[0] || cmd,
-    extractDomainFromNetworkCommand: () => null,
     isDomainWhitelisted: () => false,
     ...overrides,
   };
@@ -125,7 +131,7 @@ function createMockPermissionManager(overrides?: Partial<PermissionManagerLike>)
 function createMockPrerequisiteManager(overrides?: Partial<PrerequisiteManagerLike>): PrerequisiteManagerLike {
   return {
     checkPrerequisites: () => ({ allowed: true }),
-    trackBashSkillRead: () => false,
+    checkBashPrerequisites: () => ({ allowed: true }),
     ...overrides,
   };
 }
@@ -166,6 +172,7 @@ describe('runPreToolUseChecks', () => {
     mockValidateConfigFileContent.mockReset();
     mockValidateConfigFileContent.mockImplementation(() => null);
     mockReadOnlyBashPatterns = [];
+    mockAllowedWritePaths = [];
     mockCraftAgentsCliFlag = false;
   });
 
@@ -536,6 +543,45 @@ describe('runPreToolUseChecks', () => {
 
       expect(result.type).toBe('allow');
     });
+
+    it('sends Bash calls to checkBashPrerequisites with their command', () => {
+      const checkBashPrerequisites = mock((_command: string) => ({ allowed: true }));
+      const checkPrerequisites = mock((_toolName: string) => ({ allowed: true }));
+
+      const result = runPreToolUseChecks(createInput({
+        toolName: 'Bash',
+        input: { command: 'cat ~/.craft-agent/docs/browser-tools.md' },
+        prerequisiteManager: createMockPrerequisiteManager({ checkBashPrerequisites, checkPrerequisites }),
+      }));
+
+      expect(result.type).toBe('allow');
+      expect(checkBashPrerequisites).toHaveBeenCalledWith('cat ~/.craft-agent/docs/browser-tools.md');
+      expect(checkPrerequisites).not.toHaveBeenCalled();
+    });
+
+    it('blocks a Bash call that checkBashPrerequisites holds back', () => {
+      const result = runPreToolUseChecks(createInput({
+        toolName: 'Bash',
+        input: { command: 'ls' },
+        prerequisiteManager: createMockPrerequisiteManager({
+          checkBashPrerequisites: () => ({ allowed: false, blockReason: 'You must read the skill instruction files first.' }),
+        }),
+      }));
+
+      expect(result).toEqual({ type: 'block', reason: 'You must read the skill instruction files first.', source: 'prerequisite' });
+    });
+
+    it('passes an empty command when the Bash input has none', () => {
+      const checkBashPrerequisites = mock((_command: string) => ({ allowed: true }));
+
+      runPreToolUseChecks(createInput({
+        toolName: 'Bash',
+        input: {},
+        prerequisiteManager: createMockPrerequisiteManager({ checkBashPrerequisites }),
+      }));
+
+      expect(checkBashPrerequisites).toHaveBeenCalledWith('');
+    });
   });
 
   // ============================================================
@@ -609,6 +655,36 @@ describe('runPreToolUseChecks', () => {
         expect(result.input.title).toBe('Bug fix');
         expect(result.input._intent).toBeUndefined();
         expect(result.input._displayName).toBeUndefined();
+      }
+    });
+
+    it('keeps _intent on source tools when the backend asks (Claude source proxies require it)', () => {
+      const result = runPreToolUseChecks(createInput({
+        toolName: 'mcp__slack__api_slack',
+        input: { path: '/conversations.replies', _intent: 'read thread', _displayName: 'Read Thread' },
+        activeSourceSlugs: ['slack'],
+        allSourceSlugs: ['slack'],
+        keepSourceToolIntent: true,
+      }));
+
+      expect(result.type).toBe('modify');
+      if (result.type === 'modify') {
+        expect(result.input.path).toBe('/conversations.replies');
+        expect(result.input._intent).toBe('read thread');
+        expect(result.input._displayName).toBeUndefined();
+      }
+    });
+
+    it('still strips _intent from non-source tools when keepSourceToolIntent is set', () => {
+      const result = runPreToolUseChecks(createInput({
+        toolName: 'Read',
+        input: { file_path: '/absolute/path/file.ts', _intent: 'reading a file' },
+        keepSourceToolIntent: true,
+      }));
+
+      expect(result.type).toBe('modify');
+      if (result.type === 'modify') {
+        expect(result.input._intent).toBeUndefined();
       }
     });
 
@@ -1088,6 +1164,7 @@ describe('shouldPromptInAskMode', () => {
     mockValidateConfigFileContent.mockReset();
     mockValidateConfigFileContent.mockImplementation(() => null);
     mockReadOnlyBashPatterns = [];
+    mockAllowedWritePaths = [];
     mockCraftAgentsCliFlag = false;
   });
 
@@ -1103,6 +1180,8 @@ describe('shouldPromptInAskMode', () => {
       expect(result).not.toBeNull();
       expect(result!.promptType).toBe('file_write');
       expect(result!.description).toContain('/test/file.ts');
+      // "Always Allow" remembers the folder the file is written into, never "any write".
+      expect(result!.remember).toEqual({ kind: 'command', key: 'write:/test' });
     });
 
     it('prompts for Edit tool', () => {
@@ -1136,17 +1215,58 @@ describe('shouldPromptInAskMode', () => {
       expect(result!.description).toContain('/test/nb.ipynb');
     });
 
-    it('auto-allows whitelisted file write tools', () => {
-      pm = createMockPermissionManager({
-        isCommandWhitelisted: (cmd) => cmd === 'Write',
-      });
-
-      const result = shouldPromptInAskMode('Write', { file_path: '/test/a.ts' }, pm, {
+    // Regression for OSS #1065 (PR #1066 by ZerVisionGo): allowedWritePaths was
+    // honored by Explore mode only, so automations in Ask mode had to run Allow-All.
+    it('auto-allows writes to an allowedWritePaths glob (no prompt in ask mode)', () => {
+      mockAllowedWritePaths = ['/test/social/**'];
+      const result = shouldPromptInAskMode('Write', { file_path: '/test/social/x/thread.md', content: 'x' }, pm, {
         workspaceRootPath: '/test',
         activeSourceSlugs: [],
       });
-
       expect(result).toBeNull();
+      expect(mockMatchesAllowedWritePath).toHaveBeenCalledWith('/test/social/x/thread.md', ['/test/social/**']);
+    });
+
+    it('still prompts for writes outside allowedWritePaths', () => {
+      mockAllowedWritePaths = ['/test/social/**'];
+      const result = shouldPromptInAskMode('Write', { file_path: '/test/secrets/key.txt', content: 'x' }, pm, {
+        workspaceRootPath: '/test',
+        activeSourceSlugs: [],
+      });
+      expect(result).not.toBeNull();
+      expect(result!.promptType).toBe('file_write');
+    });
+
+    it('applies allowedWritePaths to notebook_path writes', () => {
+      mockAllowedWritePaths = ['/test/notebooks/**'];
+      const result = shouldPromptInAskMode('NotebookEdit', { notebook_path: '/test/notebooks/a.ipynb', new_source: 'x' }, pm, {
+        workspaceRootPath: '/test',
+        activeSourceSlugs: [],
+      });
+      expect(result).toBeNull();
+    });
+
+    it('does not consult the allowlist when the tool input has no path', () => {
+      mockAllowedWritePaths = ['/test/**'];
+      mockMatchesAllowedWritePath.mockClear();
+      const result = shouldPromptInAskMode('Write', { content: 'x' }, pm, {
+        workspaceRootPath: '/test',
+        activeSourceSlugs: [],
+      });
+      expect(result).not.toBeNull();
+      expect(mockMatchesAllowedWritePath).not.toHaveBeenCalled();
+    });
+
+    it('auto-allows writes into a folder approved with "Always Allow"', () => {
+      pm = createMockPermissionManager({
+        isCommandWhitelisted: (key) => key === 'write:/test',
+      });
+
+      const ctx = { workspaceRootPath: '/test', activeSourceSlugs: [] };
+      expect(shouldPromptInAskMode('Edit', { file_path: '/test/a.ts' }, pm, ctx)).toBeNull();
+      // Other folders, including the user's dotfiles, still prompt.
+      expect(shouldPromptInAskMode('Write', { file_path: '/Users/me/.ssh/authorized_keys' }, pm, ctx)).not.toBeNull();
+      expect(shouldPromptInAskMode('Write', { file_path: '/test/sub/b.ts' }, pm, ctx)).not.toBeNull();
     });
   });
 
@@ -1189,11 +1309,9 @@ describe('shouldPromptInAskMode', () => {
       expect(result!.command).toBe('cat /etc/hosts > /tmp/test');
     });
 
-    it('auto-allows whitelisted non-dangerous commands', () => {
+    it('auto-allows a command whose key was approved', () => {
       pm = createMockPermissionManager({
-        isCommandWhitelisted: (cmd) => cmd === 'npm',
-        isDangerousCommand: () => false,
-        getBaseCommand: (cmd) => cmd.split(/\s+/)[0] || cmd,
+        isCommandWhitelisted: (key) => key === 'npm test',
       });
 
       const result = shouldPromptInAskMode('Bash', { command: 'npm test' }, pm, {
@@ -1204,11 +1322,46 @@ describe('shouldPromptInAskMode', () => {
       expect(result).toBeNull();
     });
 
-    it('still prompts for whitelisted dangerous commands', () => {
+    it('offers the subcommand-level key for "Always Allow"', () => {
+      const result = shouldPromptInAskMode('Bash', { command: 'git commit -m "wip"' }, pm, {
+        workspaceRootPath: '/test',
+        activeSourceSlugs: [],
+      });
+
+      expect(result!.remember).toEqual({ kind: 'command', key: 'git commit' });
+    });
+
+    it('does not let an approved subcommand cover a dangerous one', () => {
       pm = createMockPermissionManager({
-        isCommandWhitelisted: (cmd) => cmd === 'rm',
-        isDangerousCommand: (cmd) => cmd === 'rm',
-        getBaseCommand: (cmd) => cmd.split(/\s+/)[0] || cmd,
+        isCommandWhitelisted: (key) => key === 'git commit' || key === 'git',
+      });
+
+      const result = shouldPromptInAskMode('Bash', { command: 'git push --force origin main' }, pm, {
+        workspaceRootPath: '/test',
+        activeSourceSlugs: [],
+      });
+
+      expect(result).not.toBeNull();
+      expect(result!.remember).toBeUndefined();
+    });
+
+    it('does not auto-allow commands chained onto an approved one', () => {
+      pm = createMockPermissionManager({
+        isCommandWhitelisted: (key) => key === 'git commit' || key === 'git',
+      });
+
+      const result = shouldPromptInAskMode('Bash', { command: 'git commit -m x && rm -rf ~/Documents' }, pm, {
+        workspaceRootPath: '/test',
+        activeSourceSlugs: [],
+      });
+
+      expect(result).not.toBeNull();
+      expect(result!.remember).toBeUndefined();
+    });
+
+    it('still prompts for dangerous commands even if the whitelist would match anything', () => {
+      pm = createMockPermissionManager({
+        isCommandWhitelisted: () => true,
       });
 
       const result = shouldPromptInAskMode('Bash', { command: 'rm -rf /important' }, pm, {
@@ -1218,12 +1371,11 @@ describe('shouldPromptInAskMode', () => {
 
       expect(result).not.toBeNull();
       expect(result!.promptType).toBe('bash');
+      expect(result!.remember).toBeUndefined();
     });
 
     it('auto-allows curl to whitelisted domain', () => {
       pm = createMockPermissionManager({
-        getBaseCommand: (cmd) => cmd.split(/\s+/)[0] || cmd,
-        extractDomainFromNetworkCommand: () => 'api.example.com',
         isDomainWhitelisted: (domain) => domain === 'api.example.com',
       });
 
@@ -1235,13 +1387,7 @@ describe('shouldPromptInAskMode', () => {
       expect(result).toBeNull();
     });
 
-    it('prompts for curl to non-whitelisted domain', () => {
-      pm = createMockPermissionManager({
-        getBaseCommand: (cmd) => cmd.split(/\s+/)[0] || cmd,
-        extractDomainFromNetworkCommand: () => 'evil.com',
-        isDomainWhitelisted: () => false,
-      });
-
+    it('prompts for curl to non-whitelisted domain and offers to remember it', () => {
       const result = shouldPromptInAskMode('Bash', { command: 'curl https://evil.com/data' }, pm, {
         workspaceRootPath: '/test',
         activeSourceSlugs: [],
@@ -1249,6 +1395,35 @@ describe('shouldPromptInAskMode', () => {
 
       expect(result).not.toBeNull();
       expect(result!.promptType).toBe('bash');
+      expect(result!.remember).toEqual({ kind: 'domains', domains: ['evil.com'] });
+    });
+
+    it('prompts when a curl call also contacts a non-whitelisted host', () => {
+      pm = createMockPermissionManager({
+        isDomainWhitelisted: (domain) => domain === 'api.example.com',
+      });
+
+      const result = shouldPromptInAskMode('Bash', { command: 'curl https://api.example.com/a https://evil.com/b' }, pm, {
+        workspaceRootPath: '/test',
+        activeSourceSlugs: [],
+      });
+
+      expect(result).not.toBeNull();
+      expect(result!.remember).toEqual({ kind: 'domains', domains: ['api.example.com', 'evil.com'] });
+    });
+
+    it('prompts for a chained curl even when its domain is whitelisted', () => {
+      pm = createMockPermissionManager({
+        isDomainWhitelisted: (domain) => domain === 'api.example.com',
+      });
+
+      const result = shouldPromptInAskMode('Bash', { command: 'curl https://api.example.com/a && rm -rf ~' }, pm, {
+        workspaceRootPath: '/test',
+        activeSourceSlugs: [],
+      });
+
+      expect(result).not.toBeNull();
+      expect(result!.remember).toBeUndefined();
     });
   });
 
@@ -1269,6 +1444,10 @@ describe('shouldPromptInAskMode', () => {
       expect(result).not.toBeNull();
       expect(result!.promptType).toBe('mcp_mutation');
       expect(result!.description).toContain('linear');
+      expect(result!.remember).toEqual({ kind: 'command', key: 'mcp__linear__createIssue' });
+      // Classified with the workspace/source rules, like Explore mode (not the bare fallback).
+      const safeCall = mockShouldAllowToolInMode.mock.calls.find((call: unknown[]) => call[2] === 'safe');
+      expect((safeCall?.[3] as { permissionsContext?: unknown })?.permissionsContext).toEqual({ workspaceRootPath: '/test', activeSourceSlugs: ['linear'] });
     });
 
     it('auto-allows MCP read-only tools (not blocked in safe mode)', () => {
@@ -1313,6 +1492,8 @@ describe('shouldPromptInAskMode', () => {
       expect(result).not.toBeNull();
       expect(result!.promptType).toBe('api_mutation');
       expect(result!.description).toContain('POST');
+      // The whitelist check looks up the full description, so that is what gets remembered.
+      expect(result!.remember).toEqual({ kind: 'command', key: 'POST /repos' });
     });
 
     it('auto-allows GET API calls', () => {

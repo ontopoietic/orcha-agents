@@ -36,6 +36,7 @@ import { getCredentialManager } from '@craft-agent/shared/credentials'
 import { getWorkspaces } from '@craft-agent/shared/config'
 import { getMessagingDir } from '@craft-agent/shared/config/paths'
 import { runIsolationMigration } from '@craft-agent/shared/config/isolation-migration'
+import { CONFIG_DIR } from '@craft-agent/shared/config/paths'
 import { createMessagingBootstrap, type MessagingBootstrapHandle } from '@craft-agent/messaging-gateway'
 
 // --generate-token: print a crypto-random token and exit

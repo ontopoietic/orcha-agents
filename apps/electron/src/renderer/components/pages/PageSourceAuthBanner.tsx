@@ -119,23 +119,29 @@ export function PageSourceAuthBanner({ workspaceId, page, sources, className }: 
   if (needing.length === 0) return null
 
   return (
-    <div className={cn('flex flex-col gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 p-3', className)}>
+    // Needs-you banner: info tint + hairline in the info role (amber), one primary Reconnect per source
+    <div
+      className={cn(
+        'flex flex-col gap-2 rounded-lg border border-[color:var(--info-border)] bg-info-tint px-3 py-2.5',
+        className,
+      )}
+    >
       {needing.map(source => {
         const flavor = reconnectFlavor(source.config)
         return (
           <div key={source.config.slug} className="flex items-center gap-2.5">
             <SourceAvatar source={source} size="sm" />
-            <span className="min-w-0 flex-1 text-xs text-foreground/70">
+            <span className="min-w-0 flex-1 text-label text-foreground">
               {t('pages.auth.sourceNeedsReconnect', { name: source.config.name })}
             </span>
             <Button
-              variant="outline"
+              variant="primary"
               size="sm"
               className="shrink-0"
               disabled={busySlug !== null}
               onClick={() => handleReconnect(source)}
             >
-              {busySlug === source.config.slug && <Spinner className="text-xs" />}
+              {busySlug === source.config.slug && <Spinner className="text-label-sm" />}
               {busySlug === source.config.slug
                 ? t('pages.auth.reconnecting')
                 : flavor === 'agent'
@@ -201,16 +207,16 @@ function ReconnectCredentialDialog({
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <KeyRound className="h-4 w-4 text-amber-600 dark:text-amber-500" />
+            <KeyRound className="size-4 text-info" />
             {t('pages.auth.credentialTitle', { name: source?.config.name ?? '' })}
           </DialogTitle>
           <DialogDescription>{t('pages.auth.credentialDescription')}</DialogDescription>
         </DialogHeader>
 
         <div className="flex flex-col gap-1.5">
-          <span className="text-sm">
+          <span className="text-label font-medium">
             {t('pages.auth.credentialLabel')}
-            {headerName && <span className="ml-1 text-foreground/50">({headerName})</span>}
+            {headerName && <span className="ml-1 font-normal text-tertiary">({headerName})</span>}
           </span>
           <Input
             type="password"
@@ -224,11 +230,11 @@ function ReconnectCredentialDialog({
         </div>
 
         <DialogFooter>
-          <Button variant="outline" disabled={saving} onClick={onClose}>
+          <Button variant="ghost" disabled={saving} onClick={onClose}>
             {t('common.cancel')}
           </Button>
-          <Button disabled={saving || value.trim().length === 0} onClick={() => void handleSave()}>
-            {saving && <Spinner className="text-xs" />}
+          <Button variant="primary" disabled={saving || value.trim().length === 0} onClick={() => void handleSave()}>
+            {saving && <Spinner className="text-label-sm" />}
             {t('pages.auth.credentialSave')}
           </Button>
         </DialogFooter>

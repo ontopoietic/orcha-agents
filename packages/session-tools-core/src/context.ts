@@ -301,7 +301,6 @@ export interface SessionToolContext {
   /**
    * Update user preferences. Injected by each backend:
    * - Claude: calls updatePreferences() from config/preferences.ts
-   * - Codex/session-mcp-server: writes directly to preferences.json
    * - Pi: calls updatePreferences() from config/preferences.ts
    */
   updatePreferences?(updates: Record<string, unknown>): void;
@@ -366,6 +365,12 @@ export interface SessionToolContext {
    */
   createTask?(input: CreateTaskInput): Promise<CreateTaskResult>;
 
+  /**
+   * Append a dated note to the invoking session's project MEMORY.md (project_memory_append).
+   * Throws when the session has no project. Injected by SessionManager.
+   */
+  appendProjectMemory?(input: ProjectMemoryAppendInput): Promise<ProjectMemoryAppendResult>;
+
   // ============================================================
   // Pages (list_pages / get_page / create_page / update_page /
   //        write_page_data / delete_page)
@@ -379,6 +384,32 @@ export interface SessionToolContext {
    * gracefully.
    */
   pages?: PagesToolCallbacks;
+
+  // ============================================================
+  // MCP source resources & prompts (source_list_resources /
+  //   source_read_resource / source_list_prompts / source_get_prompt)
+  // ============================================================
+
+  /**
+   * Resources and prompts of the session's MCP sources, grouped like pages.
+   * Injected by the backend (SessionManager), which only reaches the session's
+   * enabled, connected sources; undefined in backends that don't run alongside
+   * it — handlers degrade gracefully.
+   */
+  mcpSources?: McpSourceToolCallbacks;
+
+  // ============================================================
+  // Decision model (decide)
+  // ============================================================
+
+  /**
+   * Decision-layer callback for the `decide` tool (Jev / System One typed
+   * judgments over text or JSON). Injected by the backend (SessionManager)
+   * from @craft-agent/shared/decisions; undefined in backends that don't run
+   * alongside it — the handler tells the agent how the user can enable it.
+   * Answers are hints for the agent and never grant authority.
+   */
+  decide?: DecisionToolCallbacks;
 
   // ============================================================
   // Inter-Session Messaging
@@ -526,6 +557,19 @@ export interface CreateTaskInput {
     /** Per-node model override (e.g. a stronger model for the architect role). */
     model?: string;
   }>;
+}
+
+/** Input for project_memory_append. */
+export interface ProjectMemoryAppendInput {
+  /** Markdown note; the backend adds a dated heading naming the session. */
+  note: string;
+}
+
+/** Result of project_memory_append. */
+export interface ProjectMemoryAppendResult {
+  path: string;
+  heading: string;
+  bytesAppended: number;
 }
 
 /** Result of create_task. */
@@ -689,6 +733,143 @@ export interface PagesToolCallbacks {
   deletePage(slug: string): Promise<DeletePageToolResult>;
 }
 
+// ============================================================
+// MCP Source Resources & Prompts Types
+// ============================================================
+// Plain JSON shapes mirroring the MCP SDK types — duplicated so this package
+// stays dependency-free (same rule as pages). The backend maps the SDK objects
+// onto these, dropping icons, annotations and _meta.
+
+/** A resource an MCP server publishes (returned by source_list_resources). */
+export interface McpSourceResource {
+  uri: string;
+  name: string;
+  title?: string;
+  description?: string;
+  mimeType?: string;
+  /** Size in bytes, when the server reports it */
+  size?: number;
+}
+
+/** A parameterized resource: fill in the RFC 6570 URI template to get a readable URI. */
+export interface McpSourceResourceTemplate {
+  uriTemplate: string;
+  name: string;
+  title?: string;
+  description?: string;
+  mimeType?: string;
+}
+
+/** Result of source_list_resources. */
+export interface McpSourceResourceList {
+  resources: McpSourceResource[];
+  resourceTemplates: McpSourceResourceTemplate[];
+  /** The listing stopped at the backend's page cap while the server still had pages */
+  truncated?: boolean;
+}
+
+export interface McpSourcePromptArgument {
+  name: string;
+  description?: string;
+  required?: boolean;
+}
+
+/** A prompt an MCP server publishes (returned by source_list_prompts). */
+export interface McpSourcePrompt {
+  name: string;
+  title?: string;
+  description?: string;
+  arguments?: McpSourcePromptArgument[];
+}
+
+/** Result of source_list_prompts. */
+export interface McpSourcePromptList {
+  prompts: McpSourcePrompt[];
+  /** The listing stopped at the backend's page cap while the server still had pages */
+  truncated?: boolean;
+}
+
+/**
+ * MCP source resources/prompts callbacks, injected by the backend
+ * (SessionManager, backed by the session's MCP pool). Failures — source not
+ * enabled or not connected, API source, capability missing — are thrown with
+ * messages written for the agent.
+ */
+export interface McpSourceToolCallbacks {
+  listResources(sourceSlug: string): Promise<McpSourceResourceList>;
+  /** Resource contents as text; binary contents are saved to files, large results saved with a summary. */
+  readResource(sourceSlug: string, uri: string): Promise<string>;
+  listPrompts(sourceSlug: string): Promise<McpSourcePromptList>;
+  /** The prompt's messages, with the arguments filled in, rendered as text (role + content). */
+  getPrompt(sourceSlug: string, name: string, args?: Record<string, string>): Promise<string>;
+}
+
+// ============================================================
+// Decision Tool Types (mirror @craft-agent/shared/decisions — this package
+// must stay free of that dependency, same rule as pages)
+// ============================================================
+
+export type DecisionToolQuestionType = 'choice' | 'score' | 'noul';
+
+/** A sentence, or a small structured object such as { question, focus }. */
+export type DecisionToolInstructions = string | Record<string, unknown>;
+
+/**
+ * choice: option key → description (string, structured object, or null when self-explanatory).
+ * score: ordered array of level descriptions, lowest first.
+ * noul: optional { true, false } descriptions.
+ */
+export type DecisionToolCriteria =
+  | Record<string, string | null | Record<string, unknown>>
+  | Array<string | Record<string, unknown>>;
+
+export interface DecisionToolQuestion {
+  type: DecisionToolQuestionType;
+  instructions: DecisionToolInstructions;
+  criteria?: DecisionToolCriteria;
+}
+
+/** Text, a JSON object, or an array of text values. */
+export type DecisionToolState = string | Record<string, unknown> | unknown[];
+
+export interface DecisionToolRequest {
+  state: DecisionToolState;
+  questions: Record<string, DecisionToolQuestion>;
+  /** Wall-clock budget for the call, in ms. */
+  deadlineMs?: number;
+  /** Caller context written to the decision record (redacted by key name). Never the state. */
+  meta?: Record<string, unknown>;
+}
+
+export type DecisionToolAnswer =
+  | { type: 'choice'; choice: string; confidence: number; probabilities: Record<string, number> }
+  | { type: 'score'; score: number; confidence: number; probabilities: Record<string, number>; legend?: Record<string, unknown> }
+  | { type: 'noul'; noul: number };
+
+export interface DecisionToolUsage {
+  inputTokens: number;
+  outputTokens: number;
+}
+
+/** Failure the agent may see. Never contains the API key or the state. */
+export interface DecisionToolError {
+  kind: string;
+  message: string;
+  status?: number;
+}
+
+export type DecisionToolResult =
+  | { ok: true; model: string; answers: Record<string, DecisionToolAnswer>; usage: DecisionToolUsage; latencyMs: number; truncated: boolean }
+  | { ok: false; error: DecisionToolError };
+
+/**
+ * Decision-layer callback, injected by the backend (SessionManager). Network,
+ * validation, gating and recording all live behind it.
+ */
+export interface DecisionToolCallbacks {
+  decide(request: DecisionToolRequest): Promise<DecisionToolResult>;
+}
+
 export interface SessionInfo {
   id: string;
   name: string;
@@ -793,19 +974,24 @@ export interface SendAgentMessageResult {
 export interface BackgroundTaskInfo {
   taskId: string;
   intent?: string;
+  /**
+   * What the session's agent launched: a background agent, a Workflow, a Bash command, or another task.
+   * ORCHA §bg-child-sessions — 'child-session' when this task is a rerouted background subagent
+   * running as its own session (taskId = child session id).
+   */
+  kind?: 'agent' | 'workflow' | 'shell' | 'task' | 'child-session';
   status: 'running' | 'completed' | 'failed' | 'stopped' | 'orphaned';
-  /** ms timestamp when the task was backgrounded */
-  startTime: number;
-  /** seconds elapsed since start (derived at query time) */
-  elapsedSeconds: number;
+  /** ms timestamp when the task was backgrounded (absent for untracked tasks) */
+  startTime?: number;
+  /** seconds elapsed since start, derived at query time (absent for untracked tasks) */
+  elapsedSeconds?: number;
   /** ms timestamp when the task reached a terminal/orphaned status, if any */
   completedAt?: number;
   /**
-   * ORCHA §bg-child-sessions — 'child-session' when this task is a rerouted
-   * background subagent running as its own session (taskId = child session id);
-   * undefined/'in-query' for a task backgrounded inside the same subprocess.
+   * A completion seen for a task this session's agent did not launch (typically a subagent's
+   * own background task); its start time is unknown.
    */
-  kind?: 'in-query' | 'child-session';
+  untracked?: boolean;
 }
 
 // ============================================================

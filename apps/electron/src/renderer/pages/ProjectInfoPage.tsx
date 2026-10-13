@@ -19,10 +19,9 @@ import {
   Info_Section,
   Info_Table,
 } from '@/components/info'
-import { Button } from '@/components/ui/button'
+import { Button, IconButton, buttonVariants } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { Input } from '@/components/ui/input'
-import { Tooltip, TooltipContent, TooltipTrigger } from '@craft-agent/ui'
 import { cn } from '@/lib/utils'
 import { PROJECT_COLOR_PALETTE } from '@/utils/project-colors'
 import { InlineColorPickerRow } from '@/components/ui/inline-color-picker-row'
@@ -211,17 +210,22 @@ export default function ProjectInfoPage({ projectSlug }: ProjectInfoPageProps) {
       error={error ?? undefined}
       empty={!project && !loading && !error ? t('projectInfo.notFound') : undefined}
     >
-      <Info_Page.Header title={project?.config.name ?? ''} />
+      {/* The name lives in the hero */}
+      <Info_Page.Header />
       {project && (
         <Info_Page.Content>
           <Info_Page.Hero
-            avatar={<FolderKanban className="h-6 w-6 text-foreground/60" />}
+            avatar={
+              <div className="grid size-full place-items-center bg-fill-hover">
+                <FolderKanban className="size-5 text-secondary" aria-hidden />
+              </div>
+            }
             title={project.config.name}
             tagline={project.config.description ?? t('projectInfo.taglineFallback')}
           />
 
           {/* Tab bar */}
-          <div className="flex items-center gap-1 border-b border-border/50 px-2 mb-4">
+          <div className="flex h-control w-fit items-center gap-0.5 rounded-md bg-fill-hover p-0.5">
             <TabButton active={tab === 'sessions'} onClick={() => setTab('sessions')}>
               {t('projectInfo.tabSessions')}
             </TabButton>
@@ -238,26 +242,26 @@ export default function ProjectInfoPage({ projectSlug }: ProjectInfoPageProps) {
             <Info_Section
               title={t('projectInfo.tabSessions')}
               actions={
-                <Button size="sm" variant="ghost" onClick={handleStartSession}>
-                  <Plus className="h-3.5 w-3.5 mr-1" />
+                <Button size="md" variant="secondary" onClick={handleStartSession}>
+                  <Plus className="size-3.5" />
                   {t('projectInfo.newSessionButton', { name: project.config.name })}
                 </Button>
               }
             >
               {projectSessions.length === 0 ? (
-                <div className="px-4 py-6 text-sm text-muted-foreground">
+                <div className="px-3.5 py-6 text-label text-tertiary">
                   {t('projectInfo.noSessions')}
                 </div>
               ) : (
-                <ul className="divide-y divide-border/50">
+                <ul className="divide-y divide-separator">
                   {projectSessions.map((s) => (
-                    <li key={s.id} className="px-4 py-2">
+                    <li key={s.id}>
                       <button
                         type="button"
-                        className="text-sm text-foreground hover:underline text-left"
+                        className="flex min-h-11 w-full items-center px-3.5 py-2 text-left text-label text-foreground -outline-offset-2 transition-colors duration-micro ease-out-subtle hover:bg-fill-hover hover:duration-instant"
                         onClick={() => navigate(routes.view.allSessions(s.id))}
                       >
-                        {s.name}
+                        <span className="truncate">{s.name}</span>
                       </button>
                     </li>
                   ))}
@@ -272,9 +276,9 @@ export default function ProjectInfoPage({ projectSlug }: ProjectInfoPageProps) {
               title={t('projectInfo.tabAssets')}
               actions={
                 <label
-                  className="inline-flex items-center gap-1 h-7 px-3 text-xs font-medium rounded-[8px] bg-background shadow-minimal hover:bg-foreground/[0.03] transition-colors cursor-pointer"
+                  className={cn(buttonVariants({ variant: 'secondary', size: 'md' }), 'cursor-pointer')}
                 >
-                  <Upload className="h-3.5 w-3.5" />
+                  <Upload className="size-3.5" />
                   {t('projectInfo.uploadAssets')}
                   <input
                     type="file"
@@ -290,27 +294,26 @@ export default function ProjectInfoPage({ projectSlug }: ProjectInfoPageProps) {
               }
             >
               {assets.length === 0 ? (
-                <div className="px-4 py-6 text-sm text-muted-foreground">
+                <div className="px-3.5 py-6 text-label text-tertiary">
                   {t('projectInfo.noAssets')}
                 </div>
               ) : (
-                <ul className="divide-y divide-border/50">
+                <ul className="divide-y divide-separator">
                   {assets.map((a) => (
-                    <li key={a.filename} className="px-4 py-2 flex items-center gap-3">
+                    <li key={a.filename} className="flex min-h-11 items-center gap-3 px-3.5 py-2">
                       <div className="flex-1 min-w-0">
-                        <div className="text-sm truncate">{a.filename}</div>
-                        <div className="text-xs text-foreground/50">
+                        <div className="truncate text-label text-foreground">{a.filename}</div>
+                        <div className="text-label-sm text-tertiary tabular-nums">
                           {(a.sizeBytes / 1024).toFixed(1)} KB · {a.mimeType}
                         </div>
                       </div>
-                      <Button
+                      <IconButton
                         size="sm"
-                        variant="ghost"
+                        aria-label={t('common.delete')}
+                        icon={<Trash2 className="size-3.5" />}
                         onClick={() => handleDeleteAsset(a)}
-                        className="text-destructive hover:text-destructive"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </Button>
+                        className="text-destructive hover:bg-destructive-tint hover:text-destructive"
+                      />
                     </li>
                   ))}
                 </ul>
@@ -321,7 +324,7 @@ export default function ProjectInfoPage({ projectSlug }: ProjectInfoPageProps) {
           {/* Settings tab */}
           {tab === 'settings' && (
             <Info_Section title={t('projectInfo.tabSettings')}>
-              <div className="space-y-4 px-4 py-3">
+              <div className="space-y-4 px-3.5 py-3.5">
                 <Field label={t('projectInfo.title')}>
                   <Input
                     value={editName}
@@ -344,8 +347,8 @@ export default function ProjectInfoPage({ projectSlug }: ProjectInfoPageProps) {
                       placeholder={t('projectInfo.workingDirectoryPlaceholder')}
                       className="flex-1"
                     />
-                    <Button size="sm" variant="outline" onClick={handlePickWorkingDirectory}>
-                      <FolderOpen className="h-3.5 w-3.5 mr-1" />
+                    <Button size="lg" variant="secondary" onClick={handlePickWorkingDirectory}>
+                      <FolderOpen className="size-3.5" />
                       {t('projectInfo.workingDirectoryPicker')}
                     </Button>
                   </div>
@@ -375,15 +378,11 @@ export default function ProjectInfoPage({ projectSlug }: ProjectInfoPageProps) {
                   />
                 </Field>
                 <div className="flex justify-between pt-2">
-                  <Button
-                    variant="ghost"
-                    onClick={handleDeleteProject}
-                    className="text-destructive hover:text-destructive"
-                  >
-                    <Trash2 className="h-3.5 w-3.5 mr-1" />
+                  <Button variant="danger" onClick={handleDeleteProject}>
+                    <Trash2 className="size-3.5" />
                     {t('projectInfo.deleteProject')}
                   </Button>
-                  <Button onClick={handleSaveSettings} disabled={saving}>
+                  <Button variant="primary" onClick={handleSaveSettings} disabled={saving}>
                     {saving ? t('common.saving') : t('common.save')}
                   </Button>
                 </div>
@@ -394,23 +393,19 @@ export default function ProjectInfoPage({ projectSlug }: ProjectInfoPageProps) {
           {/* Metadata read-out for quick reference */}
           <Info_Section title={t('projectInfo.metadata')}>
             <Info_Table>
-              <Info_Table.Row label={t('common.slug')} value={project.config.slug} />
+              <Info_Table.Row label={t('common.slug')}>
+                <span className="font-mono text-mono-ui">{project.config.slug}</span>
+              </Info_Table.Row>
               <Info_Table.Row label={t('common.location')}>
-                <div className="flex items-center gap-2 min-w-0">
-                  <span className="flex-1 min-w-0 truncate font-mono text-xs">{project.folderPath}</span>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <button
-                        type="button"
-                        onClick={() => window.electronAPI.openFile(project.folderPath)}
-                        className="shrink-0 inline-flex h-6 w-6 items-center justify-center rounded text-foreground/50 hover:text-foreground hover:bg-foreground/5 transition-colors"
-                        aria-label={t('projectInfo.openLocation')}
-                      >
-                        <FolderOpen className="h-3.5 w-3.5" />
-                      </button>
-                    </TooltipTrigger>
-                    <TooltipContent>{t('projectInfo.openLocation')}</TooltipContent>
-                  </Tooltip>
+                <div className="-my-1 flex min-w-0 items-center gap-2">
+                  <span className="min-w-0 flex-1 truncate font-mono text-mono-ui">{project.folderPath}</span>
+                  <IconButton
+                    size="sm"
+                    aria-label={t('projectInfo.openLocation')}
+                    tooltip
+                    icon={<FolderOpen className="size-3.5" />}
+                    onClick={() => window.electronAPI.openFile(project.folderPath)}
+                  />
                 </div>
               </Info_Table.Row>
             </Info_Table>
@@ -433,12 +428,13 @@ function TabButton({
   return (
     <button
       type="button"
+      aria-pressed={active}
       onClick={onClick}
       className={cn(
-        'px-3 py-1.5 text-sm rounded-t-md border-b-2',
+        'motion-press inline-flex h-control-sm in-data-compact:h-9 items-center rounded-sm px-2.5 text-label-sm font-medium',
         active
-          ? 'border-foreground/80 text-foreground'
-          : 'border-transparent text-foreground/60 hover:text-foreground/80'
+          ? 'bg-floating text-foreground shadow-elev-1'
+          : 'text-secondary hover:text-foreground'
       )}
     >
       {children}
@@ -457,9 +453,9 @@ function Field({
 }) {
   return (
     <label className="block">
-      <div className="text-xs font-medium text-foreground/70 mb-1">{label}</div>
+      <div className="mb-1.5 text-label font-medium text-foreground">{label}</div>
       {children}
-      {hint && <div className="mt-1 text-xs text-foreground/50">{hint}</div>}
+      {hint && <div className="mt-1 text-label-sm text-tertiary">{hint}</div>}
     </label>
   )
 }

@@ -40,7 +40,6 @@ import type {
   SdkMcpServerConfig,
   BackendConfig,
   PostInitResult,
-  BridgeUpdateContext,
   RecoveryMessage,
 } from './backend/types.ts';
 import { AbortReason } from './backend/types.ts';
@@ -49,6 +48,7 @@ import type { Workspace } from '../config/storage.ts';
 
 // Core modules
 import { PermissionManager } from './core/permission-manager.ts';
+import type { GuardedModeCheck } from './core/guarded-mode.ts';
 import { SourceManager } from './core/source-manager.ts';
 import { PromptBuilder } from './core/prompt-builder.ts';
 import { PathProcessor } from './core/path-processor.ts';
@@ -256,6 +256,8 @@ export abstract class BaseAgent implements AgentBackend {
   // Callbacks (public for facade wiring)
   // ============================================================
   onPermissionRequest: PermissionCallback | null = null;
+  /** Guarded-mode risk check (decision model): may turn an allowed call into a prompt, never the reverse. */
+  guardedModeCheck: GuardedModeCheck | null = null;
   onPlanSubmitted: PlanCallback | null = null;
   onAuthRequest: AuthCallback | null = null;
   onSourceChange: SourceChangeCallback | null = null;
@@ -293,6 +295,7 @@ export abstract class BaseAgent implements AgentBackend {
     // SourceManager: tracks active/inactive sources and formats state for context injection
     this.sourceManager = new SourceManager({
       onDebug: (msg) => this.debug(msg),
+      getSourceFeatures: (slug) => this.config.mcpPool?.getSourceFeatures(slug),
     });
 
     // PromptBuilder: builds context blocks for user messages
@@ -403,80 +406,6 @@ export abstract class BaseAgent implements AgentBackend {
       await this.automationSystem?.executeAgentEvent(event, input, signal);
     } catch (err) {
       this.debug(`Automation event ${event} failed: ${err}`);
-    }
-  }
-
-  // ============================================================
-  // Session MCP Tool Completion Handling
-  // ============================================================
-
-  /**
-   * Handle successful completion of a session MCP tool (SubmitPlan, auth tools).
-   *
-   * WHY THIS IS ON BaseAgent:
-   * -------------------------
-   * Session-scoped tools (SubmitPlan, source_oauth_trigger, etc.) run in an
-   * EXTERNAL MCP server subprocess (packages/session-mcp-server). That subprocess
-   * has its own process memory, so when it calls getSessionScopedToolCallbacks(),
-   * the callback registry is empty — it was populated in THIS process, not the subprocess.
-   *
-   * Instead, PiAgent detects session MCP tool completions from its own event
-   * stream and calls THIS shared method to fire the appropriate callback.
-   *
-   * ClaudeAgent doesn't need this — its session-scoped tools run in-process
-   * via Claude Agent SDK, so the callback registry works directly.
-   *
-   * CALLBACKS FIRED:
-   * - SubmitPlan → this.onPlanSubmitted(planPath)
-   *   → Electron reads plan file, shows plan card, calls interruptForHandoff(PlanSubmitted)
-   * - Auth tools → this.onAuthRequest(authRequest)
-   *   → Electron shows auth dialog, calls interruptForHandoff(AuthRequest)
-   */
-  protected handleSessionMcpToolCompletion(
-    toolName: string,
-    args: Record<string, unknown>
-  ): void {
-    // SubmitPlan — trigger plan view in the UI.
-    // The Electron SessionManager's onPlanSubmitted callback will:
-    //   1. Read the plan file content
-    //   2. Create a plan message (role: 'plan')
-    //   3. Send plan_submitted event to renderer
-    //   4. Call interruptForHandoff(AbortReason.PlanSubmitted) → turn terminates
-    if (toolName === 'SubmitPlan' && args.planPath) {
-      this.debug(`SubmitPlan completed: ${args.planPath}`);
-      this.onPlanSubmitted?.(args.planPath as string);
-      return;
-    }
-
-    // Auth tools — trigger auth request in the UI.
-    // Maps MCP tool names to auth request types.
-    const authToolTypes: Record<string, string> = {
-      'source_oauth_trigger': 'oauth',
-      'source_google_oauth_trigger': 'oauth-google',
-      'source_slack_oauth_trigger': 'oauth-slack',
-      'source_microsoft_oauth_trigger': 'oauth-microsoft',
-      'source_credential_prompt': 'credential',
-    };
-
-    const authType = authToolTypes[toolName];
-    if (authType && args.sourceSlug && this.onAuthRequest) {
-      const sourceSlug = args.sourceSlug as string;
-      const source = this.sourceManager.getAllSources().find(s => s.config.slug === sourceSlug);
-      const sourceName = source?.config.name || sourceSlug;
-      this.debug(`Auth tool completed: ${toolName} for ${sourceSlug}`);
-      this.onAuthRequest({
-        type: authType,
-        requestId: `${Date.now()}-auth`,
-        sessionId: this.config.session?.id || '',
-        sourceSlug,
-        sourceName,
-        ...(authType === 'credential' && {
-          mode: (args.mode as string) || 'bearer',
-          labels: args.labels as Record<string, string> | undefined,
-          description: args.description as string | undefined,
-          hint: args.hint as string | undefined,
-        }),
-      } as AuthRequest);
     }
   }
 
@@ -626,7 +555,11 @@ export abstract class BaseAgent implements AgentBackend {
     // Both MCP sources and API sources are routed through the pool.
     if (this.config.mcpPool) {
       try {
-        await this.config.mcpPool.sync(mcpServers, apiServers as Record<string, ApiServerConfig>);
+        const failures = await this.config.mcpPool.sync(mcpServers, apiServers as Record<string, ApiServerConfig>);
+        if (failures.length > 0) {
+          console.warn(`[${this.backendName}] ${failures.length} source(s) failed to connect and will be unavailable this session: ${failures.join(', ')}`);
+          this.debug(`MCP sync failures: ${failures.join(', ')}`);
+        }
       } catch (err) {
         this.debug(`Failed to sync MCP pool: ${err instanceof Error ? err.message : String(err)}`);
       }
@@ -856,7 +789,7 @@ ${formattedMessages}
   }
 
   // ============================================================
-  // Lifecycle (postInit, applyBridgeUpdates)
+  // Lifecycle (postInit)
   // ============================================================
 
   /**
@@ -866,15 +799,6 @@ ${formattedMessages}
    */
   async postInit(): Promise<PostInitResult> {
     return { authInjected: true };
-  }
-
-  /**
-   * Apply bridge/config updates mid-session.
-   * Default: no-op for backends that don't use bridge-mcp-server (Claude, Pi).
-   * Override in Codex/Copilot to regenerate config or write bridge files.
-   */
-  async applyBridgeUpdates(_context: BridgeUpdateContext): Promise<void> {
-    // No-op by default
   }
 
   /**
@@ -1042,9 +966,10 @@ ${formattedMessages}
       this.config.markTransferredSessionSummaryApplied?.();
     }
 
-    // Prepend read directive to the message so the model reads SKILL.md first.
+    // Prepend read directive to the message so the model reads SKILL.md first. Host guidance for
+    // this turn goes last, after mention parsing, so it can never register a skill or source.
     const directive = this.formatSkillDirective(skillPaths);
-    const messageParts = [branchSeedContext, transferredSessionContext, directive, cleanMessage].filter(Boolean);
+    const messageParts = [branchSeedContext, transferredSessionContext, directive, cleanMessage, options?.turnContext].filter(Boolean);
     const effectiveMessage = messageParts.join('\n\n');
 
     // Capture the raw user message for source-activation auto-retry. `cleanMessage`
@@ -1105,6 +1030,21 @@ ${formattedMessages}
    */
   redirect(_message: string): boolean {
     this.forceAbort(AbortReason.Redirect);
+    return false;
+  }
+
+  /**
+   * Whether a manual compaction owns the current turn. Default: never.
+   * Backends that run /compact as an RPC (Pi) override this so the session
+   * layer queues mid-stream messages instead of steering into a turn that has
+   * no agent loop to consume them (OSS #1058).
+   */
+  isCompactionInFlight(): boolean {
+    return false;
+  }
+
+  /** Whether redirect() would steer into a live turn now instead of aborting. Default: never. */
+  canSteerNow(): boolean {
     return false;
   }
 

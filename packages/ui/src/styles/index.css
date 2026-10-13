@@ -1,34 +1,17 @@
 /**
- * @craft-agent/ui - Shared Tailwind CSS v4 theme
- *
- * This file provides the base theme configuration for all Craft Agent UIs.
- * Import this in your app's main CSS file:
+ * @craft-agent/ui — shared stylesheet entry (viewer, marketing).
  *
  *   @import "@craft-agent/ui/styles";
+ *   @source "../**\/*.{tsx,ts}";
  *
- * The consuming app can then add its own source directive:
- *
- *   @source "../**\/*.{tsx,ts,jsx,js}";
- *
- * 6-Color System:
- * - background: Light/dark surface
- * - foreground: Text and icons
- * - accent: Brand purple (highlights, Auto mode)
- * - info: Amber (warnings, Ask mode)
- * - success: Green (connected, checkmarks)
- * - destructive: Red (errors, failed)
- *
- * Variants:
- * - /50 = 50% alpha (transparency) - for borders, hovers, overlays
- * - -50 = 50% mix toward background (solid) - for Explore mode
+ * Tokens (colors, type, radii, elevation, motion, z-index) live in tokens.css — the single
+ * source of truth also imported by apps/electron/src/renderer/index.css (electron, webui).
+ * Shared base styles, legacy utilities and overlay motion live in base.css.
  */
 
 @import "tailwindcss";
 @plugin "@tailwindcss/typography";
 
-/* =============================================================================
-   LIGHT MODE (default)
-============================================================================= */
 
 :root {
   /* === 6 BASE COLORS === */
@@ -565,3 +548,6 @@ html[data-font="inter"] {
   pointer-events: none;
   border-radius: inherit;
 }
+=======
+@import "./tokens.css";
+@import "./base.css";

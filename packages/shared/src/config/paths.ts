@@ -1,6 +1,10 @@
 /**
  * Centralized path configuration for Orcha Agents.
  *
+ * `CONFIG_DIR` is the one place that decides where the app keeps its state
+ * (`~/.orcha-agents` by default in the fork). Every other module joins onto it;
+ * never join `homedir()` with a config dir name directly (OSS #1062).
+ *
  * Resolution order:
  *   1. CRAFT_CONFIG_DIR environment variable (explicit override — used by
  *      the multi-instance detect-instance.sh script, which points at
@@ -12,16 +16,26 @@
  * never reads or writes the original app's data dir at runtime, except as
  * the read-only source of the one-time isolation migration
  * (./isolation-migration.ts). See FORK.md §3.
+ *
+ * Two modules re-derive this from the environment on purpose because they must
+ * stay import-free: `interceptor-common.ts` (preloaded into the Pi subprocess)
+ * and session-tools-core `handlers/config-validate.ts` (no dependency on shared).
+ * Both must use the same fork default (`.orcha-agents`).
  */
 
 import { homedir } from 'os';
 import { join } from 'path';
 
-const ORCHA_DIR = join(homedir(), '.orcha-agents');
+/** Fork (Orcha Agents): upstream default is `.craft-agent`. */
+export const DEFAULT_CONFIG_DIR_NAME = '.orcha-agents';
 
-function resolveConfigDir(): string {
-  if (process.env.CRAFT_CONFIG_DIR) return process.env.CRAFT_CONFIG_DIR;
-  return ORCHA_DIR;
+/**
+ * Resolve the config directory: a non-empty CRAFT_CONFIG_DIR wins, otherwise
+ * `<home>/.orcha-agents`. Pure; `CONFIG_DIR` is this evaluated once at load.
+ */
+export function resolveConfigDir(env: NodeJS.ProcessEnv = process.env, home: string = homedir()): string {
+  const override = env.CRAFT_CONFIG_DIR?.trim();
+  return override ? override : join(home, DEFAULT_CONFIG_DIR_NAME);
 }
 
 export const CONFIG_DIR = resolveConfigDir();

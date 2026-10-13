@@ -14,6 +14,12 @@ import { openExternalUrl } from '@craft-agent/ui'
 import { WsRpcClient } from '../../../electron/src/transport/client'
 import { buildClientApi } from '../../../electron/src/transport/build-api'
 import { CHANNEL_MAP } from '../../../electron/src/transport/channel-map'
+import {
+  createSignInRunner,
+  waitForJoinedOAuthFlow,
+  DEFAULT_OAUTH_FLOW_TTL_MS,
+  type OAuthStartResult,
+} from '../../../electron/src/transport/source-oauth'
 import type { ElectronAPI, TransportConnectionState } from '../../../electron/src/shared/types'
 
 // ---------------------------------------------------------------------------
@@ -110,6 +116,7 @@ export function createWebApi(options: WebApiOptions): {
     getVersions: () => ({ node: 'n/a', chrome: navigator.userAgent, electron: 'web' }),
     getRuntimeEnvironment: () => 'web',
     getSystemWarnings: () => Promise.resolve({ vcredistMissing: false }),
+    getWindowVibrancy: () => null, // browsers paint an opaque canvas
     isDebugMode: () => Promise.resolve(import.meta.env.DEV),
 
     // Theme
@@ -234,17 +241,25 @@ export function createWebApi(options: WebApiOptions): {
     invokeOnServer: () => Promise.reject(new Error('Cross-server RPC not available in web UI')),
   }
 
+  // This tab's sign-in windows by source, so a repeat click reuses the open one
+  const signInWindows = new Map<string, { popup: Window; flowId: string; state: string }>()
+
   // OAuth overrides — web-compatible browser opening
   // The Electron preload uses shell.openExternal() which isn't available in browsers.
   const oauthOverrides: Partial<ElectronAPI> = {
     // Generic source OAuth — server prepares the flow, we open the auth URL in a new tab.
     // The OAuth provider redirects through the relay to our server's /api/oauth/callback,
     // which completes the token exchange and pushes status via WebSocket.
-    performOAuth: async (args: {
-      sourceSlug: string
-      sessionId?: string
-      authRequestId?: string
-    }) => {
+    // One flow per workspace + source: when another tab or session is already signing in,
+    // oauth:start joins that flow and we wait for it instead of opening a second sign-in.
+    performOAuth: createSignInRunner(async (args, signal) => {
+      const own = signInWindows.get(args.sourceSlug)
+      if (own && !own.popup.closed && !args.restart) {
+        // The sign-in window this tab opened is still open: bring it forward instead
+        own.popup.focus()
+        return { success: true }
+      }
+
       // iOS Safari (and any strict mobile pop-up blocker) requires
       // `window.open()` to be called *synchronously* inside the click event
       // — any preceding `await` loses the user-gesture and the call is
@@ -257,17 +272,37 @@ export function createWebApi(options: WebApiOptions): {
       const popup = window.open('about:blank', '_blank')
 
       try {
+        if (own) {
+          // Our earlier sign-in window was closed (or is being replaced) before it finished:
+          // end that flow so this attempt doesn't just wait on it
+          signInWindows.delete(args.sourceSlug)
+          if (!own.popup.closed) own.popup.close()
+          await client.invoke('oauth:cancel', { flowId: own.flowId, state: own.state, error: 'The sign-in window was closed.' })
+            .catch(() => {})
+        }
+
         const callbackUrl = `${window.location.origin}/api/oauth/callback`
-        const result = await client.invoke('oauth:start', {
+        const result: OAuthStartResult = await client.invoke('oauth:start', {
           sourceSlug: args.sourceSlug,
           callbackUrl,
           sessionId: args.sessionId,
           authRequestId: args.authRequestId,
+          joinLive: true,
+          restart: args.restart,
         })
+
+        if (result.joined) {
+          if (popup && !popup.closed) popup.close()
+          return await waitForJoinedOAuthFlow((channel, ...rest) => client.invoke(channel, ...rest), result.flowId, {
+            timeoutMs: result.expiresInMs ?? DEFAULT_OAUTH_FLOW_TTL_MS,
+            signal,
+          })
+        }
 
         if (popup && !popup.closed) {
           // Happy path — pre-opened popup is still open, redirect it.
           popup.location.href = result.authUrl
+          signInWindows.set(args.sourceSlug, { popup, flowId: result.flowId, state: result.state })
         } else if (popup === null) {
           // Popup blocked entirely (popup === null) — fall back to a
           // same-window redirect. The OAuth callback lands back on the
@@ -276,7 +311,9 @@ export function createWebApi(options: WebApiOptions): {
           window.location.href = result.authUrl
         } else {
           // Popup was opened but the user closed it while we waited for
-          // the RPC. Abort rather than redirecting their main tab.
+          // the RPC. Abort rather than redirecting their main tab, and end
+          // the flow so the next attempt doesn't wait on it.
+          client.invoke('oauth:cancel', { flowId: result.flowId, state: result.state }).catch(() => {})
           return {
             success: false,
             error: 'Sign-in window was closed before authentication started.',
@@ -293,7 +330,7 @@ export function createWebApi(options: WebApiOptions): {
           error: err instanceof Error ? err.message : 'OAuth flow failed',
         }
       }
-    },
+    }),
 
     // Claude OAuth — server returns authUrl, we open it in a new tab.
     // Same iOS-safe pre-open pattern as `performOAuth` above.

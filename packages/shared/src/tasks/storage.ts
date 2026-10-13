@@ -38,8 +38,20 @@ export type RunLogEntry =
   | { t: string; kind: 'node-spawned'; nodeId: string; sessionId: string }
   | { t: string; kind: 'node-finished'; nodeId: string; sessionId: string; state: NodeRunState; reason?: string }
   | { t: string; kind: 'node-retry'; nodeId: string; attempt: number; reason: string }
+  /** The node's session ended a turn without finishing: the user stopped it, or its background agents still run. */
+  | { t: string; kind: 'node-waiting'; nodeId: string; sessionId: string; reason: 'stopped' | 'background-work' }
   | { t: string; kind: 'run-paused' | 'run-resumed' | 'run-stopped' | 'run-completed' | 'run-failed' | 'run-verifying' }
-  | { t: string; kind: 'verdict'; result: 'pass' | 'fail' | 'unparsed'; reason?: string; nodes?: string[] }
+  | {
+      t: string;
+      kind: 'verdict';
+      result: 'pass' | 'fail' | 'unparsed';
+      reason?: string;
+      nodes?: string[];
+      /** How the verdict was read: from the VERDICT line (default) or classified by the decision model. */
+      via?: 'parsed' | 'decision';
+      /** Decision-model classifications only: confidence of the winning option. */
+      confidence?: number;
+    }
   | { t: string; kind: 'budget-breach'; metric: 'tokens' | 'parallel' | 'iterations'; value: number; limit: number };
 
 // ---------------------------------------------------------------------------
@@ -187,6 +199,10 @@ export function readRunSpecSnapshot(workspaceRoot: string, slug: string, runId: 
 // Per-node output
 // ---------------------------------------------------------------------------
 
+export function nodeOutputPath(workspaceRoot: string, slug: string, runId: string, nodeId: string): string {
+  return join(runDir(workspaceRoot, slug, runId), NODES_DIR, `${nodeId}.json`);
+}
+
 export function writeNodeOutput(
   workspaceRoot: string,
   slug: string,
@@ -194,9 +210,8 @@ export function writeNodeOutput(
   nodeId: string,
   output: NodeOutput,
 ): void {
-  const dir = join(runDir(workspaceRoot, slug, runId), NODES_DIR);
-  ensureDir(dir);
-  atomicWriteFileSync(join(dir, `${nodeId}.json`), JSON.stringify(output, null, 2));
+  ensureDir(join(runDir(workspaceRoot, slug, runId), NODES_DIR));
+  atomicWriteFileSync(nodeOutputPath(workspaceRoot, slug, runId, nodeId), JSON.stringify(output, null, 2));
 }
 
 export function readNodeOutput(
@@ -205,7 +220,7 @@ export function readNodeOutput(
   runId: string,
   nodeId: string,
 ): NodeOutput | null {
-  const path = join(runDir(workspaceRoot, slug, runId), NODES_DIR, `${nodeId}.json`);
+  const path = nodeOutputPath(workspaceRoot, slug, runId, nodeId);
   if (!existsSync(path)) return null;
   try {
     return JSON.parse(readFileSync(path, 'utf-8')) as NodeOutput;

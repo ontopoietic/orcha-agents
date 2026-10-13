@@ -1,16 +1,30 @@
 import { useState, useCallback } from 'react'
-import { Key, User, Lock, Eye, EyeOff, Check, X } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
+import { Key, User, Lock, Eye, EyeOff, ShieldCheck } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { cn } from '@/lib/utils'
 import type { CredentialRequest as CredentialRequestType, CredentialResponse } from '../../../../../shared/types'
 import { validateBasicAuthCredentials, getPasswordValue, getPasswordLabel, getPasswordPlaceholder } from '@/utils/auth-validation'
+import {
+  DECISION_ACTION,
+  DecisionActions,
+  DecisionBody,
+  DecisionCard,
+  DecisionDetails,
+  DecisionFoot,
+  DecisionHeader,
+} from './DecisionCard'
+
+/** Field chrome shared by every credential input: icon inset, reveal toggle on the right. */
+const FIELD_LABEL = 'text-label-sm text-secondary'
+const FIELD_ICON = 'pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-tertiary'
+const REVEAL_BUTTON = 'absolute right-3 top-1/2 -translate-y-1/2 text-tertiary transition-colors hover:text-foreground hover:duration-instant'
 
 interface CredentialRequestProps {
   request: CredentialRequestType
   onResponse: (response: CredentialResponse) => void
-  /** When true, removes container styling (shadow, rounded) - used when wrapped by InputContainer */
+  /** When true, the composer slot (InputContainer) draws the card material and ring */
   unstyled?: boolean
 }
 
@@ -24,6 +38,7 @@ interface CredentialRequestProps {
  * - query: API Key for query parameter auth
  */
 export function CredentialRequest({ request, onResponse, unstyled = false }: CredentialRequestProps) {
+  const { t } = useTranslation()
   const [value, setValue] = useState('')
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
@@ -106,10 +121,7 @@ export function CredentialRequest({ request, onResponse, unstyled = false }: Cre
   const passwordPlaceholder = getPasswordPlaceholder(basePasswordLabel, passwordRequired)
 
   return (
-    <div className={cn(
-      'bg-background overflow-hidden h-full flex flex-col',
-      unstyled ? 'border-0' : 'border border-border rounded-[8px] shadow-middle'
-    )}>
+    <DecisionCard tone="info" standalone={!unstyled}>
       {/* Form wraps the entire card so password managers (1Password) can detect fields.
           action points to the source URL for domain-based credential matching. */}
       <form
@@ -119,38 +131,30 @@ export function CredentialRequest({ request, onResponse, unstyled = false }: Cre
         className="flex flex-col flex-1 min-h-0"
       >
         {/* Content */}
-        <div className="p-4 space-y-4 flex-1 min-h-0 flex flex-col overflow-y-auto">
+        <DecisionBody>
           {/* Header */}
-          <div className="flex items-start gap-3">
-            <div className="shrink-0 mt-0.5">
-              <Key className="h-5 w-5 text-foreground" />
-            </div>
-            <div className="flex-1 min-w-0 space-y-1">
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-medium text-foreground">
-                  Authentication Required
-                </span>
-                <span className="text-xs text-muted-foreground">
-                  ({request.sourceName})
-                </span>
-              </div>
-              {request.description && (
-                <p className="text-xs text-muted-foreground">{request.description}</p>
-              )}
-            </div>
-          </div>
+          <DecisionHeader
+            tone="info"
+            icon={<Key />}
+            title={t('chat.credentials.authenticationRequired')}
+            aside={`(${request.sourceName})`}
+          />
+          <DecisionDetails>
+            {request.description && (
+              <p className="text-label text-secondary">{request.description}</p>
+            )}
 
           {/* Input fields */}
-          <div className="space-y-3">
+          <div className="mt-3 space-y-3">
             {isBasicAuth ? (
               <>
                 {/* Username field */}
                 <div className="space-y-1.5">
-                  <Label htmlFor="credential-username" className="text-xs">
+                  <Label htmlFor="credential-username" className={FIELD_LABEL}>
                     {usernameLabel}
                   </Label>
                   <div className="relative">
-                    <User className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                    <User className={FIELD_ICON} />
                     <Input
                       id="credential-username"
                       name="username"
@@ -167,11 +171,11 @@ export function CredentialRequest({ request, onResponse, unstyled = false }: Cre
                 </div>
                 {/* Password field */}
                 <div className="space-y-1.5">
-                  <Label htmlFor="credential-password" className="text-xs">
+                  <Label htmlFor="credential-password" className={FIELD_LABEL}>
                     {passwordLabel}
                   </Label>
                   <div className="relative">
-                    <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                    <Lock className={FIELD_ICON} />
                     <Input
                       id="credential-password"
                       name="password"
@@ -186,7 +190,8 @@ export function CredentialRequest({ request, onResponse, unstyled = false }: Cre
                     <button
                       type="button"
                       onClick={() => setShowPassword(!showPassword)}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                      className={REVEAL_BUTTON}
+                      aria-label={showPassword ? t('chat.credentials.hideValue') : t('chat.credentials.showValue')}
                       tabIndex={-1}
                     >
                       {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
@@ -199,11 +204,11 @@ export function CredentialRequest({ request, onResponse, unstyled = false }: Cre
               <>
                 {request.headerNames.map((headerName, index) => (
                   <div key={headerName} className="space-y-1.5">
-                    <Label htmlFor={`credential-header-${index}`} className="text-xs">
+                    <Label htmlFor={`credential-header-${index}`} className={FIELD_LABEL}>
                       {headerName}
                     </Label>
                     <div className="relative">
-                      <Key className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                      <Key className={FIELD_ICON} />
                       <Input
                         id={`credential-header-${index}`}
                         name={headerName}
@@ -222,7 +227,8 @@ export function CredentialRequest({ request, onResponse, unstyled = false }: Cre
                       <button
                         type="button"
                         onClick={() => setShowPassword(!showPassword)}
-                        className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                        className={REVEAL_BUTTON}
+                        aria-label={showPassword ? t('chat.credentials.hideValue') : t('chat.credentials.showValue')}
                         tabIndex={-1}
                       >
                         {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
@@ -234,16 +240,16 @@ export function CredentialRequest({ request, onResponse, unstyled = false }: Cre
             ) : (
               /* Single credential field (API key, bearer token) */
               <div className="space-y-1.5">
-                <Label htmlFor="credential-value" className="text-xs">
+                <Label htmlFor="credential-value" className={FIELD_LABEL}>
                   {credentialLabel}
                   {request.mode === 'header' && request.headerName && (
-                    <span className="text-muted-foreground ml-1">
+                    <span className="ml-1 font-normal text-tertiary">
                       ({request.headerName})
                     </span>
                   )}
                 </Label>
                 <div className="relative">
-                  <Key className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  <Key className={FIELD_ICON} />
                   <Input
                     id="credential-value"
                     name="credential"
@@ -259,7 +265,8 @@ export function CredentialRequest({ request, onResponse, unstyled = false }: Cre
                   <button
                     type="button"
                     onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                    className={REVEAL_BUTTON}
+                    aria-label={showPassword ? t('chat.credentials.hideValue') : t('chat.credentials.showValue')}
                     tabIndex={-1}
                   >
                     {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
@@ -270,41 +277,40 @@ export function CredentialRequest({ request, onResponse, unstyled = false }: Cre
 
             {/* Hint */}
             {request.hint && (
-              <p className="text-[11px] text-muted-foreground">
+              <p className="text-label-sm text-tertiary">
                 {request.hint}
               </p>
             )}
           </div>
-        </div>
+          </DecisionDetails>
+        </DecisionBody>
 
         {/* Action buttons */}
-        <div className="shrink-0 flex flex-wrap items-center gap-2 px-3 py-2 border-t border-border/50">
+        <DecisionActions>
           <Button
             type="submit"
-            size="sm"
-            variant="default"
-            className="h-7 gap-1.5"
+            size="lg"
+            variant="primary"
+            className={DECISION_ACTION}
             disabled={!isValid}
           >
-            <Check className="h-3.5 w-3.5" />
             Save
           </Button>
           <Button
             type="button"
-            size="sm"
+            size="lg"
             variant="ghost"
-            className="h-7 gap-1.5 text-muted-foreground hover:text-foreground"
+            className={DECISION_ACTION}
             onClick={handleCancel}
           >
-            <X className="h-3.5 w-3.5" />
             Cancel
           </Button>
+        </DecisionActions>
 
-          <span className="min-w-0 flex-1 basis-full text-[10px] text-muted-foreground sm:basis-auto sm:text-right">
-            Credentials are encrypted at rest
-          </span>
-        </div>
+        <DecisionFoot icon={<ShieldCheck />}>
+          Credentials are encrypted at rest
+        </DecisionFoot>
       </form>
-    </div>
+    </DecisionCard>
   )
 }

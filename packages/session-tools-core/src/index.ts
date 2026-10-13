@@ -82,6 +82,28 @@ export {
   getEffectiveHeaderNames,
 } from './source-helpers.ts';
 
+// API credential parsing and request-auth assembly (shared with @craft-agent/shared)
+export {
+  isBasicAuthCredential,
+  isMultiHeaderCredential,
+  parseJsonHeaderMap,
+  apiAuthSpecFromConfig,
+  parseStoredApiCredential,
+  serializeHeaderCredential,
+  buildAuthorizationHeader,
+  buildApiAuthHeaders,
+  appendQueryAuth,
+  describeApiAuth,
+} from './api-auth.ts';
+export type {
+  ApiCredential,
+  BasicAuthCredential,
+  MultiHeaderCredential,
+  ApiAuthKind,
+  ApiAuthSpec,
+  StoredCredentialShape,
+} from './api-auth.ts';
+
 // Validation
 export {
   // Result helpers
@@ -138,6 +160,8 @@ export type {
   ResolvedStatusResult,
   CreateTaskInput,
   CreateTaskResult,
+  ProjectMemoryAppendInput,
+  ProjectMemoryAppendResult,
   // Pages types
   PagesToolCallbacks,
   PageToolRefreshSpec,
@@ -149,6 +173,26 @@ export type {
   PageDataToolPatch,
   PageDataWriteSummary,
   DeletePageToolResult,
+  // MCP source resources & prompts types
+  McpSourceToolCallbacks,
+  McpSourceResource,
+  McpSourceResourceTemplate,
+  McpSourceResourceList,
+  McpSourcePrompt,
+  McpSourcePromptArgument,
+  McpSourcePromptList,
+  // Decision tool types
+  DecisionToolCallbacks,
+  DecisionToolQuestionType,
+  DecisionToolInstructions,
+  DecisionToolCriteria,
+  DecisionToolQuestion,
+  DecisionToolState,
+  DecisionToolRequest,
+  DecisionToolAnswer,
+  DecisionToolUsage,
+  DecisionToolError,
+  DecisionToolResult,
 } from './context.ts';
 
 export { createNodeFileSystem } from './context.ts';
@@ -172,6 +216,11 @@ export {
   handleMicrosoftOAuthTrigger,
   // Credential Prompt
   handleCredentialPrompt,
+  // MCP source resources & prompts
+  handleSourceListResources,
+  handleSourceReadResource,
+  handleSourceListPrompts,
+  handleSourceGetPrompt,
   // Update Preferences
   handleUpdatePreferences,
   // Transform Data
@@ -189,6 +238,8 @@ export {
   handleUpdatePage,
   handleWritePageData,
   handleDeletePage,
+  // Decision model
+  handleDecide,
 } from './handlers/index.ts';
 
 export type {
@@ -202,6 +253,10 @@ export type {
   SlackOAuthTriggerArgs,
   MicrosoftOAuthTriggerArgs,
   CredentialPromptArgs,
+  SourceListResourcesArgs,
+  SourceReadResourceArgs,
+  SourceListPromptsArgs,
+  SourceGetPromptArgs,
   UpdatePreferencesArgs,
   TransformDataArgs,
   ScriptSandboxArgs,
@@ -213,6 +268,7 @@ export type {
   UpdatePageArgs,
   WritePageDataArgs,
   DeletePageArgs,
+  DecideArgs,
 } from './handlers/index.ts';
 
 // Tool definitions — single source of truth
@@ -225,7 +281,13 @@ export {
   SourceTestSchema,
   SourceOAuthTriggerSchema,
   CredentialPromptSchema,
+  // MCP source resources & prompts schemas
+  SourceListResourcesSchema,
+  SourceReadResourceSchema,
+  SourceListPromptsSchema,
+  SourceGetPromptSchema,
   CallLlmSchema,
+  DecideSchema,
   UpdatePreferencesSchema,
   TransformDataSchema,
   ScriptSandboxSchema,

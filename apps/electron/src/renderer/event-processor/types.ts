@@ -88,6 +88,8 @@ export interface ToolResultEvent {
   parentToolUseId?: string
   /** Timestamp from main process for consistent ordering */
   timestamp?: number
+  /** Replaces the input from tool_start (a browser_tool password fill, redacted once its result is known) */
+  toolInput?: Record<string, unknown>
 }
 
 /**
@@ -399,6 +401,21 @@ export interface WorkflowAgentCompletedEvent {
 }
 
 /**
+ * Task activity - what a running background task is doing (live summary, step count). The chip is
+ * updated in App.tsx's handleBackgroundTaskEvent; messages and session state do not change.
+ */
+export interface TaskActivityEvent {
+  type: 'task_activity'
+  sessionId: string
+  taskId: string
+  toolUseId?: string
+  summary?: string
+  lastToolName?: string
+  toolUses?: number
+  turnId?: string
+}
+
+/**
  * Shell backgrounded event - background bash shell started
  */
 export interface ShellBackgroundedEvent {
@@ -563,6 +580,7 @@ export type AgentEvent =
   | ShellBackgroundedEvent
   | TaskProgressEvent
   | TaskCompletedEvent
+  | TaskActivityEvent
   | WorkflowAgentCompletedEvent
   | UserMessageEvent
   | MessageAnnotationsUpdatedEvent

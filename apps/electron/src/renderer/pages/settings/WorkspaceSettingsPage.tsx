@@ -14,10 +14,9 @@
 import * as React from 'react'
 import { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
-import { motion, AnimatePresence } from 'motion/react'
-import { PanelHeader } from '@/components/app-shell/PanelHeader'
-import { ScrollArea } from '@/components/ui/scroll-area'
+import { AnimatedCollapsibleContent } from '@craft-agent/ui'
 import { HeaderMenu } from '@/components/ui/HeaderMenu'
+import { Button, buttonVariants } from '@/components/ui/button'
 import { useAppShellContext } from '@/context/AppShellContext'
 import { cn } from '@/lib/utils'
 import { routes } from '@/lib/navigate'
@@ -25,13 +24,16 @@ import { Spinner } from '@craft-agent/ui'
 import { RenameDialog } from '@/components/ui/rename-dialog'
 import type { PermissionMode, WorkspaceSettings, LoadedSource } from '../../../shared/types'
 import { useDirectoryPicker } from '@/hooks/useDirectoryPicker'
+import { useAvailablePermissionModes } from '@/hooks/useAvailablePermissionModes'
 import { ServerDirectoryBrowser } from '@/components/ServerDirectoryBrowser'
-import { PERMISSION_MODE_CONFIG } from '@craft-agent/shared/agent/mode-types'
+import { PERMISSION_MODE_CONFIG, PERMISSION_MODE_ORDER } from '@craft-agent/shared/agent/mode-types'
 import type { DetailsPageMeta } from '@/lib/navigation-registry'
 import { SourceAvatar } from '@/components/ui/source-avatar'
 import { toast } from 'sonner'
 
 import {
+  SettingsPage,
+  SettingsPageState,
   SettingsSection,
   SettingsCard,
   SettingsRow,
@@ -74,6 +76,9 @@ export default function WorkspaceSettingsPage() {
   // Mode cycling state
   const [enabledModes, setEnabledModes] = useState<PermissionMode[]>(['safe', 'ask', 'allow-all'])
   const [modeCyclingError, setModeCyclingError] = useState<string | null>(null)
+  // Guarded is offered only while its decision-model feature is on (or already chosen here)
+  const defaultModeOptions = useAvailablePermissionModes(permissionMode)
+  const cyclingModeOptions = useAvailablePermissionModes(enabledModes.includes('guarded') ? 'guarded' : undefined)
 
   // Load workspace settings when active workspace changes
   useEffect(() => {
@@ -298,9 +303,8 @@ export default function WorkspaceSettingsPage() {
       if (!window.electronAPI) return
 
       // Calculate what the new modes would be
-      const newModes = checked
-        ? [...enabledModes, mode]
-        : enabledModes.filter((m) => m !== mode)
+      // Keep the cycle in strictness order (Explore → Ask → Guarded → Execute)
+      const newModes = PERMISSION_MODE_ORDER.filter((m) => (m === mode ? checked : enabledModes.includes(m)))
 
       // Validate: at least 2 modes required
       if (newModes.length < 2) {
@@ -324,234 +328,215 @@ export default function WorkspaceSettingsPage() {
     [enabledModes, updateWorkspaceSetting, t]
   )
 
+  const headerActions = <HeaderMenu route={routes.view.settings('workspace')} helpFeature="workspaces" />
+
   // Show empty state if no workspace is active
   if (!activeWorkspaceId) {
     return (
-      <div className="h-full flex flex-col">
-        <PanelHeader title={t("settings.workspace.workspaceSettings")} actions={<HeaderMenu route={routes.view.settings('workspace')} helpFeature="workspaces" />} />
-        <div className="flex-1 flex items-center justify-center">
-          <p className="text-sm text-muted-foreground">{t("settings.workspace.noWorkspaceSelected")}</p>
-        </div>
-      </div>
+      <SettingsPageState actions={headerActions}>
+        <p>{t("settings.workspace.noWorkspaceSelected")}</p>
+      </SettingsPageState>
     )
   }
 
   // Show loading state
   if (isLoadingWorkspace) {
     return (
-      <div className="h-full flex flex-col">
-        <PanelHeader title={t("settings.workspace.workspaceSettings")} actions={<HeaderMenu route={routes.view.settings('workspace')} helpFeature="workspaces" />} />
-        <div className="flex-1 flex items-center justify-center">
-          <Spinner className="text-muted-foreground" />
-        </div>
-      </div>
+      <SettingsPageState actions={headerActions}>
+        <Spinner className="text-tertiary" />
+      </SettingsPageState>
     )
   }
 
   return (
-    <div className="h-full flex flex-col">
-      <PanelHeader title={t("settings.workspace.workspaceSettings")} actions={<HeaderMenu route={routes.view.settings('workspace')} helpFeature="workspaces" />} />
-      <div className="flex-1 min-h-0 mask-fade-y">
-        <ScrollArea className="h-full">
-          <div className="px-5 py-7 max-w-3xl mx-auto">
-          <div className="space-y-8">
-            {/* Workspace Info */}
-            <SettingsSection title={t("settings.workspace.workspaceInfo")}>
-              <SettingsCard>
-                <SettingsRow
-                  label={t("common.name")}
-                  description={wsName || t("settings.workspace.untitled")}
-                  action={
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setWsNameEditing(wsName)
-                        setRenameDialogOpen(true)
-                      }}
-                      className="inline-flex items-center h-8 px-3 text-sm rounded-lg bg-background shadow-minimal hover:bg-foreground/[0.02] transition-colors"
-                    >
-                      {t("common.edit")}
-                    </button>
-                  }
-                />
-                <SettingsRow
-                  label={t("settings.workspace.icon")}
-                  action={
-                    <label className="cursor-pointer">
-                      <input
-                        type="file"
-                        accept="image/png,image/jpeg,image/svg+xml,image/webp,image/gif"
-                        onChange={handleIconUpload}
-                        className="sr-only"
-                        disabled={isUploadingIcon}
-                      />
-                      <span className="inline-flex items-center h-8 px-3 text-sm rounded-lg bg-background shadow-minimal hover:bg-foreground/[0.02] transition-colors">
-                        {isUploadingIcon ? t("common.uploading") : t("common.change")}
-                      </span>
-                    </label>
-                  }
-                >
-                  <div
-                    className={cn(
-                      'w-6 h-6 rounded-full overflow-hidden bg-foreground/5 flex items-center justify-center',
-                      'ring-1 ring-border/50'
-                    )}
-                  >
-                    {isUploadingIcon ? (
-                      <Spinner className="text-muted-foreground text-[8px]" />
-                    ) : wsIconUrl ? (
-                      <img src={wsIconUrl} alt="" className="w-full h-full object-cover" />
-                    ) : (
-                      <span className="text-xs font-medium text-muted-foreground">
-                        {wsName?.charAt(0)?.toUpperCase() || 'W'}
-                      </span>
-                    )}
-                  </div>
-                </SettingsRow>
-              </SettingsCard>
-
-              <RenameDialog
-                open={renameDialogOpen}
-                onOpenChange={setRenameDialogOpen}
-                title={t("settings.workspace.renameWorkspace")}
-                value={wsNameEditing}
-                onValueChange={setWsNameEditing}
-                onSubmit={() => {
-                  const newName = wsNameEditing.trim()
-                  if (newName && newName !== wsName) {
-                    setWsName(newName)
-                    updateWorkspaceSetting('name', newName)
-                    onRefreshWorkspaces?.()
-                  }
-                  setRenameDialogOpen(false)
+    <SettingsPage
+      title={t("settings.workspace.workspaceSettings")}
+      description={t("settings.workspace.description")}
+      actions={headerActions}
+    >
+      {/* Workspace Info */}
+      <SettingsSection title={t("settings.workspace.workspaceInfo")}>
+        <SettingsCard>
+          <SettingsRow
+            label={t("common.name")}
+            description={wsName || t("settings.workspace.untitled")}
+            action={
+              <Button
+                variant="secondary"
+                size="md"
+                onClick={() => {
+                  setWsNameEditing(wsName)
+                  setRenameDialogOpen(true)
                 }}
-                placeholder={t("settings.workspace.enterWorkspaceName")}
-              />
-            </SettingsSection>
-
-            {/* Permissions */}
-            <SettingsSection title={t("settings.workspace.permissionsSection")}>
-              <SettingsCard>
-                <SettingsMenuSelectRow
-                  label={t("settings.workspace.defaultMode")}
-                  description={t("settings.workspace.defaultModeDesc")}
-                  value={permissionMode}
-                  onValueChange={(v) => handlePermissionModeChange(v as PermissionMode)}
-                  options={[
-                    { value: 'safe', label: t("mode.explore"), description: t("mode.exploreDesc") },
-                    { value: 'ask', label: t("mode.ask"), description: t("mode.askDesc") },
-                    { value: 'allow-all', label: t("mode.execute"), description: t("mode.executeDesc") },
-                  ]}
+              >
+                {t("common.edit")}
+              </Button>
+            }
+          />
+          <SettingsRow
+            label={t("settings.workspace.icon")}
+            action={
+              <label className="cursor-pointer rounded-md has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-focus">
+                <input
+                  type="file"
+                  accept="image/png,image/jpeg,image/svg+xml,image/webp,image/gif"
+                  onChange={handleIconUpload}
+                  className="sr-only"
+                  disabled={isUploadingIcon}
                 />
-              </SettingsCard>
-            </SettingsSection>
-
-            {/* Mode Cycling */}
-            <SettingsSection
-              title={t("settings.workspace.modeCycling")}
-              description={t("settings.workspace.modeCyclingDesc")}
-            >
-              <SettingsCard>
-                {(['safe', 'ask', 'allow-all'] as const).map((m) => {
-                  const modeTranslations: Record<string, { label: string; desc: string }> = {
-                    'safe': { label: t("mode.explore"), desc: t("mode.exploreFullDesc") },
-                    'ask': { label: t("mode.askToEdit"), desc: t("mode.askFullDesc") },
-                    'allow-all': { label: t("mode.execute"), desc: t("mode.executeFullDesc") },
-                  }
-                  const isEnabled = enabledModes.includes(m)
-                  return (
-                    <SettingsToggle
-                      key={m}
-                      label={modeTranslations[m].label}
-                      description={modeTranslations[m].desc}
-                      checked={isEnabled}
-                      onCheckedChange={(checked) => handleModeToggle(m, checked)}
-                    />
-                  )
-                })}
-              </SettingsCard>
-              <AnimatePresence>
-                {modeCyclingError && (
-                  <motion.p
-                    initial={{ opacity: 0, height: 0 }}
-                    animate={{ opacity: 1, height: 'auto' }}
-                    exit={{ opacity: 0, height: 0 }}
-                    transition={{ duration: 0.2, ease: [0.4, 0, 0.2, 1] }}
-                    className="text-xs text-destructive mt-1 overflow-hidden"
-                  >
-                    {modeCyclingError}
-                  </motion.p>
-                )}
-              </AnimatePresence>
-            </SettingsSection>
-
-            {/* Default Sources */}
-            <SettingsSection
-              title={t("settings.workspace.defaultSources")}
-              description={t("settings.workspace.defaultSourcesDesc")}
-            >
-              {availableSources.length > 0 ? (
-                <SettingsCard>
-                  {availableSources.map((source) => (
-                    <SettingsToggle
-                      key={source.config.slug}
-                      label={
-                        <span className="inline-flex items-center gap-2">
-                          <SourceAvatar source={source} size="xs" />
-                          {source.config.name}
-                        </span>
-                      }
-                      description={source.config.tagline}
-                      checked={enabledSourceSlugs.includes(source.config.slug)}
-                      onCheckedChange={(checked) => handleSourceToggle(source.config.slug, checked)}
-                    />
-                  ))}
-                </SettingsCard>
-              ) : (
-                <p className="text-sm text-muted-foreground">{t("settings.workspace.noSourcesConfigured")}</p>
+                <span className={buttonVariants({ variant: 'secondary', size: 'md' })}>
+                  {isUploadingIcon ? t("common.uploading") : t("common.change")}
+                </span>
+              </label>
+            }
+          >
+            <div
+              className={cn(
+                'size-6 rounded-full overflow-hidden bg-fill-hover flex items-center justify-center',
+                'ring-1 ring-border'
               )}
-            </SettingsSection>
+            >
+              {isUploadingIcon ? (
+                <Spinner className="text-caption text-tertiary" />
+              ) : wsIconUrl ? (
+                <img src={wsIconUrl} alt="" className="w-full h-full object-cover" />
+              ) : (
+                <span className="text-caption text-secondary">
+                  {wsName?.charAt(0)?.toUpperCase() || 'W'}
+                </span>
+              )}
+            </div>
+          </SettingsRow>
+        </SettingsCard>
 
-            {/* Advanced */}
-            <SettingsSection title={t("settings.workspace.advanced")}>
-              <SettingsCard>
-                <SettingsRow
-                  label={t("settings.workspace.defaultWorkingDir")}
-                  description={workingDirectory || t("settings.workspace.defaultWorkingDirDesc")}
-                  action={
-                    <div className="flex items-center gap-2">
-                      {workingDirectory && (
-                        <button
-                          type="button"
-                          onClick={handleClearWorkingDirectory}
-                          className="inline-flex items-center h-8 px-3 text-sm rounded-lg bg-background shadow-minimal hover:bg-foreground/[0.02] transition-colors text-foreground/60 hover:text-foreground"
-                        >
-                          {t("common.clear")}
-                        </button>
-                      )}
-                      <button
-                        type="button"
-                        onClick={handleChangeWorkingDirectory}
-                        className="inline-flex items-center h-8 px-3 text-sm rounded-lg bg-background shadow-minimal hover:bg-foreground/[0.02] transition-colors"
-                      >
-                        {t("common.change")}
-                      </button>
-                    </div>
-                  }
-                />
-                <SettingsToggle
-                  label={t("settings.workspace.localMcpServers")}
-                  description={t("settings.workspace.localMcpServersDesc")}
-                  checked={localMcpEnabled}
-                  onCheckedChange={handleLocalMcpEnabledChange}
-                />
-              </SettingsCard>
-            </SettingsSection>
+        <RenameDialog
+          open={renameDialogOpen}
+          onOpenChange={setRenameDialogOpen}
+          title={t("settings.workspace.renameWorkspace")}
+          value={wsNameEditing}
+          onValueChange={setWsNameEditing}
+          onSubmit={() => {
+            const newName = wsNameEditing.trim()
+            if (newName && newName !== wsName) {
+              setWsName(newName)
+              updateWorkspaceSetting('name', newName)
+              onRefreshWorkspaces?.()
+            }
+            setRenameDialogOpen(false)
+          }}
+          placeholder={t("settings.workspace.enterWorkspaceName")}
+        />
+      </SettingsSection>
 
-          </div>
-        </div>
-        </ScrollArea>
-      </div>
+      {/* Permissions */}
+      <SettingsSection title={t("settings.workspace.permissionsSection")}>
+        <SettingsCard>
+          <SettingsMenuSelectRow
+            label={t("settings.workspace.defaultMode")}
+            description={t("settings.workspace.defaultModeDesc")}
+            value={permissionMode}
+            onValueChange={(v) => handlePermissionModeChange(v as PermissionMode)}
+            options={defaultModeOptions.map((m) => {
+              const option: Record<PermissionMode, { label: string; description: string }> = {
+                'safe': { label: t("mode.explore"), description: t("mode.exploreDesc") },
+                'ask': { label: t("mode.ask"), description: t("mode.askDesc") },
+                'guarded': { label: t("mode.guarded"), description: t("mode.guardedDesc") },
+                'allow-all': { label: t("mode.execute"), description: t("mode.executeDesc") },
+              }
+              return { value: m, ...option[m] }
+            })}
+          />
+        </SettingsCard>
+      </SettingsSection>
+
+      {/* Mode Cycling */}
+      <SettingsSection
+        title={t("settings.workspace.modeCycling")}
+        description={t("settings.workspace.modeCyclingDesc")}
+      >
+        <SettingsCard>
+          {cyclingModeOptions.map((m) => {
+            const modeTranslations: Record<PermissionMode, { label: string; desc: string }> = {
+              'safe': { label: t("mode.explore"), desc: t("mode.exploreFullDesc") },
+              'ask': { label: t("mode.askToEdit"), desc: t("mode.askFullDesc") },
+              'guarded': { label: t("mode.guarded"), desc: t("mode.guardedFullDesc") },
+              'allow-all': { label: t("mode.execute"), desc: t("mode.executeFullDesc") },
+            }
+            const isEnabled = enabledModes.includes(m)
+            return (
+              <SettingsToggle
+                key={m}
+                label={modeTranslations[m].label}
+                description={modeTranslations[m].desc}
+                checked={isEnabled}
+                onCheckedChange={(checked) => handleModeToggle(m, checked)}
+              />
+            )
+          })}
+        </SettingsCard>
+        {/* Appears in place (fade + 4px drop, no height animation) */}
+        <AnimatedCollapsibleContent isOpen={!!modeCyclingError}>
+          <p role="status" className="mt-1 text-label-sm text-destructive">
+            {modeCyclingError}
+          </p>
+        </AnimatedCollapsibleContent>
+      </SettingsSection>
+
+      {/* Default Sources */}
+      <SettingsSection
+        title={t("settings.workspace.defaultSources")}
+        description={t("settings.workspace.defaultSourcesDesc")}
+      >
+        {availableSources.length > 0 ? (
+          <SettingsCard>
+            {availableSources.map((source) => (
+              <SettingsToggle
+                key={source.config.slug}
+                label={
+                  <span className="inline-flex items-center gap-2">
+                    <SourceAvatar source={source} size="xs" />
+                    {source.config.name}
+                  </span>
+                }
+                description={source.config.tagline}
+                checked={enabledSourceSlugs.includes(source.config.slug)}
+                onCheckedChange={(checked) => handleSourceToggle(source.config.slug, checked)}
+              />
+            ))}
+          </SettingsCard>
+        ) : (
+          <p className="text-label text-tertiary">{t("settings.workspace.noSourcesConfigured")}</p>
+        )}
+      </SettingsSection>
+
+      {/* Advanced */}
+      <SettingsSection title={t("settings.workspace.advanced")}>
+        <SettingsCard>
+          <SettingsRow
+            label={t("settings.workspace.defaultWorkingDir")}
+            description={workingDirectory || t("settings.workspace.defaultWorkingDirDesc")}
+            action={
+              <div className="flex items-center gap-2">
+                {workingDirectory && (
+                  <Button variant="ghost" size="md" onClick={handleClearWorkingDirectory}>
+                    {t("common.clear")}
+                  </Button>
+                )}
+                <Button variant="secondary" size="md" onClick={handleChangeWorkingDirectory}>
+                  {t("common.change")}
+                </Button>
+              </div>
+            }
+          />
+          <SettingsToggle
+            label={t("settings.workspace.localMcpServers")}
+            description={t("settings.workspace.localMcpServersDesc")}
+            checked={localMcpEnabled}
+            onCheckedChange={handleLocalMcpEnabledChange}
+          />
+        </SettingsCard>
+      </SettingsSection>
+
       <ServerDirectoryBrowser
         open={showWdBrowser}
         mode={wdBrowserMode}
@@ -559,6 +544,6 @@ export default function WorkspaceSettingsPage() {
         onCancel={cancelWdBrowser}
         initialPath={workingDirectory || undefined}
       />
-    </div>
+    </SettingsPage>
   )
 }

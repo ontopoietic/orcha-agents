@@ -35,6 +35,7 @@ Manage workspace labels stored under `labels/`.
 - `craft-agent label reorder [--parent <id|root>] <ordered-id-1> <ordered-id-2> ...`
 - `craft-agent label auto-rule-list <id>`
 - `craft-agent label auto-rule-add <id> --pattern "<regex>" [--flags "gi"] [--value-template "$1"] [--description "..."]`
+- `craft-agent label auto-rule-add <id> --semantic "<yes/no question>" [--threshold 0.9] [--value "..."] [--description "..."]` (semantic rule; needs the decision model enabled in Settings > AI)
 - `craft-agent label auto-rule-remove <id> --index <n>`
 - `craft-agent label auto-rule-clear <id>`
 - `craft-agent label auto-rule-validate <id>`
@@ -214,6 +215,8 @@ Manage workspace automations stored in `automations.json`.
 | `--prompt "..."` | Prompt text (creates a prompt action automatically) |
 | `--llm-connection "<slug>"` | LLM connection slug for the created session |
 | `--model "<model-id>"` | Model ID for the created session |
+
+Fields without a flag of their own — `conditions`, `semanticCondition` (decision-model yes/no gate) and `telegramTopic` — go in `--json`; the whole config is validated before it is written.
 
 ### Examples
 

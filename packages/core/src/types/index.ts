@@ -48,6 +48,7 @@ export type {
   ErrorCode,
   TypedError,
   PermissionRequest,
+  PermissionRisk,
   AgentEvent,
   // Auth-related types
   CredentialInputMode,
@@ -83,6 +84,7 @@ export type {
   PageActionRequest,
   PageActionResult,
   PageShareInfo,
+  PageClaudeArtifactInfo,
   PageThumbnailInfo,
   PageConfig,
 } from './page.ts';

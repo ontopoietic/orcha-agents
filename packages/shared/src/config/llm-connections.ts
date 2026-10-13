@@ -265,6 +265,28 @@ export function getMiniModel(
 }
 
 /**
+ * Whether a connection is signed in with a claude.ai account (Anthropic OAuth).
+ * claude.ai features such as Claude artifacts need one; an API key has no
+ * claude.ai account behind it.
+ */
+export function isClaudeAccountConnection(connection: Pick<LlmConnection, 'providerType' | 'authType'>): boolean {
+  return connection.providerType === 'anthropic' && connection.authType === 'oauth';
+}
+
+/**
+ * The connection "Publish as Claude artifact" runs on: the default connection
+ * when it is a claude.ai account, else the first one. Shared by the Pages
+ * button (visibility) and the publish handler (execution).
+ */
+export function findClaudeArtifactConnection<T extends Pick<LlmConnection, 'slug' | 'providerType' | 'authType'>>(
+  connections: readonly T[],
+  defaultSlug?: string | null,
+): T | undefined {
+  return connections.find(c => c.slug === defaultSlug && isClaudeAccountConnection(c))
+    ?? connections.find(isClaudeAccountConnection);
+}
+
+/**
  * Get the summarization model ID for a connection.
  * Same provider-aware logic as getMiniModel(), but separate
  * so summarization and mini agent models can diverge independently.
@@ -281,6 +303,7 @@ export function getSummarizationModel(
  * Provider-aware small model resolution.
  * Shared implementation for getMiniModel() and getSummarizationModel().
  *
+ *   - Pi: the best entry of PI_PREFERRED_MINI_MODELS for the auth provider
  *   - Anthropic: find "haiku"
  *   - Pi: find "mini" or "flash"
  *   - Otherwise: last model in the list
@@ -301,6 +324,22 @@ function findSmallModel(
   const isAllowedModel = (m: ModelDefinition | string): boolean =>
     !isDeniedMiniModelId(toId(m), connection.piAuthProvider);
 
+  // Explicit per-provider utility models first (Pi connections)
+  const preferredMini = (isPiProvider(connection.providerType) && connection.piAuthProvider
+    && PI_PREFERRED_MINI_MODELS[connection.piAuthProvider]) || [];
+  if (preferredMini.length > 0) {
+    let best: ModelDefinition | string | undefined;
+    let bestRank = Infinity;
+    for (const m of connection.models) {
+      const rank = preferredModelRank(toId(m), preferredMini);
+      if (rank >= 0 && rank < bestRank && isAllowedModel(m)) {
+        best = m;
+        bestRank = rank;
+      }
+    }
+    if (best) return toId(best);
+  }
+
   // Provider-aware keyword search
   const keywords: string[] = [];
 
@@ -314,11 +353,10 @@ function findSmallModel(
   }
 
   if (keywords.length > 0) {
-    const match = connection.models.find(m => {
-      if (!isAllowedModel(m)) return false;
-      const searchStr = toSearchStr(m);
-      return keywords.some(k => searchStr.includes(k));
-    });
+    // Whole tokens only: a substring match made every Gemini model "mini" (ge-mini).
+    const hasKeyword = (searchStr: string) =>
+      keywords.some(k => new RegExp(`(^|[^a-z])${k}([^a-z]|$)`).test(searchStr));
+    const match = connection.models.find(m => isAllowedModel(m) && hasKeyword(toSearchStr(m)));
     if (match) {
       return toId(match);
     }
@@ -612,11 +650,12 @@ export const PI_PREFERRED_DEFAULTS: Record<string, string[]> = {
   // when Opus 4.6 is deprecated.
   // Opus 5.5 (in the Pi catalog since SDK 0.87.1) is the default for new
   // connections, matching the Claude Agent SDK path; older Opus generations follow.
-  anthropic: ['claude-opus-5-5', 'claude-opus-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-fable-5-1', 'claude-fable-5', 'claude-sonnet-5', 'claude-sonnet-4-6', 'claude-haiku-4-5'],
+  anthropic: ['claude-opus-5-5', 'claude-opus-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-fable-5-1', 'claude-fable-5', 'claude-sonnet-5-5', 'claude-sonnet-5', 'claude-sonnet-4-6', 'claude-haiku-5-5', 'claude-haiku-4-5'],
   // GPT-6 Astra entered the Pi catalog in SDK 0.85.1 for both the API-key and
   // the ChatGPT-account (openai-codex) flows; new connections default to it.
-  openai: ['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.2', 'gpt-5.1', 'gpt-5', 'o4-mini', 'o3', 'gpt-4o'],
-  'openai-codex': ['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.2', 'gpt-5.1', 'gpt-5', 'o4-mini', 'o3', 'gpt-4o'],
+  // GPT-6.1 Sol (Pi 0.99.1) follows it.
+  openai: ['gpt-6-astra', 'gpt-6.1-sol', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.2', 'gpt-5.1', 'gpt-5', 'o4-mini', 'o3', 'gpt-4o'],
+  'openai-codex': ['gpt-6-astra', 'gpt-6.1-sol', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.2', 'gpt-5.1', 'gpt-5', 'o4-mini', 'o3', 'gpt-4o'],
   // Stable models first so the connection-setup test (which uses
   // getDefaultModelForConnection) lands on a reliable model.
   // gemini-3-pro-preview and gemini-3.1-pro-preview are intermittently
@@ -626,14 +665,54 @@ export const PI_PREFERRED_DEFAULTS: Record<string, string[]> = {
   // Pi 0.86.0 replaced the retired `deepseek-v4-flash` alias (and the experimental
   // vision variant) with `deepseek-flash`; stored ids migrate via DEPRECATED_MODEL_REPLACEMENTS.
   deepseek: ['deepseek-v4-pro', 'deepseek-flash'],
-  // Kimi has no mini/flash-named model, so findSmallModel falls back to the
-  // last entry of the connection's model list; keep the cheaper K2.6 second
-  // so 3-tier setups get a sensible summarizer default.
+  // K2.6 is also the utility model (PI_PREFERRED_MINI_MODELS).
   moonshotai: ['kimi-k3', 'kimi-k2.6'],
   'moonshotai-cn': ['kimi-k3', 'kimi-k2.6'],
   'github-copilot': ['claude-sonnet-4-6', 'gpt-5', 'o4-mini', 'claude-haiku-4-5'],
-  'amazon-bedrock': ['claude-opus-5-5', 'claude-opus-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-5', 'claude-sonnet-4-6', 'claude-haiku-4-5'],
+  'amazon-bedrock': ['claude-opus-5-5', 'claude-opus-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-5-5', 'claude-sonnet-5', 'claude-sonnet-4-6', 'claude-haiku-5-5', 'claude-haiku-4-5'],
+  // Cloudflare AI Gateway proxies Anthropic, OpenAI and Workers AI; Claude first.
+  'cloudflare-ai-gateway': ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-fable-5-1', 'gpt-6-astra', 'gpt-6.1-sol', 'claude-haiku-4-5'],
 };
+
+/**
+ * Utility (mini) models per Pi auth provider, best first, for titles, summaries
+ * and `call_llm`. Consulted before findSmallModel's keyword search: tier names
+ * such as OpenAI's "luna" carry no "mini"/"flash", and the keyword-less fallback
+ * (the last model in the list) lands on whatever the catalog appended last —
+ * `gpt-6.1-sol` ($2/$10 per M tokens) for ChatGPT accounts after Pi 1.1.0, where
+ * `gpt-6-luna` costs $0.10/$0.50. Same id format and matching as
+ * PI_PREFERRED_DEFAULTS. A model the account cannot use is retried against other
+ * candidates by the subprocess (`pi-agent-server/src/mini-model-query.ts`).
+ */
+export const PI_PREFERRED_MINI_MODELS: Record<string, string[]> = {
+  openai: ['gpt-6-luna', 'gpt-5.6-luna', 'gpt-5.4-nano', 'gpt-5.4-mini'],
+  'openai-codex': ['gpt-6-luna', 'gpt-5.6-luna'],
+  anthropic: ['claude-haiku-5-5', 'claude-haiku-4-5'],
+  'amazon-bedrock': ['claude-haiku-5-5', 'claude-haiku-4-5'],
+  moonshotai: ['kimi-k2.6'],
+  'moonshotai-cn': ['kimi-k2.6'],
+  'cloudflare-ai-gateway': ['claude-haiku-4-5', 'gpt-6-luna', 'gpt-5.6-luna'],
+};
+
+/**
+ * Index of a model id in a preferred list (bare ids, `pi/` optional, `{id}-*`
+ * snapshots and Bedrock inference profiles match their bare id), or -1.
+ */
+export function preferredModelRank(id: string, preferred: readonly string[]): number {
+  const bare = id.startsWith('pi/') ? id.slice(3) : id
+  // Deprecated IDs normalize to their replacement for stored-config migration.
+  // Rank them as unranked: fromBedrockNativeId() applies the same normalization,
+  // and letting a retired snapshot (e.g. claude-opus-4-5-20251101) inherit its
+  // replacement's rank made the stable sort pick it as the connection default.
+  if (normalizeDeprecatedModelId(bare) !== bare) return -1
+  const matchIndex = (candidate: string): number =>
+    preferred.findIndex(p => candidate === p || candidate.startsWith(`${p}-`))
+  const direct = matchIndex(bare)
+  if (direct >= 0) return direct
+  // Bedrock: reverse-map the native inference-profile ID to bare, then match
+  const reversed = fromBedrockNativeId(bare)
+  return reversed !== bare ? matchIndex(reversed) : -1
+}
 
 export function getDefaultModelsForConnection(providerType: LlmProviderType, piAuthProvider?: string): Array<ModelDefinition | string> {
   if (providerType === 'pi') {
@@ -644,28 +723,12 @@ export function getDefaultModelsForConnection(providerType: LlmProviderType, piA
     // comparison and reverse Bedrock ID mapping.
     const preferred = (piAuthProvider && PI_PREFERRED_DEFAULTS[piAuthProvider]) || [];
     if (preferred.length > 0) {
-      // Rank of a catalog entry among the preferred defaults. Unranked entries
-      // sort after every preferred model, keeping the SDK's catalog order.
-      const UNRANKED = preferred.length
-      const matchIndex = (candidate: string): number =>
-        preferred.findIndex(p => candidate === p || candidate.startsWith(`${p}-`))
-      const preferredRank = (id: string): number => {
-        const bare = id.startsWith('pi/') ? id.slice(3) : id
-        // Deprecated IDs normalize to their replacement for stored-config
-        // migration. Rank them explicitly as unranked: fromBedrockNativeId()
-        // below applies the same normalization, and letting a retired snapshot
-        // (e.g. claude-opus-4-5-20251101) inherit its replacement's rank made
-        // the stable sort pick it as the connection default.
-        if (normalizeDeprecatedModelId(bare) !== bare) return UNRANKED
-        // Direct match (non-Bedrock providers)
-        const direct = matchIndex(bare)
-        if (direct >= 0) return direct
-        // Bedrock: reverse-map the native inference-profile ID to bare, then match
-        const reversed = fromBedrockNativeId(bare)
-        const viaBedrock = reversed !== bare ? matchIndex(reversed) : -1
-        return viaBedrock >= 0 ? viaBedrock : UNRANKED
+      // Unranked entries sort after every preferred model, keeping the SDK's catalog order.
+      const rank = (id: string): number => {
+        const r = preferredModelRank(id, preferred)
+        return r < 0 ? preferred.length : r
       }
-      models.sort((a, b) => preferredRank(a.id) - preferredRank(b.id));
+      models.sort((a, b) => rank(a.id) - rank(b.id));
     }
     return models;
   }
@@ -777,7 +840,9 @@ const BEDROCK_MODEL_MAP: Record<string, string> = {
   'claude-opus-4-7': 'us.anthropic.claude-opus-4-7',
   'claude-fable-5-1': 'us.anthropic.claude-fable-5-1',
   'claude-fable-5': 'us.anthropic.claude-fable-5',
+  'claude-sonnet-5-5': 'us.anthropic.claude-sonnet-5-5',
   'claude-sonnet-5': 'us.anthropic.claude-sonnet-5',
+  'claude-haiku-5-5': 'us.anthropic.claude-haiku-5-5',
   'claude-sonnet-4-6': 'us.anthropic.claude-sonnet-4-6',
   'claude-haiku-4-5-20251001': 'us.anthropic.claude-haiku-4-5-20251001-v1:0',
   // Older models (for migration of existing connections)
@@ -792,7 +857,9 @@ const BEDROCK_MODEL_MAP: Record<string, string> = {
   'anthropic.claude-opus-4-6-v1': 'us.anthropic.claude-opus-4-6-v1',
   'anthropic.claude-fable-5-1': 'us.anthropic.claude-fable-5-1',
   'anthropic.claude-fable-5': 'us.anthropic.claude-fable-5',
+  'anthropic.claude-sonnet-5-5': 'us.anthropic.claude-sonnet-5-5',
   'anthropic.claude-sonnet-5': 'us.anthropic.claude-sonnet-5',
+  'anthropic.claude-haiku-5-5': 'us.anthropic.claude-haiku-5-5',
   'anthropic.claude-sonnet-4-6': 'us.anthropic.claude-sonnet-4-6',
   'anthropic.claude-haiku-4-5-20251001-v1:0': 'us.anthropic.claude-haiku-4-5-20251001-v1:0',
   'anthropic.claude-opus-4-5-20251101-v1:0': 'us.anthropic.claude-opus-4-5-20251101-v1:0',
@@ -809,7 +876,9 @@ const BEDROCK_REVERSE_MAP: Record<string, string> = {
   'us.anthropic.claude-fable-5': 'claude-fable-5',
   'us.anthropic.claude-opus-4-7': 'claude-opus-4-7',
   'us.anthropic.claude-opus-4-7-v1': 'claude-opus-4-7',
+  'us.anthropic.claude-sonnet-5-5': 'claude-sonnet-5-5',
   'us.anthropic.claude-sonnet-5': 'claude-sonnet-5',
+  'us.anthropic.claude-haiku-5-5': 'claude-haiku-5-5',
   'us.anthropic.claude-sonnet-4-6': 'claude-sonnet-4-6',
   'us.anthropic.claude-haiku-4-5-20251001-v1:0': 'claude-haiku-4-5-20251001',
   'us.anthropic.claude-opus-4-6-v1': 'claude-opus-4-6',
@@ -823,7 +892,9 @@ const BEDROCK_REVERSE_MAP: Record<string, string> = {
   'eu.anthropic.claude-fable-5': 'claude-fable-5',
   'eu.anthropic.claude-opus-4-7': 'claude-opus-4-7',
   'eu.anthropic.claude-opus-4-7-v1': 'claude-opus-4-7',
+  'eu.anthropic.claude-sonnet-5-5': 'claude-sonnet-5-5',
   'eu.anthropic.claude-sonnet-5': 'claude-sonnet-5',
+  'eu.anthropic.claude-haiku-5-5': 'claude-haiku-5-5',
   'eu.anthropic.claude-sonnet-4-6': 'claude-sonnet-4-6',
   'eu.anthropic.claude-haiku-4-5-20251001-v1:0': 'claude-haiku-4-5-20251001',
   'eu.anthropic.claude-opus-4-6-v1': 'claude-opus-4-6',
@@ -837,7 +908,9 @@ const BEDROCK_REVERSE_MAP: Record<string, string> = {
   'global.anthropic.claude-fable-5': 'claude-fable-5',
   'global.anthropic.claude-opus-4-7': 'claude-opus-4-7',
   'global.anthropic.claude-opus-4-7-v1': 'claude-opus-4-7',
+  'global.anthropic.claude-sonnet-5-5': 'claude-sonnet-5-5',
   'global.anthropic.claude-sonnet-5': 'claude-sonnet-5',
+  'global.anthropic.claude-haiku-5-5': 'claude-haiku-5-5',
   'global.anthropic.claude-sonnet-4-6': 'claude-sonnet-4-6',
   'global.anthropic.claude-haiku-4-5-20251001-v1:0': 'claude-haiku-4-5-20251001',
   'global.anthropic.claude-opus-4-6-v1': 'claude-opus-4-6',
@@ -849,7 +922,9 @@ const BEDROCK_REVERSE_MAP: Record<string, string> = {
   'anthropic.claude-fable-5': 'claude-fable-5',
   'anthropic.claude-opus-4-7': 'claude-opus-4-7',
   'anthropic.claude-opus-4-7-v1': 'claude-opus-4-7',
+  'anthropic.claude-sonnet-5-5': 'claude-sonnet-5-5',
   'anthropic.claude-sonnet-5': 'claude-sonnet-5',
+  'anthropic.claude-haiku-5-5': 'claude-haiku-5-5',
   'anthropic.claude-sonnet-4-6': 'claude-sonnet-4-6',
   'anthropic.claude-haiku-4-5-20251001-v1:0': 'claude-haiku-4-5-20251001',
   'anthropic.claude-opus-4-6-v1': 'claude-opus-4-6',

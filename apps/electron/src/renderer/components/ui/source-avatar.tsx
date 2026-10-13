@@ -11,6 +11,7 @@
 
 import * as React from 'react'
 import { Globe, HardDrive, Mail, Plug } from 'lucide-react'
+import { cn } from '@/lib/utils'
 import { EntityIcon, type IconComponent } from '@/components/ui/entity-icon'
 import { useEntityIcon, logoUrlCache } from '@/lib/icon-cache'
 import { McpIcon } from '@/components/icons/McpIcon'
@@ -55,6 +56,17 @@ const SOURCE_FALLBACKS: Record<string, IconComponent> = {
 export function getSourceFallbackIcon(type: SourceType): IconComponent {
   return SOURCE_FALLBACKS[type] ?? Plug
 }
+
+// ============================================================================
+// Brand tile
+// ============================================================================
+
+/**
+ * Brand marks sit on a tile with a hairline ring (design spec §7.11) so dark brand colors
+ * (GitHub #24292f) stay visible on dark surfaces. --border-strong is a 16% foreground hairline:
+ * light on dark surfaces, dark on light ones.
+ */
+const BRAND_TILE_CLASS = 'rounded-xs ring-1 ring-[var(--border-strong)]'
 
 // ============================================================================
 // Status Indicator Size Mapping
@@ -167,7 +179,7 @@ export function SourceAvatar({ source, size = 'md', fluid, showStatus, className
       size={size}
       fallbackIcon={FallbackIcon}
       alt={source.config.name}
-      className={className}
+      className={cn(BRAND_TILE_CLASS, className)}
       containerClassName={fluid ? 'h-full w-full' : undefined}
     />
   )

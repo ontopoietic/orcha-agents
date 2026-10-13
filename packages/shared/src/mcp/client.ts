@@ -6,8 +6,17 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import type { RequestOptions } from '@modelcontextprotocol/sdk/shared/protocol.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
-import type { Tool } from '@modelcontextprotocol/sdk/types.js';
+import type {
+  GetPromptResult,
+  ListPromptsResult,
+  ListResourcesResult,
+  ListResourceTemplatesResult,
+  ReadResourceResult,
+  ServerCapabilities,
+  Tool,
+} from '@modelcontextprotocol/sdk/types.js';
 
 /**
  * HTTP transport config for remote MCP servers
@@ -60,28 +69,54 @@ const BLOCKED_ENV_VARS = [
 ];
 
 /**
- * Per-call options for PoolClient.callTool.
+ * Per-request options for PoolClient calls.
  * Forwarded to the MCP SDK's RequestOptions so aborts become protocol-level
  * cancellation notifications instead of orphaned in-flight requests.
  */
-export interface PoolCallToolOptions {
+export interface PoolRequestOptions {
   /** Cancels the in-flight request when aborted */
   signal?: AbortSignal;
   /** Request timeout in ms (SDK default applies when omitted) */
   timeoutMs?: number;
 }
 
+/** Per-call options for PoolClient.callTool. */
+export interface PoolCallToolOptions extends PoolRequestOptions {
+  /** The agent's stated intent: steers large-result handling; API tools also receive it as `_intent`. */
+  intent?: string;
+}
+
+function toRequestOptions(options?: PoolRequestOptions): RequestOptions {
+  return {
+    ...(options?.signal ? { signal: options.signal } : {}),
+    ...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
+  };
+}
+
 /**
  * Interface for clients managed by McpClientPool.
  * Both CraftMcpClient (remote MCP sources) and ApiSourcePoolClient (API sources) implement this.
+ *
+ * The optional members expose what an MCP server offers beyond tools (resources,
+ * prompts, its instructions). Only CraftMcpClient implements them; API sources are
+ * tools-only, and the pool reports that instead of calling them.
  */
 export interface PoolClient {
   listTools(): Promise<Tool[]>;
   callTool(name: string, args: Record<string, unknown>, options?: PoolCallToolOptions): Promise<unknown>;
   close(): Promise<void>;
+  /** Capabilities from the initialize handshake (available once connected) */
+  getServerCapabilities?(): ServerCapabilities | undefined;
+  /** The server's `instructions` from the initialize handshake, if it sent any */
+  getInstructions?(): string | undefined;
+  listResources?(cursor?: string, options?: PoolRequestOptions): Promise<ListResourcesResult>;
+  listResourceTemplates?(cursor?: string, options?: PoolRequestOptions): Promise<ListResourceTemplatesResult>;
+  readResource?(uri: string, options?: PoolRequestOptions): Promise<ReadResourceResult>;
+  listPrompts?(cursor?: string, options?: PoolRequestOptions): Promise<ListPromptsResult>;
+  getPrompt?(name: string, args?: Record<string, string>, options?: PoolRequestOptions): Promise<GetPromptResult>;
 }
 
-export class CraftMcpClient {
+export class CraftMcpClient implements PoolClient {
   private client: Client;
   private transport: Transport;
   private connected = false;
@@ -162,11 +197,41 @@ export class CraftMcpClient {
       await this.connect();
     }
 
-    const result = await this.client.callTool({ name, arguments: args }, undefined, {
-      ...(options?.signal ? { signal: options.signal } : {}),
-      ...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
-    });
+    const result = await this.client.callTool({ name, arguments: args }, undefined, toRequestOptions(options));
     return result;
+  }
+
+  getServerCapabilities(): ServerCapabilities | undefined {
+    return this.client.getServerCapabilities();
+  }
+
+  getInstructions(): string | undefined {
+    return this.client.getInstructions();
+  }
+
+  async listResources(cursor?: string, options?: PoolRequestOptions): Promise<ListResourcesResult> {
+    if (!this.connected) await this.connect();
+    return this.client.listResources(cursor ? { cursor } : undefined, toRequestOptions(options));
+  }
+
+  async listResourceTemplates(cursor?: string, options?: PoolRequestOptions): Promise<ListResourceTemplatesResult> {
+    if (!this.connected) await this.connect();
+    return this.client.listResourceTemplates(cursor ? { cursor } : undefined, toRequestOptions(options));
+  }
+
+  async readResource(uri: string, options?: PoolRequestOptions): Promise<ReadResourceResult> {
+    if (!this.connected) await this.connect();
+    return this.client.readResource({ uri }, toRequestOptions(options));
+  }
+
+  async listPrompts(cursor?: string, options?: PoolRequestOptions): Promise<ListPromptsResult> {
+    if (!this.connected) await this.connect();
+    return this.client.listPrompts(cursor ? { cursor } : undefined, toRequestOptions(options));
+  }
+
+  async getPrompt(name: string, args?: Record<string, string>, options?: PoolRequestOptions): Promise<GetPromptResult> {
+    if (!this.connected) await this.connect();
+    return this.client.getPrompt({ name, ...(args ? { arguments: args } : {}) }, toRequestOptions(options));
   }
 
   async close(): Promise<void> {

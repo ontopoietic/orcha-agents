@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, mock, spyOn } from 'bun:test'
 import { ClaudeAgent } from '../claude-agent.ts'
-import { classifyClaudeTaskNotification } from '../backend/claude/task-notification.ts'
+import { classifyClaudeTaskNotification, classifyClaudeTaskProgress } from '../backend/claude/task-notification.ts'
 
 interface BackgroundRouterHarness {
   onBackgroundEvent?: (event: unknown) => void
@@ -41,12 +41,24 @@ describe('Claude between-turn background message routing', () => {
     expect(onBackgroundEvent).toHaveBeenCalledWith({
       type: 'task_completed',
       taskId: 'agent-123',
+      launchedHere: false,
       status: 'failed',
       outputFile: '/tmp/output.txt',
       summary: 'failed cleanly',
     })
     expect(warnSpy).not.toHaveBeenCalled()
     expect(debug).not.toHaveBeenCalled()
+  })
+
+  it('marks a completion as launchedHere when its tool call was the agent\'s own', () => {
+    const { agent, onBackgroundEvent } = createHarness()
+    ;(agent as unknown as { eventAdapter: { wasLaunchedByMainAgent: (taskId: string, toolUseId?: string) => boolean } }).eventAdapter = {
+      wasLaunchedByMainAgent: (_taskId, toolUseId) => toolUseId === 'toolu_own',
+    }
+
+    agent.routeBackgroundMessage({ type: 'system', subtype: 'task_notification', task_id: 'b1', tool_use_id: 'toolu_own', status: 'completed', output_file: '/tmp/b1' })
+
+    expect(onBackgroundEvent).toHaveBeenCalledWith(expect.objectContaining({ taskId: 'b1', toolUseId: 'toolu_own', launchedHere: true }))
   })
 
   it('warns only when a task notification is missing its task id', () => {
@@ -102,5 +114,26 @@ describe('Claude between-turn background message routing', () => {
         status: 'completed',
       },
     })
+  })
+
+  it('forwards the activity of the session\'s own tasks between turns, and nothing for others', () => {
+    const { agent, onBackgroundEvent, debug } = createHarness()
+    ;(agent as unknown as { eventAdapter: { wasLaunchedByMainAgent: (taskId: string, toolUseId?: string) => boolean } }).eventAdapter = {
+      wasLaunchedByMainAgent: (taskId) => taskId === 'a1',
+    }
+
+    agent.routeBackgroundMessage({ type: 'system', subtype: 'task_progress', task_id: 'a1', description: 'Review', summary: ' Checking callers ', usage: { total_tokens: 5, tool_uses: 3, duration_ms: 10 } })
+    agent.routeBackgroundMessage({ type: 'system', subtype: 'task_progress', task_id: 'other', description: 'x', usage: { total_tokens: 1, tool_uses: 1, duration_ms: 1 } })
+
+    expect(onBackgroundEvent).toHaveBeenCalledTimes(1)
+    expect(onBackgroundEvent).toHaveBeenCalledWith({ type: 'task_activity', taskId: 'a1', summary: 'Checking callers', toolUses: 3 })
+    expect(debug).not.toHaveBeenCalled()
+  })
+
+  it('reads task progress fields defensively', () => {
+    expect(classifyClaudeTaskProgress({ type: 'system', subtype: 'task_progress', task_id: '' })).toBeNull()
+    expect(classifyClaudeTaskProgress({ type: 'system', subtype: 'task_notification', task_id: 'a' })).toBeNull()
+    expect(classifyClaudeTaskProgress({ type: 'system', subtype: 'task_progress', task_id: 'a', summary: '  ', usage: { tool_uses: 'many' } }))
+      .toEqual({ taskId: 'a' })
   })
 })

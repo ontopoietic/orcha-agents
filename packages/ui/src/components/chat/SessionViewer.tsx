@@ -227,7 +227,7 @@ export function SessionViewer({
 
             {/* Bottom branding */}
             <div className={CHAT_CLASSES.brandingContainer}>
-              <CraftAgentLogo className="w-8 h-8 text-[#9570BE]/40" />
+              <CraftAgentLogo className="size-8 text-accent/40" />
             </div>
             </div>
           </div>

@@ -4,18 +4,31 @@ import { useTranslation } from 'react-i18next'
 import {
   DndContext,
   DragOverlay,
-  closestCorners,
   useSensor,
   useSensors,
   type DragEndEvent,
   type DragStartEvent,
 } from '@dnd-kit/core'
+import {
+  FLIP_ANIMATION_ID,
+  SPRING,
+  cancelFlip,
+  playFlip,
+  prefersReducedMotion,
+  snapshotRects,
+  springTiming,
+  type FlipSnapshot,
+} from '@craft-agent/ui/motion'
 import type { KanbanColumnDef } from '@craft-agent/shared/projects/types'
 import { SmartPointerSensor } from '@/components/ui/sortable-list'
+import { IconButton } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 import type { ProjectColorTreatment } from '@/utils/project-colors'
 import type { SessionStatus } from '@/config/session-status-config'
 import { useKanbanColumnColors, makeColumnColor } from '@/hooks/useKanbanColumnColors'
 import { KanbanColumn } from './KanbanColumn'
+import { KANBAN_COLUMNS } from './status-column'
+import { boardCollisionDetection } from './board-collision'
 import { TaskTile } from './TaskTile'
 import type {
   KanbanColumnId,
@@ -66,12 +79,71 @@ interface KanbanBoardProps {
   onAddColumn?: () => void
 }
 
+/** Newest tiles first within each column (a freshly created task lands on top). */
+const taskRecency = (task: KanbanTask) => task.createdAt ?? task.lastMessageAt ?? 0
+
+const BUILT_IN_COLUMN_IDS: ReadonlySet<string> = new Set(KANBAN_COLUMNS.map(c => c.id))
+
+/** Tilt of the lifted card (≤ 2°, spec §6.3). CSS scales it by --motion-scale, so 0 under reduced motion. */
+const DRAG_TILT_DEG = 1.5
+
+/** Rects captured at drop time; played once the board has re-rendered the tiles in place. */
+interface PendingSettle {
+  taskId: string
+  /** Where the lifted card was released (the overlay clone's box). */
+  released: DOMRect
+  /** Every tile's position before the drop commit, for the neighbour glide. */
+  tiles: FlipSnapshot
+}
+
+/**
+ * The dropped card settles from where it was released into its slot on the gesture spring
+ * (keeps the release feel; spec §6.3), shedding the drag tilt on the way. Transform only.
+ */
+function settleDroppedTile(el: HTMLElement, released: DOMRect): Animation | null {
+  if (prefersReducedMotion()) return null
+  const slot = el.getBoundingClientRect()
+  // Centers, so the tilted overlay box (slightly larger than the card) lines up.
+  const dx = released.left + released.width / 2 - (slot.left + slot.width / 2)
+  const dy = released.top + released.height / 2 - (slot.top + slot.height / 2)
+  if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) return null
+  const { easing, duration } = springTiming(SPRING.gesture)
+  const animation = el.animate(
+    [{ transform: `translate(${dx}px, ${dy}px) rotate(${DRAG_TILT_DEG}deg)` }, { transform: 'none' }],
+    { duration, easing },
+  )
+  animation.id = FLIP_ANIMATION_ID
+  return animation
+}
+
+/**
+ * While cards glide, let short columns paint their overflow: a card on its way in is then neither
+ * clipped by the column's scroll box nor flashes a scrollbar. Columns that actually scroll keep
+ * clipping (their content is clipped anyway). Returns an undo for the inline styles it set.
+ */
+function liftForSettle(board: HTMLElement, dropped: HTMLElement | undefined): () => void {
+  const bodies = Array.from(board.querySelectorAll<HTMLElement>('[data-kanban-scroll]')).filter(
+    body => body.scrollTop === 0 && body.scrollHeight <= body.clientHeight + 1,
+  )
+  for (const body of bodies) body.style.overflowY = 'visible'
+  // The settling card passes over its neighbours (and other columns) on the way to its slot.
+  if (dropped) dropped.style.zIndex = 'var(--z-local)'
+  return () => {
+    for (const body of bodies) body.style.removeProperty('overflow-y')
+    dropped?.style.removeProperty('z-index')
+  }
+}
+
 /**
  * The board. Renders the supplied `columns` and buckets tiles strictly by
  * `task.column` (placement is independent from the status badge); a tile whose
  * column id matches none of the active columns falls back to the first column.
- * The "New Task" composer lives at the top of the first column — creating a
- * parent session drops a named tile there.
+ * The "New Task" composer lives at the top of the first column (opened from its
+ * header "+") — creating a parent session drops a named tile there.
+ *
+ * Drag (spec §6.3): the lifted clone follows the pointer 1:1 on elev-3 with a small tilt; a 4px
+ * accent bar marks where the card will land; on drop the card settles on the gesture spring and
+ * its neighbours glide on `base`. The dnd logic itself (sensors, collision, onMoveTask) is unchanged.
  */
 export function KanbanBoard({
   columns,
@@ -111,9 +183,7 @@ export function KanbanBoard({
       if (target === undefined) continue
       buckets.get(target)!.push(task)
     }
-    // Newest tiles first within each column (a freshly created task lands on top).
-    const recency = (t: KanbanTask) => t.createdAt ?? t.lastMessageAt ?? 0
-    for (const list of buckets.values()) list.sort((a, b) => recency(b) - recency(a))
+    for (const list of buckets.values()) list.sort((a, b) => taskRecency(b) - taskRecency(a))
     return buckets
   }, [tasks, columns, firstColumnId])
 
@@ -126,6 +196,78 @@ export function KanbanBoard({
 
   const activeTask = activeId ? tasks.find(t => t.id === activeId) ?? null : null
 
+  // Where the dragged card would land in each column it doesn't already sit in: its recency slot
+  // (the same ordering tasksByColumn applies), so the drop bar shows the real destination.
+  const dropIndexByColumn = React.useMemo(() => {
+    if (!activeTask) return null
+    const recency = taskRecency(activeTask)
+    const map = new Map<KanbanColumnId, number>()
+    for (const [columnId, list] of tasksByColumn) {
+      if (list.some(task => task.id === activeTask.id)) continue
+      map.set(columnId, list.filter(task => taskRecency(task) > recency).length)
+    }
+    return map
+  }, [activeTask, tasksByColumn])
+
+  // ---- drop motion (visual only): settle the dropped card, glide its neighbours ----
+  const boardRef = React.useRef<HTMLDivElement>(null)
+  const overlayRef = React.useRef<HTMLDivElement>(null)
+  const pendingSettleRef = React.useRef<PendingSettle | null>(null)
+  /** Undo for the running settle's inline styles; a newer drop runs it before starting its own. */
+  const undoLiftRef = React.useRef<(() => void) | null>(null)
+
+  const tileElements = React.useCallback(
+    () => Array.from(boardRef.current?.querySelectorAll<HTMLElement>('[data-kanban-tile]') ?? []),
+    [],
+  )
+
+  /** Measure before the drop commits: the release box and every tile's current position. */
+  const captureSettle = React.useCallback(
+    (taskId: string) => {
+      const overlay = overlayRef.current
+      if (!overlay) return
+      const tiles = tileElements()
+      // An interrupted glide keeps its visual position: snapshot while its in-flight transform still
+      // applies, then cancel it, so the next glide starts where the tile is on screen.
+      const rects = snapshotRects(tiles)
+      cancelFlip(tiles)
+      pendingSettleRef.current = { taskId, released: overlay.getBoundingClientRect(), tiles: rects }
+    },
+    [tileElements],
+  )
+
+  // After the commit that ends the drag (overlay gone, tile re-rendered in its column), before paint.
+  React.useLayoutEffect(() => {
+    const pending = pendingSettleRef.current
+    const board = boardRef.current
+    if (!pending || activeId !== null || !board) return
+    pendingSettleRef.current = null
+    undoLiftRef.current?.()
+    undoLiftRef.current = null
+    const tiles = tileElements()
+    const dropped = tiles.find(el => el.dataset.kanbanTile === pending.taskId)
+    // Measure which columns scroll before any transform starts (transforms add scrollable overflow).
+    const undoLift = liftForSettle(board, dropped)
+    const animations = playFlip(
+      pending.tiles,
+      tiles.filter(el => el !== dropped).map(el => ({ el })),
+      { spring: SPRING.base },
+    )
+    const settle = dropped ? settleDroppedTile(dropped, pending.released) : null
+    if (settle) animations.push(settle)
+    if (animations.length === 0) {
+      undoLift()
+      return
+    }
+    undoLiftRef.current = undoLift
+    // Finished or cancelled (a newer drop cancels the glide first): restore, unless superseded.
+    void Promise.allSettled(animations.map(animation => animation.finished)).then(() => {
+      if (undoLiftRef.current !== undoLift) return
+      undoLift()
+      undoLiftRef.current = null
+    })
+  })
+
   const handleDragStart = React.useCallback((event: DragStartEvent) => {
     setActiveId(String(event.active.id))
   }, [])
@@ -133,6 +275,7 @@ export function KanbanBoard({
   const handleDragEnd = React.useCallback(
     (event: DragEndEvent) => {
       const { active, over } = event
+      captureSettle(String(active.id))
       setActiveId(null)
       if (!over) return
       const toColumn = over.id as KanbanColumnId
@@ -140,18 +283,31 @@ export function KanbanBoard({
       if (!task || task.column === toColumn) return
       onMoveTask?.(String(active.id), toColumn)
     },
-    [tasks, onMoveTask]
+    [tasks, onMoveTask, captureSettle]
   )
+
+  const handleDragCancel = React.useCallback(() => {
+    if (activeId) captureSettle(activeId)
+    setActiveId(null)
+  }, [activeId, captureSettle])
 
   return (
     <DndContext
       sensors={sensors}
-      collisionDetection={closestCorners}
+      collisionDetection={boardCollisionDetection}
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
-      onDragCancel={() => setActiveId(null)}
+      onDragCancel={handleDragCancel}
     >
-      <div className="flex h-full gap-3 p-3">
+      <div
+        ref={boardRef}
+        className={cn(
+          'flex h-full gap-3 overflow-x-auto px-4 pt-1 pb-4',
+          // Compact shell (spec §7.16): full-width columns stacked vertically, and the board scrolls
+          // instead of each column. Narrow desktop split panels keep the row and scroll sideways.
+          '@max-mobile/shell:flex-col @max-mobile/shell:overflow-x-hidden @max-mobile/shell:overflow-y-auto @max-mobile/shell:px-3'
+        )}
+      >
         {columns.map((column, index) => (
           <KanbanColumn
             key={column.id}
@@ -175,6 +331,8 @@ export function KanbanBoard({
             defaultSubtaskModel={defaultSubtaskModel}
             onCreateTask={index === 0 ? onCreateTask : undefined}
             dropStatusId={column.dropStatusId ?? columnDropStatus?.[column.id]}
+            // Built-in columns are named after statuses (todo · in-progress · done)
+            homeStatusId={column.dropStatusId ?? columnDropStatus?.[column.id] ?? (BUILT_IN_COLUMN_IDS.has(column.id) ? column.id : undefined)}
             onSelectDropStatus={
               onSelectDropStatus ? statusId => onSelectDropStatus(column.id, statusId) : undefined
             }
@@ -182,32 +340,35 @@ export function KanbanBoard({
             onSetColor={onUpdateColumn ? color => onUpdateColumn(column.id, { color }) : undefined}
             // Guard against removing the last column — the board must always keep one.
             onRemove={onRemoveColumn && columns.length > 1 ? () => onRemoveColumn(column.id) : undefined}
+            dropIndicatorIndex={dropIndexByColumn?.get(column.id)}
           />
         ))}
         {onAddColumn && (
-          <button
-            type="button"
+          <IconButton
+            size="lg"
+            icon={<Plus />}
+            aria-label={t('kanban.column.add')}
+            tooltip
             onClick={onAddColumn}
-            title={t('kanban.column.add')}
-            className="flex h-9 w-9 shrink-0 items-center justify-center self-start rounded-lg border border-dashed border-border text-foreground/50 transition-colors hover:border-border/80 hover:bg-foreground/[0.03] hover:text-foreground/80"
-          >
-            <Plus className="h-4 w-4" strokeWidth={2.5} />
-          </button>
+            className="self-start bg-fill-hover hover:bg-fill-pressed"
+          />
         )}
       </div>
 
       {/* position:fixed overlay clone — escapes the column's overflow clipping.
           dropAnimation is disabled: on a cross-column drop the source tile is
-          gone (it re-renders into the target), so a "fly back" would be wrong. */}
+          gone (it re-renders into the target), so a "fly back" would be wrong —
+          the settle runs on the re-rendered tile instead (settleDroppedTile). */}
       <DragOverlay dropAnimation={null} style={{ zIndex: 'var(--z-floating-menu, 400)' }}>
         {activeTask ? (
-          <div className="cursor-grabbing rounded-lg shadow-dragging" style={{ transform: 'scale(1.025)' }}>
+          <div ref={overlayRef} style={{ rotate: `calc(${DRAG_TILT_DEG}deg * var(--motion-scale))` }}>
             <TaskTile
               task={activeTask}
               project={activeTask.projectId ? projectsById.get(activeTask.projectId) : undefined}
               status={statusesById.get(activeTask.statusId)}
               treatment={treatment}
               expanded={expandedTaskIds.has(activeTask.id)}
+              dragOverlay
             />
           </div>
         ) : null}

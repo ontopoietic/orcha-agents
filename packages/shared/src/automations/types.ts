@@ -186,6 +186,18 @@ export interface LogicalCondition {
 /** Union of all condition types */
 export type AutomationCondition = TimeCondition | StateCondition | LogicalCondition;
 
+/**
+ * Yes/no question the decision model answers before a prompt action starts a
+ * session (Settings > AI > Decision model, toggle `automationConditions`). The
+ * run is skipped when the "yes" probability is below `threshold` (default 0.5).
+ * Inert when the decision model is off or unavailable: the automation runs as
+ * it would without the condition.
+ */
+export interface SemanticCondition {
+  question: string;
+  threshold?: number;
+}
+
 // ============================================================================
 // Matcher Definition
 // ============================================================================
@@ -209,6 +221,8 @@ export interface AutomationMatcher {
   enabled?: boolean;
   /** Optional conditions that must all pass (AND) after matcher matches, before actions fire */
   conditions?: AutomationCondition[];
+  /** Optional decision-model condition checked before prompt actions start a session */
+  semanticCondition?: SemanticCondition;
   /**
    * Optional Telegram forum-topic name. When set, sessions spawned by this
    * matcher are bound to a forum topic of this name in the workspace's paired
@@ -324,6 +338,12 @@ export interface PendingPrompt {
   thinkingLevel?: ThinkingLevel;
   /** Forum-topic name to bind the new session to (Telegram supergroup, when paired). */
   telegramTopic?: string;
+  /** Decision-model condition from the matcher, with the event it is judged against. */
+  semanticCondition?: SemanticCondition;
+  /** Event that fired the matcher (for `semanticCondition`). */
+  event?: string;
+  /** Event payload (for `semanticCondition`). */
+  eventPayload?: Record<string, unknown>;
 }
 
 export interface AutomationResult {

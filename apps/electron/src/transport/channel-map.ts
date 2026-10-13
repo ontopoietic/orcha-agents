@@ -26,8 +26,8 @@ export const CHANNEL_MAP = {
   deleteSession: invoke(RPC_CHANNELS.sessions.DELETE),
   sendMessage: invoke(RPC_CHANNELS.sessions.SEND_MESSAGE),
   cancelProcessing: invoke(RPC_CHANNELS.sessions.CANCEL),
-  killShell: invoke(RPC_CHANNELS.sessions.KILL_SHELL),
-  getTaskOutput: invoke(RPC_CHANNELS.tasks.GET_OUTPUT),
+  getBackgroundTaskOutput: invoke(RPC_CHANNELS.sessions.GET_BACKGROUND_TASK_OUTPUT),
+  stopBackgroundTask: invoke(RPC_CHANNELS.sessions.STOP_BACKGROUND_TASK),
 
   // Tasks (Conductor)
   validateTask: invoke(RPC_CHANNELS.tasks.VALIDATE),
@@ -324,6 +324,16 @@ export const CHANNEL_MAP = {
   getRtkStatus: invoke(RPC_CHANNELS.rtk.GET_STATUS),
   getRtkGain: invoke(RPC_CHANNELS.rtk.GET_GAIN),
 
+  // Decision model (Jev)
+  getDecisionLayerSettings: invoke(RPC_CHANNELS.decisions.GET_SETTINGS),
+  setDecisionLayerSettings: invoke(RPC_CHANNELS.decisions.SET_SETTINGS),
+  getDecisionLayerStatus: invoke(RPC_CHANNELS.decisions.GET_STATUS),
+  setDecisionApiKey: invoke(RPC_CHANNELS.decisions.SET_API_KEY),
+  deleteDecisionApiKey: invoke(RPC_CHANNELS.decisions.DELETE_API_KEY),
+  testDecisionConnection: invoke(RPC_CHANNELS.decisions.TEST),
+  probeDecisionServer: invoke(RPC_CHANNELS.decisions.PROBE_SERVER),
+  getDecisionUsage: invoke(RPC_CHANNELS.decisions.GET_USAGE),
+
   // Badge
   refreshBadge: invoke(RPC_CHANNELS.badge.REFRESH),
   setDockIconWithBadge: invoke(RPC_CHANNELS.badge.SET_ICON),
@@ -415,6 +425,7 @@ export const CHANNEL_MAP = {
   publishPage: invoke(RPC_CHANNELS.pages.PUBLISH),
   setPagePublicationPassword: invoke(RPC_CHANNELS.pages.SET_PUBLICATION_PASSWORD),
   unpublishPage: invoke(RPC_CHANNELS.pages.UNPUBLISH),
+  publishPageAsClaudeArtifact: invoke(RPC_CHANNELS.pages.PUBLISH_CLAUDE_ARTIFACT),
   getPageThumbnail: invoke(RPC_CHANNELS.pages.GET_THUMBNAIL),
   regeneratePageThumbnail: invoke(RPC_CHANNELS.pages.REGENERATE_THUMBNAIL),
   onPagesChanged: listener(RPC_CHANNELS.pages.CHANGED),

@@ -1,14 +1,15 @@
 import * as React from 'react'
-import { Check, ChevronDown, ChevronRight, Clock, Flag, MessageSquare, Pencil, Play, Plus } from 'lucide-react'
+import { Check, ChevronDown, ChevronRight, Flag, MessageSquare, Pencil, Play, Plus } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useAtomValue } from 'jotai'
 import { formatDistanceToNowStrict, type Locale } from 'date-fns'
+import { AnimatedCollapsibleContent, Spinner } from '@craft-agent/ui'
 import { DEFAULT_MODEL, getModelShortName } from '@config/models'
 import { cn } from '@/lib/utils'
 import { getProviderIcon } from '@/lib/provider-icons'
 import { shortTimeLocale } from '@/utils/session'
 import { kanbanLivePulseAtom } from '@/atoms/kanban'
-import { useKanbanColumnColors } from '@/hooks/useKanbanColumnColors'
+import { Button, IconButton } from '@/components/ui/button'
 import type { ProjectColorTreatment } from '@/utils/project-colors'
 import type { SessionStatus } from '@/config/session-status-config'
 import {
@@ -73,10 +74,17 @@ interface TaskTileProps {
   subtaskModelGroups?: KanbanModelProviderGroup[]
   /** Model id pre-selected in the composer (defaults to the first catalog model). */
   defaultSubtaskModel?: string
+  /** Rendered as the drag overlay clone: lifted to elev-3, no hover ring. */
+  dragOverlay?: boolean
+  /** The status the tile's column stands for. A card in its column's status skips the status chip,
+   *  which would only repeat the column header; a card that differs keeps it. */
+  columnStatusId?: string
 }
 
 /**
- * A parent-session ("Task") tile.
+ * A parent-session ("Task") card (design spec §7.14): raised, radius 8, elev-1; title 13px 500; a
+ * live line while a turn runs; then subtasks and a meta row (workflow status · model … messages ·
+ * age). Hover strengthens the hairline (elev-1 + a border-strong ring), in instantly, out in 100ms.
  *
  * Project color is drawn directly on the card: a full-height 3px leading stripe
  * plus an optional ~6% tint (same `color-mix` formula as
@@ -99,11 +107,11 @@ export function TaskTile({
   onRunSubtasks,
   subtaskModelGroups,
   defaultSubtaskModel,
+  dragOverlay = false,
+  columnStatusId,
 }: TaskTileProps) {
   const { t } = useTranslation()
   const livePulseEnabled = useAtomValue(kanbanLivePulseAtom)
-  const columnColors = useKanbanColumnColors()
-  const accent = columnColors.get(task.column)?.solid ?? 'var(--primary)'
 
   const color = project?.color ?? null
   const showStripe = !!color
@@ -119,7 +127,8 @@ export function TaskTile({
     task.subtasks.some(s => s.runState === 'pending' && (task.taskSlug ? true : !!s.sessionId))
 
   // Live treatment: an in-flight turn on a tile parked in the active column,
-  // gated by the user's live-pulse preference.
+  // gated by the user's live-pulse preference. Drawn as the card's live line (spec §2.4: the
+  // working mark in accent + "Working…"), never as a colored glow on the card.
   const isLive = livePulseEnabled && !!task.isProcessing && task.column === 'in-progress'
 
   const relativeTime = task.lastMessageAt
@@ -142,58 +151,62 @@ export function TaskTile({
         }
       }}
       className={cn(
-        'group relative overflow-hidden rounded-lg border border-border/60 bg-card shadow-minimal',
-        'cursor-pointer transition-colors hover:border-border focus-visible:outline-none',
-        'focus-visible:ring-2 focus-visible:ring-ring/50'
+        'group relative overflow-hidden rounded-md bg-raised text-left',
+        dragOverlay
+          ? 'cursor-grabbing shadow-elev-3'
+          : cn(
+              'cursor-pointer shadow-elev-1',
+              'transition-shadow duration-micro ease-out-subtle hover:ring-1 hover:ring-[color:var(--border-strong)] hover:duration-instant',
+            )
       )}
-      style={
-        isLive
-          ? {
-              boxShadow: `0 0 0 1px ${accent}, 0 4px 16px -4px color-mix(in srgb, ${accent} 40%, transparent)`,
-            }
-          : undefined
-      }
     >
       {showTint && color && (
         <div
-          className="absolute inset-0 pointer-events-none"
+          className="pointer-events-none absolute inset-0"
           style={{ backgroundColor: `color-mix(in srgb, ${color} 6%, transparent)` }}
           aria-hidden
         />
       )}
       {showStripe && color && (
         <div
-          className="absolute left-0 top-0 bottom-0 w-[3px] pointer-events-none"
+          className="pointer-events-none absolute inset-y-0 left-0 w-[3px]"
           style={{ backgroundColor: color }}
           aria-hidden
         />
       )}
 
       {onEdit && (
-        <button
-          type="button"
+        <IconButton
+          size="sm"
+          icon={<Pencil className="size-3.5" strokeWidth={2} />}
+          aria-label={t('kanban.editTask')}
+          tooltip
           data-no-dnd="true"
+          data-touch-reveal="true"
           onClick={e => {
             e.stopPropagation()
             onEdit()
           }}
           onKeyDown={e => e.stopPropagation()}
-          title={t('kanban.editTask')}
-          aria-label={t('kanban.editTask')}
-          className="absolute right-2 top-2 z-10 grid h-6 w-6 place-items-center rounded-md border border-border/60 bg-card text-foreground/50 opacity-0 shadow-minimal transition-opacity hover:bg-foreground/[0.05] hover:text-foreground group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
-        >
-          <Pencil className="h-3.5 w-3.5" strokeWidth={2} />
-        </button>
+          // Opaque over the title: hover tints via state-overlay instead of replacing the raised fill.
+          // motion-press (IconButton) fades the opacity: in instantly with the card hover, out in 100ms.
+          className="state-overlay absolute right-1.5 top-1.5 z-local bg-raised shadow-elev-1 opacity-0 hover:bg-raised active:bg-raised group-hover:opacity-100 group-hover:duration-instant focus-visible:opacity-100"
+        />
       )}
 
-      <div className="relative p-3 pl-3.5">
+      <div className="relative flex flex-col gap-2 px-3 py-2.5">
         {(project || task.isFlagged) && (
-          // Right padding keeps the flag clear of the hover-revealed corner pencil.
-          <div className={cn('mb-1.5 flex items-center justify-between gap-2', onEdit && task.isFlagged && 'pr-7')}>
+          // Right padding keeps the flag clear of the hover-revealed corner pencil (always shown in compact).
+          <div
+            className={cn(
+              'flex items-center justify-between gap-2',
+              onEdit && (task.isFlagged ? 'pr-7' : '@max-mobile/shell:pr-7')
+            )}
+          >
             {project ? (
-              <span className="inline-flex min-w-0 items-center gap-1 text-[11px] font-medium text-foreground/55">
+              <span className="inline-flex min-w-0 items-center gap-1.5 text-label-sm text-tertiary">
                 <span
-                  className="h-1.5 w-1.5 shrink-0 rounded-full"
+                  className="size-1.5 shrink-0 rounded-full"
                   style={{ backgroundColor: project.color }}
                   aria-hidden
                 />
@@ -203,38 +216,32 @@ export function TaskTile({
               <span />
             )}
             {task.isFlagged && (
-              <Flag className="h-3.5 w-3.5 shrink-0 fill-amber-500 text-amber-500" aria-hidden />
+              <Flag className="size-3.5 shrink-0 fill-current text-info" role="img" aria-label={t('sidebar.flagged')} />
             )}
           </div>
         )}
 
         <div
           className={cn(
-            'text-sm font-medium leading-snug line-clamp-2',
+            'line-clamp-2 text-label font-medium',
+            // First line of the card in compact, where the corner pencil is always shown: keep clear of it.
+            onEdit && !project && !task.isFlagged && '@max-mobile/shell:pr-7',
             // Strike done/cancelled by *status* (not column — placement ≠ status).
-            status?.category === 'closed' ? 'text-foreground/55 line-through' : 'text-foreground'
+            status?.category === 'closed' ? 'text-tertiary line-through' : 'text-foreground'
           )}
         >
           {task.title}
         </div>
 
-        <div className="mt-2">
-          {status &&
-            (onStatusChange && statuses && statuses.length > 0 ? (
-              <StatusPicker
-                status={status}
-                statuses={statuses}
-                activeStateId={task.statusId}
-                live={isLive}
-                onSelect={onStatusChange}
-              />
-            ) : (
-              <StatusBadge status={status} live={isLive} />
-            ))}
-        </div>
+        {isLive && (
+          <span className="flex min-w-0 items-center gap-1.5 text-label-sm text-secondary">
+            <Spinner className="shrink-0 text-label text-accent" />
+            <span className="truncate">{t('session.runState.working')}</span>
+          </span>
+        )}
 
         {(subtaskCount > 0 || onAddSubtask) && (
-          <div className="mt-2.5 border-t border-border/40 pt-2">
+          <div>
             {subtaskCount > 0 && (
               <div className="flex items-center gap-1.5">
                 <button
@@ -244,15 +251,18 @@ export function TaskTile({
                     e.stopPropagation()
                     onToggleSubtasks?.()
                   }}
-                  className="flex min-w-0 flex-1 items-center gap-1.5 text-foreground/55 transition-colors hover:text-foreground/80"
+                  className="flex min-h-6 min-w-0 flex-1 items-center gap-1.5 rounded-sm text-tertiary transition-colors duration-micro ease-out-subtle hover:text-secondary hover:duration-instant"
                   aria-expanded={expanded}
                   aria-label={t('kanban.subtasks')}
                 >
                   <ChevronRight
-                    className={cn('h-3 w-3 shrink-0 transition-transform', expanded && 'rotate-90')}
+                    className={cn(
+                      'size-3.5 shrink-0 transition-transform duration-[var(--spring-snap-dur)] ease-[var(--spring-snap)]',
+                      expanded && 'rotate-90'
+                    )}
                     strokeWidth={2}
                   />
-                  <SubtaskProgress subtasks={task.subtasks} total={task.subtaskTotal} accent={accent} className="min-w-0 flex-1" />
+                  <SubtaskProgress subtasks={task.subtasks} total={task.subtaskTotal} className="min-w-0 flex-1" />
                 </button>
                 {onRunSubtasks && (
                   <button
@@ -268,16 +278,18 @@ export function TaskTile({
                     // No `disabled:pointer-events-none`: it would let clicks pass THROUGH the
                     // disabled button to the card underneath (which opens the session list).
                     // A disabled button that keeps pointer events swallows the click instead.
-                    className="grid h-5 w-5 shrink-0 place-items-center rounded text-foreground/50 transition-colors hover:bg-foreground/10 hover:text-foreground/80 disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-foreground/50"
+                    className="inline-grid size-control-sm shrink-0 place-items-center rounded-sm text-tertiary transition-colors duration-micro ease-out-subtle hover:bg-fill-hover hover:text-foreground hover:duration-instant disabled:text-disabled disabled:hover:bg-transparent disabled:hover:text-disabled"
                   >
-                    <Play className="h-3 w-3" strokeWidth={2} />
+                    <Play className="size-3.5" strokeWidth={2} />
                   </button>
                 )}
               </div>
             )}
 
-            {(expanded || subtaskCount === 0) && (
-              <div className={cn('pl-1', subtaskCount > 0 && 'mt-1')}>
+            {/* Expand in place: the rows swap in once and fade with a 4px drop (no height animation) */}
+            <AnimatedCollapsibleContent isOpen={expanded || subtaskCount === 0}>
+              {/* Subtask rows indent under the toggle's chevron; a lone "Add subtask" starts on the text edge */}
+              <div className={cn(subtaskCount > 0 && 'mt-1 pl-1')}>
                 {task.subtasks.map(subtask => {
                   // Synthetic rows (spec nodes not yet run) have no session to open.
                   const sessionId = subtask.sessionId
@@ -297,26 +309,35 @@ export function TaskTile({
                   />
                 )}
               </div>
-            )}
+            </AnimatedCollapsibleContent>
           </div>
         )}
 
-        <div className="mt-2.5 flex items-center justify-between gap-2 border-t border-border/40 pt-2">
-          <ModelChip model={task.model} />
+        {/* Meta row: workflow status · model … messages · age (wraps on narrow cards) */}
+        <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5 text-label-sm text-tertiary">
+          <div className="flex min-w-0 items-center gap-1.5">
+            {status && status.id !== columnStatusId &&
+              (onStatusChange && statuses && statuses.length > 0 ? (
+                <StatusPicker
+                  status={status}
+                  statuses={statuses}
+                  activeStateId={task.statusId}
+                  onSelect={onStatusChange}
+                />
+              ) : (
+                <StatusBadge status={status} />
+              ))}
+            <ModelChip model={task.model} />
+          </div>
           {(relativeTime || hasMessages) && (
-            <div className="flex shrink-0 items-center gap-2 text-[11px] text-foreground/45">
-              {relativeTime && (
-                <span className="inline-flex items-center gap-0.5 tabular-nums">
-                  <Clock className="h-3 w-3" strokeWidth={2} />
-                  {relativeTime}
-                </span>
-              )}
+            <div className="ml-auto flex shrink-0 items-center gap-2.5 tabular-nums">
               {hasMessages && (
-                <span className="inline-flex items-center gap-0.5 tabular-nums">
-                  <MessageSquare className="h-3 w-3" strokeWidth={2} />
+                <span className="inline-flex items-center gap-1">
+                  <MessageSquare className="size-3.5" strokeWidth={2} aria-hidden />
                   {task.messageCount}
                 </span>
               )}
+              {relativeTime && <span>{relativeTime}</span>}
             </div>
           )}
         </div>
@@ -348,13 +369,11 @@ function StatusPicker({
   status,
   statuses,
   activeStateId,
-  live,
   onSelect,
 }: {
   status: SessionStatus
   statuses: SessionStatus[]
   activeStateId: string
-  live: boolean
   onSelect: (statusId: string) => void
 }) {
   const { t } = useTranslation()
@@ -362,15 +381,20 @@ function StatusPicker({
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
+        {/* The chip is the trigger: hover/open deepen its fill (pressed fill), like a chip button.
+            The 20px chip sits in a 24px hit area (minimum target size). */}
         <button
           type="button"
           data-no-dnd="true"
           onClick={e => e.stopPropagation()}
           onKeyDown={e => e.stopPropagation()}
           aria-label={t('kanban.changeStatus')}
-          className="rounded-full transition-shadow hover:ring-2 hover:ring-foreground/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 data-[state=open]:ring-2 data-[state=open]:ring-foreground/20"
+          className="group/status inline-flex h-6 shrink-0 items-center rounded-xs"
         >
-          <StatusBadge status={status} live={live} />
+          <StatusBadge
+            status={status}
+            className="transition-colors duration-micro ease-out-subtle group-hover/status:bg-fill-pressed group-hover/status:duration-instant group-data-[state=open]/status:bg-fill-pressed"
+          />
         </button>
       </PopoverTrigger>
       <PopoverContent
@@ -447,9 +471,9 @@ function AddSubtask({
           e.stopPropagation()
           setComposing(true)
         }}
-        className="mt-1 flex w-full items-center gap-1 text-[11px] font-medium text-foreground/45 transition-colors hover:text-foreground/70"
+        className="flex min-h-6 w-full items-center gap-1 rounded-sm text-label-sm font-medium text-tertiary transition-colors duration-micro ease-out-subtle hover:text-secondary hover:duration-instant"
       >
-        <Plus className="h-3 w-3" strokeWidth={2} />
+        <Plus className="size-3.5" strokeWidth={2} />
         {t('kanban.addSubtask')}
       </button>
     )
@@ -478,7 +502,7 @@ function AddSubtask({
         }}
         rows={1}
         placeholder={t('kanban.describeSubtask')}
-        className="w-full resize-none rounded-md border border-border/60 bg-background px-2 py-1 text-xs text-foreground outline-none field-sizing-content max-h-40 focus:border-border"
+        className="field-surface w-full resize-none rounded-md px-2 py-1.5 text-label-sm field-sizing-content max-h-40"
       />
       <div className="flex items-center justify-between gap-1.5">
         {modelGroups && modelGroups.length > 0 ? (
@@ -486,36 +510,36 @@ function AddSubtask({
             <DropdownMenuTrigger asChild>
               <button
                 type="button"
-                className="inline-flex min-w-0 items-center gap-1 rounded-md border border-border/60 bg-background px-1.5 py-1 text-[11px] font-medium text-foreground/70 transition-colors hover:bg-foreground/5 hover:text-foreground"
+                className="field-surface inline-flex h-control-sm min-w-0 items-center gap-1 rounded-sm px-1.5 text-label-sm font-medium text-secondary"
               >
                 {selectedIcon ? (
-                  <img src={selectedIcon} alt="" className="h-3 w-3 shrink-0 rounded-[2px]" aria-hidden />
+                  <img src={selectedIcon} alt="" className="size-3 shrink-0 rounded-[2px]" aria-hidden />
                 ) : (
-                  <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-foreground/40" aria-hidden />
+                  <span className="size-1.5 shrink-0 rounded-full bg-current text-tertiary" aria-hidden />
                 )}
                 <span className="truncate">{selectedName}</span>
-                <ChevronDown className="h-3 w-3 shrink-0 text-foreground/40" strokeWidth={2} />
+                <ChevronDown className="size-3.5 shrink-0 text-tertiary" strokeWidth={2} />
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start" className="max-w-[240px]">
               {modelGroups.map((group, gi) => (
                 <React.Fragment key={group.provider}>
                   {gi > 0 && <DropdownMenuSeparator />}
-                  <DropdownMenuLabel className="flex items-center gap-1.5 text-[11px] text-foreground/50">
+                  <DropdownMenuLabel className="flex items-center gap-1.5">
                     {resolveProviderIcon(group.provider) && (
                       <img
                         src={resolveProviderIcon(group.provider)!}
                         alt=""
-                        className="h-3 w-3 rounded-[2px]"
+                        className="size-3 rounded-[2px]"
                         aria-hidden
                       />
                     )}
                     {group.label}
                   </DropdownMenuLabel>
                   {group.models.map(opt => (
-                    <DropdownMenuItem key={opt.id} className="text-xs" onSelect={() => setModel(opt.id)}>
+                    <DropdownMenuItem key={opt.id} onSelect={() => setModel(opt.id)}>
                       <span className="truncate">{opt.name}</span>
-                      {opt.id === model && <Check className="ml-auto h-3.5 w-3.5 shrink-0" strokeWidth={2} />}
+                      {opt.id === model && <Check className="ml-auto shrink-0" strokeWidth={2} />}
                     </DropdownMenuItem>
                   ))}
                 </React.Fragment>
@@ -525,14 +549,9 @@ function AddSubtask({
         ) : (
           <span />
         )}
-        <button
-          type="button"
-          onClick={submit}
-          disabled={!draft.trim()}
-          className="shrink-0 rounded-md bg-primary px-2.5 py-1 text-[11px] font-medium text-primary-foreground transition-opacity disabled:opacity-40"
-        >
+        <Button type="button" variant="primary" size="sm" onClick={submit} disabled={!draft.trim()}>
           {t('kanban.add')}
-        </button>
+        </Button>
       </div>
     </div>
   )

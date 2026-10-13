@@ -67,32 +67,34 @@ export function ProjectMultiSelectFilter({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
+        {/* Chip button: hairline pill, hover fill (in instantly, out over 100ms) */}
         <button
           type="button"
           className={cn(
-            'inline-flex min-w-0 max-w-[200px] items-center gap-1.5 rounded-lg border border-border/60 bg-foreground/[0.02] px-2 py-1 text-xs font-medium text-foreground/70 transition-colors hover:bg-foreground/5 hover:text-foreground data-[state=open]:bg-foreground/5',
+            'inline-flex h-control min-w-0 max-w-[200px] items-center gap-1.5 rounded-full border border-default px-2.5 text-label font-medium text-secondary @max-mobile/shell:h-9',
+            'transition-[background-color,color] duration-micro ease-out-subtle hover:bg-fill-hover hover:text-foreground hover:duration-instant',
+            'data-[state=open]:bg-fill-hover data-[state=open]:text-foreground',
             className
           )}
         >
-          <FolderKanban className="h-3.5 w-3.5 shrink-0 text-foreground/50" strokeWidth={2} />
+          <FolderKanban className="size-3.5 shrink-0 text-tertiary" strokeWidth={2} />
           <span className="truncate">{label}</span>
-          <ChevronDown className="h-3 w-3 shrink-0 text-foreground/40" strokeWidth={2} />
+          <ChevronDown className="size-3.5 shrink-0 text-tertiary" strokeWidth={2} />
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="max-w-[260px]">
-        <DropdownMenuItem className="text-xs" disabled={value.length === 0} onSelect={() => onChange([])}>
+        <DropdownMenuItem disabled={value.length === 0} onSelect={() => onChange([])}>
           {t('kanban.allProjects')}
         </DropdownMenuItem>
         {(projects.length > 0 || unassignedId) && <DropdownMenuSeparator />}
         {unassignedId && (
           <DropdownMenuCheckboxItem
-            className="text-xs"
             checked={selected.has(unassignedId)}
             onCheckedChange={() => toggle(unassignedId)}
             onSelect={e => e.preventDefault()}
           >
-            <span className="flex min-w-0 items-center gap-1.5">
-              <span className="h-2 w-2 shrink-0 rounded-full border border-foreground/40" aria-hidden />
+            <span className="flex min-w-0 items-center gap-2">
+              <span className="size-2 shrink-0 rounded-full border border-control" aria-hidden />
               <span className="truncate">{t('sidebar.noProject')}</span>
             </span>
           </DropdownMenuCheckboxItem>
@@ -100,15 +102,14 @@ export function ProjectMultiSelectFilter({
         {projects.map(project => (
           <DropdownMenuCheckboxItem
             key={project.id}
-            className="text-xs"
             checked={selected.has(project.id)}
             onCheckedChange={() => toggle(project.id)}
             onSelect={e => e.preventDefault()}
           >
-            <span className="flex min-w-0 items-center gap-1.5">
+            <span className="flex min-w-0 items-center gap-2">
               <span
-                className="h-2 w-2 shrink-0 rounded-full"
-                style={{ backgroundColor: project.color ?? 'var(--muted-foreground)' }}
+                className="size-2 shrink-0 rounded-full"
+                style={{ backgroundColor: project.color ?? 'var(--text-tertiary)' }}
                 aria-hidden
               />
               <span className="truncate">{project.name}</span>

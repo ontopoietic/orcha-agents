@@ -8,7 +8,6 @@ import {
   MOCK_MESSAGES,
   MOCK_LABELS,
   MOCK_LLM_CONNECTIONS,
-  MOCK_SESSION_STATUSES,
   MOCK_SOURCES,
   MOCK_SKILLS,
   MOBILE_WORKSPACE_ID,
@@ -119,8 +118,6 @@ export function ChatDisplayMobilePreview({
             skills={MOCK_SKILLS}
             labels={MOCK_LABELS}
             onLabelsChange={log('onLabelsChange')}
-            sessionStatuses={MOCK_SESSION_STATUSES}
-            onSessionStatusChange={log('onSessionStatusChange')}
             workspaceId={MOBILE_WORKSPACE_ID}
             compactMode={true}
             enableCompactModelPicker={true}

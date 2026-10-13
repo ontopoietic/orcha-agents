@@ -9,6 +9,7 @@
  */
 
 import {
+  appendFileSync,
   existsSync,
   mkdirSync,
   readdirSync,
@@ -146,11 +147,11 @@ export function saveProjectConfig(workspaceRootPath: string, config: ProjectConf
 /**
  * Load a project's MEMORY.md, capped at `maxTokens` for prompt injection.
  *
- * Returns `null` when the file is missing or effectively empty. When the
- * content exceeds the budget it is **head-truncated** (the top is kept, since
- * the agent is instructed to write newest/most-important first) and a one-line
- * marker is appended. The returned string — marker included — stays within the
- * token budget.
+ * Returns `null` when the file is missing or effectively empty. Over the budget,
+ * the start and the end are kept with a marker between them: notes are appended
+ * at the end (`appendProjectMemoryEntry`), while older files were written
+ * newest-first at the top. The returned string — marker included — stays within
+ * the token budget.
  */
 export function loadProjectMemory(
   workspaceRootPath: string,
@@ -173,16 +174,42 @@ export function loadProjectMemory(
   const tokens = estimateTokensDensityAware(content);
   if (tokens <= maxTokens) return content;
 
-  // Over budget: reserve room for the marker, then head-truncate. `charsPerToken`
-  // is derived from the actual content so a density-corrected estimate (base64-heavy
-  // memory) still maps back to a sensible character budget.
-  const marker = `\n\n…[MEMORY.md truncated at ${maxTokens}-token cap — keep it shorter]`;
+  // Over budget: reserve room for the marker, then keep 30% from the start and 70%
+  // from the end (where new notes land). `charsPerToken` is derived from the actual
+  // content so a density-corrected estimate (base64-heavy memory) still maps back to
+  // a sensible character budget.
+  const marker = `\n\n…[MEMORY.md is over the ${maxTokens}-token cap; its middle is omitted]…\n\n`;
   const markerTokens = estimateTokensDensityAware(marker);
   const bodyBudget = Math.max(0, maxTokens - markerTokens);
   const charsPerToken = content.length / tokens;
   const charBudget = Math.floor(bodyBudget * charsPerToken);
-  const head = content.slice(0, charBudget).trimEnd();
-  return `${head}${marker}`;
+  const headChars = Math.floor(charBudget * 0.3);
+  const head = content.slice(0, headChars).trimEnd();
+  const tail = content.slice(content.length - (charBudget - headChars)).trimStart();
+  return `${head}${marker}${tail}`;
+}
+
+/**
+ * Append a note to a project's MEMORY.md under a `## <heading>` line, creating
+ * the file. One O_APPEND write and no read-modify-write, so sessions appending
+ * at the same time keep each other's notes (rewriting the file with Write/Edit
+ * from a session-start snapshot lost them).
+ */
+export function appendProjectMemoryEntry(
+  workspaceRootPath: string,
+  projectSlug: string,
+  heading: string,
+  note: string,
+): { path: string; heading: string; bytesAppended: number } {
+  const path = getProjectMemoryPath(workspaceRootPath, projectSlug);
+  mkdirSync(getProjectPath(workspaceRootPath, projectSlug), { recursive: true });
+  const cleanHeading = heading.replace(/\s+/g, ' ').trim();
+  // Reading only to pick the blank line before the heading; the write itself never rewrites.
+  const existing = existsSync(path) ? readFileSync(path, 'utf-8') : '';
+  const separator = existing === '' ? '' : existing.endsWith('\n') ? '\n' : '\n\n';
+  const chunk = `${separator}## ${cleanHeading}\n\n${note.trim()}\n`;
+  appendFileSync(path, chunk, 'utf-8');
+  return { path, heading: cleanHeading, bytesAppended: Buffer.byteLength(chunk, 'utf-8') };
 }
 
 // ============================================================

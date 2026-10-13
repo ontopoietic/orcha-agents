@@ -1,14 +1,17 @@
 import * as React from 'react'
-import { AlertTriangle, ArrowLeft, Check, FolderKanban, FolderOpen, Globe2, KeyRound, MoreHorizontal, Pencil, RefreshCw, Sparkles, Trash2 } from 'lucide-react'
+import { AlertTriangle, ArrowLeft, Check, ExternalLink, FolderKanban, FolderOpen, Globe2, KeyRound, MoreHorizontal, Pencil, RefreshCw, Sparkles, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAtomValue } from 'jotai'
 import { useTranslation } from 'react-i18next'
 import { useAppShellContext } from '@/context/AppShellContext'
 import { useNavigation } from '@/contexts/NavigationContext'
 import { routes } from '@/lib/navigate'
+import { isWebUI } from '@/lib/platform'
 import { pagesAtom } from '@/atoms/pages'
-import { LoadingIndicator } from '@craft-agent/ui'
+import { LoadingIndicator, Spinner } from '@craft-agent/ui'
 import { Info_Alert } from '@/components/info'
+import { Button, IconButton } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import {
   DropdownMenu,
   DropdownMenuSub,
@@ -27,6 +30,8 @@ import { DeletePageDialog } from './DeletePageDialog'
 import { PageGrantsDialog } from './PageGrantsDialog'
 import { PageSourceAuthBanner } from './PageSourceAuthBanner'
 import { SharePageDialog, usePageShareCapabilities } from './SharePageDialog'
+import { isClaudeAccountConnection } from '@config/llm-connections'
+import claudeIcon from '@/assets/provider-icons/claude.svg'
 
 interface PageViewProps {
   pageSlug: string
@@ -48,7 +53,7 @@ interface LeaseState {
  * live pages flows into the frame as a replacement snapshot.
  */
 export function PageView({ pageSlug }: PageViewProps) {
-  const { activeWorkspaceId, onOpenFile, enabledSources } = useAppShellContext()
+  const { activeWorkspaceId, onOpenFile, enabledSources, llmConnections } = useAppShellContext()
   const { t } = useTranslation()
   const { navigate } = useNavigation()
   const pages = useAtomValue(pagesAtom)
@@ -141,6 +146,13 @@ export function PageView({ pageSlug }: PageViewProps) {
   const [grantsOpen, setGrantsOpen] = React.useState(false)
   const { sharingEnabled } = usePageShareCapabilities()
   const { projects } = useProjects(activeWorkspaceId)
+  // Claude artifacts need a claude.ai account; the server picks the connection by the same rule.
+  // Desktop only: in the Web UI the server's Claude account would publish, not the viewer's.
+  const canPublishClaudeArtifact = React.useMemo(
+    () => !isWebUI && llmConnections.some(isClaudeAccountConnection),
+    [llmConnections],
+  )
+  const [publishingArtifact, setPublishingArtifact] = React.useState(false)
 
   // Inline rename: null = display mode, string = the draft being edited.
   const [nameDraft, setNameDraft] = React.useState<string | null>(null)
@@ -179,6 +191,35 @@ export function PageView({ pageSlug }: PageViewProps) {
   }, [page, navigate, t])
 
   const handleBack = React.useCallback(() => navigate(routes.view.pages()), [navigate])
+
+  const openClaudeArtifact = React.useCallback((url: string) => {
+    void window.electronAPI.openUrl(url)
+  }, [])
+
+  // One click: publish (first time) or update the same artifact in place, with the
+  // Claude account connection chats use. A rejected credential offers Reconnect.
+  const handlePublishClaudeArtifact = React.useCallback(async (): Promise<void> => {
+    if (!activeWorkspaceId || !page || publishingArtifact) return
+    setPublishingArtifact(true)
+    try {
+      const updated = await window.electronAPI.publishPageAsClaudeArtifact(activeWorkspaceId, page.config.slug)
+      const url = updated.claudeArtifact?.url
+      toast.success(t('toast.pageClaudeArtifactPublished'), {
+        description: url,
+        ...(url ? { action: { label: t('common.open'), onClick: () => openClaudeArtifact(url) } } : {}),
+      })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      toast.error(t('toast.pageClaudeArtifactFailed'), {
+        description: message.replace(/^(Error: )?[A-Z_]+: /, ''),
+        ...(message.includes('ARTIFACT_AUTH_REQUIRED')
+          ? { action: { label: t('common.reconnect'), onClick: () => navigate(routes.view.settings('ai')) } }
+          : {}),
+      })
+    } finally {
+      setPublishingArtifact(false)
+    }
+  }, [activeWorkspaceId, page, publishingArtifact, t, openClaudeArtifact, navigate])
 
   const handleOpenFolder = React.useCallback(() => {
     if (page) onOpenFile(page.folderPath)
@@ -222,14 +263,11 @@ export function PageView({ pageSlug }: PageViewProps) {
     return (
       <div className="flex h-full items-center justify-center">
         {fallbackResolved ? (
-          <div className="flex flex-col items-center gap-3 text-sm text-foreground/50">
+          <div className="flex flex-col items-center gap-3 text-label text-tertiary">
             <span>{t('pages.notFound')}</span>
-            <button
-              onClick={handleBack}
-              className="inline-flex h-7 items-center gap-1.5 rounded-[8px] bg-foreground/[0.02] px-3 text-xs font-medium shadow-minimal transition-colors hover:bg-foreground/[0.05]"
-            >
-              <ArrowLeft className="h-3.5 w-3.5" /> {t('pages.backToPages')}
-            </button>
+            <Button type="button" variant="secondary" onClick={handleBack}>
+              <ArrowLeft /> {t('pages.backToPages')}
+            </Button>
           </div>
         ) : (
           <LoadingIndicator label={t('common.loading')} />
@@ -242,19 +280,14 @@ export function PageView({ pageSlug }: PageViewProps) {
   const refreshFailed = config.lastRefresh && !config.lastRefresh.ok
 
   return (
-    <div className="flex h-full flex-col bg-background">
-      {/* Header: back, title, kind, freshness, overflow */}
-      <div className="flex items-center gap-2 border-b border-border/50 px-3 py-2">
-        <button
-          type="button"
-          onClick={handleBack}
-          aria-label={t('pages.backToPages')}
-          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-foreground/60 transition-colors hover:bg-foreground/5 hover:text-foreground"
-        >
-          <ArrowLeft className="h-4 w-4" />
-        </button>
+    // No surface of its own: the panel card (paper) shows through.
+    <div className="flex h-full flex-col">
+      {/* Header (48px, like the panel headers): back, title, kind, freshness, share, overflow. The end
+          glyphs sit on the 16px gutter (28px icon buttons pad 6px; 36px compact ones 10px). */}
+      <div className="flex h-12 shrink-0 items-center gap-1.5 px-2.5 @max-mobile/shell:px-1.5">
+        <IconButton icon={<ArrowLeft />} aria-label={t('pages.backToPages')} tooltip onClick={handleBack} />
         {nameDraft !== null ? (
-          <input
+          <Input
             autoFocus
             value={nameDraft}
             onChange={e => setNameDraft(e.target.value)}
@@ -264,11 +297,11 @@ export function PageView({ pageSlug }: PageViewProps) {
               else if (e.key === 'Escape') setNameDraft(null)
             }}
             aria-label={t('pages.renamePage')}
-            className="h-7 min-w-0 flex-1 rounded-md border border-border bg-background px-2 text-sm font-medium outline-none focus:border-ring"
+            className="h-control flex-1 px-2 text-label-lg font-semibold md:text-label-lg"
           />
         ) : (
           <span
-            className="min-w-0 truncate text-sm font-medium"
+            className="min-w-0 truncate px-1 text-label-lg font-semibold"
             title={t('pages.renamePage')}
             onDoubleClick={() => setNameDraft(config.name)}
           >
@@ -277,30 +310,47 @@ export function PageView({ pageSlug }: PageViewProps) {
         )}
         <PageKindBadge kind={config.kind} />
         <PageFreshness config={config} className="hidden @[28rem]/panel:inline-flex" />
-        <div className="ml-auto flex items-center gap-1">
-          {(sharingEnabled || config.share) && (
-            <button
+        <div className="ml-auto flex shrink-0 items-center gap-1">
+          {canPublishClaudeArtifact && (
+            <Button
               type="button"
+              variant="ghost"
+              onClick={() => void handlePublishClaudeArtifact()}
+              disabled={publishingArtifact}
+              aria-label={config.claudeArtifact ? t('pages.claudeArtifact.update') : t('pages.claudeArtifact.publish')}
+              title={publishingArtifact
+                ? t('pages.claudeArtifact.publishing')
+                : config.claudeArtifact ? `${t('pages.claudeArtifact.update')} — ${config.claudeArtifact.url}` : t('pages.claudeArtifact.publish')}
+              className="px-1.5 text-secondary hover:text-foreground @max-mobile/shell:h-9 @max-mobile/shell:min-w-9"
+            >
+              {publishingArtifact
+                ? <Spinner className="text-sm" />
+                : <img src={claudeIcon} alt="" aria-hidden className="size-4" />}
+              <span className="hidden pr-0.5 @[36rem]/panel:inline">
+                {publishingArtifact
+                  ? t('pages.claudeArtifact.publishing')
+                  : config.claudeArtifact ? t('pages.claudeArtifact.update') : t('pages.claudeArtifact.publish')}
+              </span>
+            </Button>
+          )}
+          {(sharingEnabled || config.share) && (
+            <Button
+              type="button"
+              variant="ghost"
               onClick={() => setShareOpen(true)}
               aria-label={t('pages.share.title')}
               title={config.share ? t('pages.shared') : t('pages.share.title')}
-              className="flex h-7 items-center gap-1.5 rounded-md px-2 text-foreground/60 transition-colors hover:bg-foreground/5 hover:text-foreground"
+              className="px-1.5 text-secondary hover:text-foreground @max-mobile/shell:h-9 @max-mobile/shell:min-w-9"
             >
-              <Globe2 className={config.share ? 'h-4 w-4 text-sky-600 dark:text-sky-400' : 'h-4 w-4'} />
+              <Globe2 className={config.share ? 'text-accent' : undefined} />
               {config.share && (
-                <span className="hidden text-xs @[28rem]/panel:inline">{t('pages.shared')}</span>
+                <span className="hidden pr-0.5 @[28rem]/panel:inline">{t('pages.shared')}</span>
               )}
-            </button>
+            </Button>
           )}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <button
-                type="button"
-                aria-label={t('common.more')}
-                className="flex h-7 w-7 items-center justify-center rounded-md text-foreground/60 transition-colors hover:bg-foreground/5 hover:text-foreground data-[state=open]:bg-foreground/5"
-              >
-                <MoreHorizontal className="h-4 w-4" />
-              </button>
+              <IconButton icon={<MoreHorizontal />} aria-label={t('common.more')} />
             </DropdownMenuTrigger>
             <StyledDropdownMenuContent align="end">
               <StyledDropdownMenuItem onClick={() => setNameDraft(config.name)}>
@@ -310,13 +360,14 @@ export function PageView({ pageSlug }: PageViewProps) {
               {projects.length > 0 && (
                 <DropdownMenuSub>
                   <StyledDropdownMenuSubTrigger>
-                    <FolderKanban className="h-3.5 w-3.5" />
+                    <FolderKanban />
                     <span className="flex-1">{t('pages.moveToProject')}</span>
                   </StyledDropdownMenuSubTrigger>
                   <StyledDropdownMenuSubContent>
+                    {/* Unchecked rows indent by the check (16px) + the row gap (8px) so labels align */}
                     <StyledDropdownMenuItem onClick={() => void moveToProject(null)}>
-                      {!config.projectId && <Check className="h-3.5 w-3.5" />}
-                      <span className={config.projectId ? 'flex-1 ml-[18px]' : 'flex-1'}>
+                      {!config.projectId && <Check />}
+                      <span className={config.projectId ? 'flex-1 ml-6' : 'flex-1'}>
                         {t('sessionMenu.noProject')}
                       </span>
                     </StyledDropdownMenuItem>
@@ -325,13 +376,19 @@ export function PageView({ pageSlug }: PageViewProps) {
                       const isBound = config.projectId === p.config.id
                       return (
                         <StyledDropdownMenuItem key={p.config.id} onClick={() => void moveToProject(p.config.id)}>
-                          {isBound && <Check className="h-3.5 w-3.5" />}
-                          <span className={isBound ? 'flex-1' : 'flex-1 ml-[18px]'}>{p.config.name}</span>
+                          {isBound && <Check />}
+                          <span className={isBound ? 'flex-1' : 'flex-1 ml-6'}>{p.config.name}</span>
                         </StyledDropdownMenuItem>
                       )
                     })}
                   </StyledDropdownMenuSubContent>
                 </DropdownMenuSub>
+              )}
+              {config.claudeArtifact && (
+                <StyledDropdownMenuItem onClick={() => openClaudeArtifact(config.claudeArtifact!.url)}>
+                  <ExternalLink />
+                  {t('pages.claudeArtifact.open')}
+                </StyledDropdownMenuItem>
               )}
               <StyledDropdownMenuItem onClick={handleOpenFolder}>
                 <FolderOpen />
@@ -383,29 +440,21 @@ export function PageView({ pageSlug }: PageViewProps) {
         </Info_Alert>
       )}
 
-      {/* Body: edge-to-edge sandboxed frame on a neutral canvas */}
+      {/* Body: the sandboxed frame as a raised card on the paper */}
       <div className="relative min-h-0 flex-1 p-3">
         {!hasContent ? (
-          <div className="flex h-full flex-col items-center justify-center gap-2 text-center">
-            <span className="text-sm font-medium text-foreground/70">{t('pages.noContentTitle')}</span>
-            <span className="max-w-md text-xs text-foreground/50">{t('pages.noContentDescription')}</span>
-            <div className="mt-2 flex items-center gap-2">
-              <button
-                type="button"
-                onClick={handleDesignWithAgent}
-                className="inline-flex h-7 items-center gap-1.5 rounded-[8px] bg-primary px-3 text-xs font-medium text-primary-foreground transition-opacity hover:opacity-90"
-              >
-                <Sparkles className="h-3.5 w-3.5" />
+          <div className="flex h-full flex-col items-center justify-center gap-1 text-center">
+            <span className="text-label font-medium text-foreground">{t('pages.noContentTitle')}</span>
+            <span className="max-w-md text-label-sm text-tertiary">{t('pages.noContentDescription')}</span>
+            <div className="mt-3 flex items-center gap-2">
+              <Button type="button" variant="primary" onClick={handleDesignWithAgent}>
+                <Sparkles />
                 {t('pages.designWithAgent')}
-              </button>
-              <button
-                type="button"
-                onClick={handleOpenFolder}
-                className="inline-flex h-7 items-center gap-1.5 rounded-[8px] bg-foreground/[0.02] px-3 text-xs font-medium shadow-minimal transition-colors hover:bg-foreground/[0.05]"
-              >
-                <FolderOpen className="h-3.5 w-3.5" />
+              </Button>
+              <Button type="button" variant="secondary" onClick={handleOpenFolder}>
+                <FolderOpen />
                 {t('pages.openFolder')}
-              </button>
+              </Button>
             </div>
           </div>
         ) : leaseError ? (
@@ -414,19 +463,16 @@ export function PageView({ pageSlug }: PageViewProps) {
               <Info_Alert.Title>{t('pages.loadFailed')}</Info_Alert.Title>
               <Info_Alert.Description className="break-all">{leaseError}</Info_Alert.Description>
             </Info_Alert>
-            <button
-              onClick={() => setLeaseRetry(n => n + 1)}
-              className="mt-3 inline-flex h-7 items-center rounded-[8px] bg-foreground/[0.02] px-3 text-xs font-medium shadow-minimal transition-colors hover:bg-foreground/[0.05]"
-            >
+            <Button type="button" variant="secondary" className="mt-3" onClick={() => setLeaseRetry(n => n + 1)}>
               {t('common.retry')}
-            </button>
+            </Button>
           </div>
         ) : !leaseState || !snapshotReady || !activeWorkspaceId ? (
           <div className="flex h-full items-center justify-center">
             <LoadingIndicator label={t('common.loading')} />
           </div>
         ) : (
-          <div className="h-full w-full overflow-hidden rounded-lg border border-border/60 shadow-minimal">
+          <div className="h-full w-full overflow-hidden rounded-lg shadow-elev-1">
             <PageFrame
               key={leaseState.lease.leaseId}
               workspaceId={activeWorkspaceId}

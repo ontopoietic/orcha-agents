@@ -41,7 +41,8 @@ import type { Workspace } from '../config/storage.ts';
 
 // Event adapter
 import { PiEventAdapter } from './backend/pi/event-adapter.ts';
-import type { PiCompactResult } from './backend/pi/protocol.ts';
+import type { PiCompactResult, PiLargeResultGateRequest, PiLargeResultGateResponse } from './backend/pi/protocol.ts';
+import { askLargeResultFilter } from '../utils/large-response.ts';
 import { EventQueue } from './backend/event-queue.ts';
 
 // System prompt for Craft Agent context
@@ -94,9 +95,11 @@ import { getSessionDataPath, getSessionPath, getSessionPlansPath } from '../sess
 import { parseError, type AgentError } from './errors.ts';
 
 // Centralized PreToolUse pipeline
-import { runPreToolUseChecks, type PreToolUseCheckResult } from './core/pre-tool-use.ts';
+import { runPreToolUseChecks, type PreToolUseCheckResult, type PreToolUseInput } from './core/pre-tool-use.ts';
+import type { PermissionRemember } from './core/permission-remember.ts';
+import { applyGuardedModeCheck, needsGuardedModeCheck } from './core/guarded-mode.ts';
 import { getRtkPath } from './core/rtk-detector.ts';
-import { getRtkEnabled, getBrowserToolEnabled } from '../config/storage.ts';
+import { getRtkEnabled, getRtkExcludeCommands, getBrowserToolEnabled } from '../config/storage.ts';
 import type { RtkContext } from './core/rtk-rewrite.ts';
 
 // Workspace slug extraction for skill qualification
@@ -185,6 +188,8 @@ export class PiAgent extends BaseAgent {
   // State
   private _isProcessing: boolean = false;
   private abortReason?: AbortReason;
+  /** Aborted when the current turn stops; tool checks started in the turn watch it. */
+  private turnAbort = new AbortController();
 
   // Event adapter
   private adapter: PiEventAdapter;
@@ -284,6 +289,8 @@ export class PiAgent extends BaseAgent {
   private pendingPermissions: Map<string, {
     resolve: (allowed: boolean) => void;
     toolName: string;
+    /** What "Always Allow" stores, as computed by the permission check. */
+    remember?: PermissionRemember;
   }> = new Map();
 
   // Pending tool executions (correlation map for subprocess tool_execute_request -> main process -> tool_execute_response)
@@ -308,6 +315,11 @@ export class PiAgent extends BaseAgent {
 
   // Invalidates a manual compact continuation if stop/dispose wins its await.
   private compactionEpoch = 0;
+
+  // Host-side deadline for a manual compact RPC. GPT-backed compactions on large
+  // conversations legitimately take 60-120 s (one blocking summary call, no
+  // progress stream); 5 min covers realistic cases. Overridable for tests.
+  private compactTimeoutMs = 300_000;
 
   // Pending compact requests (manual compaction RPC)
   private pendingCompactions: Map<string, {
@@ -334,9 +346,6 @@ export class PiAgent extends BaseAgent {
     displayName?: string;
     capturedAt: number;
   }> = new Map();
-
-  // Current user message (for context in summarization)
-  private currentUserMessage: string = '';
 
   // Pool reference for convenience (from this.config.mcpPool)
   private get mcpPool(): McpClientPool | undefined { return this.config.mcpPool; }
@@ -896,6 +905,19 @@ export class PiAgent extends BaseAgent {
     }
   }
 
+  /** Answer the subprocess with the large-result filter installed in this process (`null` without one). */
+  private async handleLargeResultGateRequest(msg: PiLargeResultGateRequest): Promise<void> {
+    const excerpt = await askLargeResultFilter({
+      text: msg.text,
+      context: { toolName: msg.toolName, intent: msg.intent },
+      budgetChars: msg.budgetChars,
+      filePath: msg.filePath,
+      sessionId: this.config.session?.id,
+    });
+    const response: PiLargeResultGateResponse = { type: 'large_result_gate_response', requestId: msg.requestId, excerpt };
+    this.send({ ...response });
+  }
+
   /**
    * Send a JSONL command to the subprocess stdin.
    */
@@ -952,6 +974,11 @@ export class PiAgent extends BaseAgent {
           toolCallId?: string;
           input: Record<string, unknown>;
         });
+        break;
+
+      case 'large_result_gate_request':
+        // Subprocess asks whether a large tool result needs a summary (toggle `largeResults`)
+        void this.handleLargeResultGateRequest(msg as unknown as PiLargeResultGateRequest);
         break;
 
       case 'tool_execute_request':
@@ -1225,6 +1252,7 @@ export class PiAgent extends BaseAgent {
     input: Record<string, unknown>;
   }): Promise<void> {
     const { requestId, toolName, toolCallId, input } = req;
+    const turnSignal = this.turnAbort.signal;
     const debugSessionId = this.config.session?.id || this._sessionId;
     this.debug(`PreToolUse request from subprocess: ${toolName} (${requestId}, sessionId=${debugSessionId})`);
 
@@ -1261,10 +1289,11 @@ export class PiAgent extends BaseAgent {
     // Build RTK context fresh per call so toggling the preference takes
     // effect without restart. `getRtkPath()` is cached per process.
     const rtkContext: RtkContext | undefined = getRtkEnabled()
-      ? { enabled: true, path: getRtkPath(), exclude: [] }
+      ? { enabled: true, path: getRtkPath(), exclude: getRtkExcludeCommands() }
       : undefined;
 
-    const checkResult = runPreToolUseChecks({
+    // Recomputed per run: activating a source changes the active slugs.
+    const buildCheckInput = (): PreToolUseInput => ({
       toolName,
       input,
       sessionId,
@@ -1280,8 +1309,60 @@ export class PiAgent extends BaseAgent {
       permissionManager: this.permissionManager,
       prerequisiteManager: this.prerequisiteManager,
       rtkContext,
-      onDebug: (msg) => this.debug(`PreToolUse(sessionId=${sessionId}): ${msg}`),
+      onDebug: (msg: string) => this.debug(`PreToolUse(sessionId=${sessionId}): ${msg}`),
     });
+
+    let checkResult = runPreToolUseChecks(buildCheckInput());
+
+    // Activate an inactive source first, then run the whole pipeline again so the
+    // result (including an Ask-mode prompt) is handled like any other. Previously the
+    // re-run only knew allow/modify/block and turned a required prompt into an allow.
+    if (checkResult.type === 'source_activation_needed') {
+      const { sourceSlug, sourceExists } = checkResult;
+      this.debug(`PreToolUse(sessionId=${sessionId}): Source "${sourceSlug}" not active, attempting activation...`);
+
+      if (this.onSourceActivationRequest) {
+        try {
+          const activated = await this.onSourceActivationRequest(sourceSlug);
+          if (!activated) {
+            const reason = sourceExists
+              ? `Source "${sourceSlug}" is not active. Activate it by @mentioning it in your message or via the source icon at the bottom of the input field.`
+              : `Source "${sourceSlug}" is not available yet. It needs to be created and configured first.`;
+            this.send({ type: 'pre_tool_use_response', requestId, action: 'block', reason });
+            return;
+          }
+          this.debug(`PreToolUse(sessionId=${sessionId}): Source "${sourceSlug}" activated successfully`);
+          this.eventQueue.enqueue({
+            type: 'source_activated' as const,
+            sourceSlug,
+            originalMessage: this.getCurrentTurnUserMessage() ?? '',
+          });
+        } catch (err) {
+          const reason = sourceExists
+            ? `Source "${sourceSlug}" could not be activated: ${err}`
+            : `Source "${sourceSlug}" is not available yet. It needs to be created and configured first.`;
+          this.send({ type: 'pre_tool_use_response', requestId, action: 'block', reason });
+          return;
+        }
+      }
+
+      checkResult = runPreToolUseChecks(buildCheckInput());
+      if (checkResult.type === 'source_activation_needed') {
+        this.send({
+          type: 'pre_tool_use_response',
+          requestId,
+          action: 'block',
+          reason: `Source "${checkResult.sourceSlug}" is still not active.`,
+        });
+        return;
+      }
+    }
+
+    // Guarded-mode risk check (decision model) on the final result, after any source activation;
+    // skipped without any await outside Guarded mode.
+    if (needsGuardedModeCheck(checkResult, { sessionId, toolName }, this.guardedModeCheck)) {
+      checkResult = await applyGuardedModeCheck(checkResult, buildCheckInput(), this.guardedModeCheck, { signal: turnSignal });
+    }
 
     switch (checkResult.type) {
       case 'allow':
@@ -1307,65 +1388,6 @@ export class PiAgent extends BaseAgent {
         return;
       }
 
-      case 'source_activation_needed': {
-        const { sourceSlug, sourceExists } = checkResult;
-        this.debug(`PreToolUse(sessionId=${sessionId}): Source "${sourceSlug}" not active, attempting activation...`);
-
-        if (this.onSourceActivationRequest) {
-          try {
-            const activated = await this.onSourceActivationRequest(sourceSlug);
-            if (!activated) {
-              const reason = sourceExists
-                ? `Source "${sourceSlug}" is not active. Activate it by @mentioning it in your message or via the source icon at the bottom of the input field.`
-                : `Source "${sourceSlug}" is not available yet. It needs to be created and configured first.`;
-              this.send({ type: 'pre_tool_use_response', requestId, action: 'block', reason });
-              return;
-            }
-            this.debug(`PreToolUse(sessionId=${sessionId}): Source "${sourceSlug}" activated successfully`);
-            this.eventQueue.enqueue({
-              type: 'source_activated' as const,
-              sourceSlug,
-              originalMessage: this.getCurrentTurnUserMessage() ?? '',
-            });
-          } catch (err) {
-            const reason = sourceExists
-              ? `Source "${sourceSlug}" could not be activated: ${err}`
-              : `Source "${sourceSlug}" is not available yet. It needs to be created and configured first.`;
-            this.send({ type: 'pre_tool_use_response', requestId, action: 'block', reason });
-            return;
-          }
-        }
-
-        // Re-run pipeline after activation
-        const postResult = runPreToolUseChecks({
-          toolName,
-          input,
-          sessionId,
-          permissionMode: this.permissionManager.getPermissionMode(),
-          workspaceRootPath: rootPath,
-          workspaceId: workspaceSlug,
-          plansFolderPath,
-          dataFolderPath,
-          workingDirectory: this.config.session?.workingDirectory,
-          activeSourceSlugs: Array.from(this.sourceManager.getActiveSlugs()),
-          allSourceSlugs: this.sourceManager.getAllSources().map(s => s.config.slug),
-          hasSourceActivation: !!this.onSourceActivationRequest,
-          permissionManager: this.permissionManager,
-          prerequisiteManager: this.prerequisiteManager,
-          rtkContext,
-          onDebug: (msg) => this.debug(`PreToolUse(sessionId=${sessionId}): ${msg}`),
-        });
-
-        if (postResult.type === 'modify') {
-          this.send({ type: 'pre_tool_use_response', requestId, action: 'modify', input: postResult.input });
-        } else if (postResult.type === 'block') {
-          this.send({ type: 'pre_tool_use_response', requestId, action: 'block', reason: postResult.reason });
-        } else {
-          this.send({ type: 'pre_tool_use_response', requestId, action: 'allow' });
-        }
-        return;
-      }
-
       case 'call_llm_intercept':
       case 'spawn_session_intercept':
         // These tools are proxy tools handled via tool_execute_request — just allow
@@ -1374,12 +1396,13 @@ export class PiAgent extends BaseAgent {
 
       case 'prompt': {
         if (!this.onPermissionRequest) {
-          // No permission handler — allow
-          if (checkResult.modifiedInput) {
-            this.send({ type: 'pre_tool_use_response', requestId, action: 'modify', input: checkResult.modifiedInput });
-          } else {
-            this.send({ type: 'pre_tool_use_response', requestId, action: 'allow' });
-          }
+          // Nobody can answer the prompt: deny, as ClaudeAgent does.
+          this.send({
+            type: 'pre_tool_use_response',
+            requestId,
+            action: 'block',
+            reason: 'Permission required, but no permission handler is available. Denied for safety.',
+          });
           return;
         }
 
@@ -1391,6 +1414,7 @@ export class PiAgent extends BaseAgent {
           this.pendingPermissions.set(permRequestId, {
             resolve,
             toolName,
+            remember: checkResult.remember,
           });
         });
 
@@ -1404,6 +1428,8 @@ export class PiAgent extends BaseAgent {
           reason: checkResult.reason,
           impact: checkResult.impact,
           requiresSystemPrompt: checkResult.requiresSystemPrompt,
+          // "Always Allow" only has something to remember when the check produced a key.
+          canRemember: checkResult.promptType === 'admin_approval' ? undefined : !!checkResult.remember,
           rememberForMinutes: checkResult.rememberForMinutes,
           commandHash: checkResult.commandHash,
           approvalTtlSeconds: checkResult.approvalTtlSeconds,
@@ -1437,6 +1463,7 @@ export class PiAgent extends BaseAgent {
   private async handleToolExecuteRequest(request: {
     requestId: string;
     toolName: string;
+    toolCallId?: string;
     args: Record<string, unknown>;
   }): Promise<void> {
     // Prerequisite check: block source tools until guide.md is read
@@ -1451,7 +1478,9 @@ export class PiAgent extends BaseAgent {
     }
 
     try {
-      const result = await this.routeToolCall(request.toolName, request.args);
+      // The approved args no longer carry `_intent`; the pre-tool-use bridge kept it by call id.
+      const intent = request.toolCallId ? this.preToolMetadataByCallId.get(request.toolCallId)?.intent : undefined;
+      const result = await this.routeToolCall(request.toolName, request.args, intent);
       this.send({
         type: 'tool_execute_response',
         requestId: request.requestId,
@@ -1481,7 +1510,8 @@ export class PiAgent extends BaseAgent {
    */
   private async routeToolCall(
     toolName: string,
-    args: Record<string, unknown>
+    args: Record<string, unknown>,
+    intent?: string,
   ): Promise<{ content: string; isError: boolean }> {
     // Session-scoped tools — strip mcp__session__ prefix added by the Pi SDK
     // registration (tools are registered as mcp__session__SubmitPlan, etc.)
@@ -1495,7 +1525,7 @@ export class PiAgent extends BaseAgent {
 
     // MCP source tools — route through centralized pool
     if (this.mcpPool?.isProxyTool(toolName)) {
-      return this.mcpPool.callTool(toolName, args);
+      return this.mcpPool.callTool(toolName, args, { intent });
     }
 
     // Unknown tool
@@ -1650,8 +1680,7 @@ export class PiAgent extends BaseAgent {
    * NOTE: For proxy-executed session tools, callbacks (onPlanSubmitted, etc.)
    * are already fired by executeSessionTool() via the SessionToolContext.
    * The subprocess sends this event because handleSessionEvent() detects the
-   * mcp__session__ prefix, but we intentionally skip handleSessionMcpToolCompletion()
-   * here to avoid double-firing callbacks.
+   * mcp__session__ prefix; firing callbacks again here would double-fire them.
    */
   private handleSessionToolCompleted(msg: Record<string, unknown>): void {
     const toolName = msg.toolName as string;
@@ -1880,15 +1909,20 @@ export class PiAgent extends BaseAgent {
     if (epoch !== this.compactionEpoch) throw new Error('Compaction aborted');
 
     const id = `compact-${++this.rpcIdCounter}`;
-    // GPT-backed Pi compactions on large conversations can legitimately take 60-120s
-    // (single blocking OpenAI summary call, no progress stream). 5 min covers realistic
-    // cases; truly hung subprocesses are caught by the stdio death watchdog.
-    const timeoutMs = 300_000;
+    const timeoutMs = this.compactTimeoutMs;
 
     return new Promise<PiCompactResult>((resolve, reject) => {
       const timer = setTimeout(() => {
+        if (!this.pendingCompactions.has(id)) return;
         this.pendingCompactions.delete(id);
-        reject(new Error(`compact timed out after ${Math.floor(timeoutMs / 1000)}s`));
+        // Cancel the work in the child as well (OSS #1060): the epoch bump turns a
+        // late compact_result and the /compact continuation into no-ops, and
+        // `abort` makes the subprocess call session.abort(), which cancels the
+        // in-flight summarization instead of leaving it running behind a
+        // rejected promise.
+        this.compactionEpoch++;
+        this.send({ type: 'abort' });
+        reject(new Error(`Compaction timed out after ${Math.floor(timeoutMs / 1000)}s and was cancelled`));
       }, timeoutMs);
 
       this.pendingCompactions.set(id, {
@@ -2016,8 +2050,8 @@ export class PiAgent extends BaseAgent {
     // Reset state for new turn
     this._isProcessing = true;
     this.abortReason = undefined;
+    this.turnAbort = new AbortController();
     this.eventQueue.reset();
-    this.currentUserMessage = message;
     this.adapter.startTurn();
 
     // Fire UserPromptSubmit hook event (fire-and-forget)
@@ -2038,6 +2072,9 @@ export class PiAgent extends BaseAgent {
       });
     }
 
+    // A per-turn thinking override (adaptive thinking) is sent before the prompt and the
+    // session level restored when the turn ends (Pi applies thinking per subprocess session).
+    let turnThinkingOverride: ThinkingLevel | undefined;
     try {
       // Ensure subprocess is spawned and ready
       try {
@@ -2182,6 +2219,11 @@ export class PiAgent extends BaseAgent {
       ].filter(Boolean);
       const userMessage = userParts.join('\n\n');
 
+      if (options?.thinkingOverride && options.thinkingOverride !== this._thinkingLevel) {
+        turnThinkingOverride = options.thinkingOverride;
+        this.send({ type: 'set_thinking_level', level: turnThinkingOverride });
+      }
+
       // Send prompt to subprocess
       const turnId = `turn-${++this.rpcIdCounter}`;
       this.send({
@@ -2255,6 +2297,13 @@ export class PiAgent extends BaseAgent {
       yield { type: 'complete' };
     } finally {
       this._isProcessing = false;
+      if (turnThinkingOverride) {
+        try {
+          this.send({ type: 'set_thinking_level', level: this._thinkingLevel });
+        } catch (error) {
+          this.debug(`Could not restore thinking level after the turn: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
     }
   }
 
@@ -2266,10 +2315,14 @@ export class PiAgent extends BaseAgent {
    * Respond to a pending permission request.
    * Permission checking now happens in the main process, so this resolves locally.
    */
-  respondToPermission(requestId: string, allowed: boolean, _alwaysAllow?: boolean): void {
+  respondToPermission(requestId: string, allowed: boolean, alwaysAllow?: boolean): void {
     const pending = this.pendingPermissions.get(requestId);
     if (pending) {
       this.pendingPermissions.delete(requestId);
+      // "Always Allow": remember exactly what the permission check computed (see permission-remember.ts).
+      if (alwaysAllow && allowed && pending.remember) {
+        this.permissionManager.remember(pending.remember);
+      }
       pending.resolve(allowed);
     }
   }
@@ -2369,6 +2422,7 @@ export class PiAgent extends BaseAgent {
       pending.resolve(false);
     }
     this.pendingPermissions.clear();
+    this.turnAbort.abort();
 
     // Send abort to subprocess
     this.send({ type: 'abort' });
@@ -2391,6 +2445,7 @@ export class PiAgent extends BaseAgent {
       pending.resolve(false);
     }
     this.pendingPermissions.clear();
+    this.turnAbort.abort();
 
     // Reject all pending tool executions
     for (const [, pending] of this.pendingToolExecutions) {
@@ -2425,7 +2480,18 @@ export class PiAgent extends BaseAgent {
    * queued tools, and continues with full context intact.
    * Events flow through the existing generator — no abort needed.
    */
+  override canSteerNow(): boolean {
+    return this._isProcessing && !!this.subprocess && !this.isCompactionInFlight();
+  }
+
   override redirect(message: string): boolean {
+    if (this.isCompactionInFlight()) {
+      // A manual /compact owns this turn: no agent loop is running to consume a
+      // steer, so it would vanish (OSS #1058). Refuse without aborting the
+      // compaction; the session layer queues the message for replay.
+      this.debug('Steer refused during manual compaction; message must be queued');
+      return false;
+    }
     if (!this._isProcessing || !this.subprocess) {
       // Not streaming or no subprocess — fall back to abort
       this.forceAbort(AbortReason.Redirect);
@@ -2434,6 +2500,11 @@ export class PiAgent extends BaseAgent {
     this.debug(`Steering mid-stream: "${message.slice(0, 100)}"`);
     this.send({ type: 'steer', message });
     return true;
+  }
+
+  /** A pending manual compact RPC owns the turn; see AgentBackend.isCompactionInFlight. */
+  override isCompactionInFlight(): boolean {
+    return this.pendingCompactions.size > 0;
   }
 
   // ============================================================

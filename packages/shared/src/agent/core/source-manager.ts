@@ -14,6 +14,7 @@
 
 import { join } from 'node:path';
 import type { LoadedSource } from '../../sources/types.ts';
+import type { McpListCount } from '../../mcp/mcp-pool.ts';
 import { sourceNeedsAuthentication } from '../../sources/credential-manager.ts';
 import type { SourceManagerConfig } from './types.ts';
 import {
@@ -26,12 +27,21 @@ import {
 const GUIDE_EXEMPT_SLUGS = new Set(['session']);
 const SOURCE_PROMPT_TAGS = ['sources', 'source_issue'] as const;
 
+/** MCP server instructions are shown once per source, flattened and cut to this length. */
+const MAX_SERVER_INSTRUCTIONS_CHARS = 600;
+
 function sourceLine(value: string | undefined): string {
   return sanitizePromptLine(value ?? 'undefined', SOURCE_PROMPT_TAGS);
 }
 
 function sourceBody(value: string): string {
   return sanitizePromptBody(value, SOURCE_PROMPT_TAGS);
+}
+
+/** "2 resources", "10+ prompts"; null for an absent or empty list. */
+function countLabel(count: McpListCount | undefined, noun: string): string | null {
+  if (!count || count.count === 0) return null;
+  return `${count.count}${count.more ? '+' : ''} ${noun}${count.count === 1 && !count.more ? '' : 's'}`;
 }
 
 /**
@@ -59,6 +69,8 @@ export class SourceManager {
   private intendedSlugs: Set<string> = new Set();
   private allSources: LoadedSource[] = [];
   private knownSlugs: Set<string> = new Set();
+  /** Sources whose MCP extras (resources, prompts, server instructions) were already shown */
+  private featuresShownSlugs: Set<string> = new Set();
 
   constructor(config: SourceManagerConfig = {}) {
     this.config = config;
@@ -151,6 +163,7 @@ export class SourceManager {
    */
   markSourceUnseen(slug: string): void {
     this.knownSlugs.delete(slug);
+    this.featuresShownSlugs.delete(slug);
   }
 
   /**
@@ -158,6 +171,7 @@ export class SourceManager {
    */
   resetSeenSources(): void {
     this.knownSlugs.clear();
+    this.featuresShownSlugs.clear();
   }
 
   // ============================================================
@@ -234,6 +248,19 @@ export class SourceManager {
       parts.push('Read each source\'s guide.md before first tool use — calls are blocked until guide is read.');
     }
 
+    // What connected MCP sources offer beyond tools, shown once per source (this
+    // block rides on every user message, so repeating it would only fill context):
+    // under the source's introduction, or on its own when the source connects
+    // after it was introduced (e.g. enabled mid-session).
+    const pendingFeatures = new Map<string, string[]>();
+    for (const slug of [...this.activeSlugs].sort()) {
+      if (this.featuresShownSlugs.has(slug)) continue;
+      const lines = this.formatSourceFeatures(slug);
+      if (lines.length === 0) continue;
+      pendingFeatures.set(slug, lines);
+      this.featuresShownSlugs.add(slug);
+    }
+
     // Source descriptions (shown once per session when first introduced)
     if (unseenSources.length > 0) {
       parts.push('');
@@ -250,10 +277,22 @@ export class SourceManager {
           parts.push(`  Guide: ${sourceLine(join(s.folderPath, 'guide.md'))}`);
           hasGuides = true;
         }
+        const featureLines = pendingFeatures.get(s.config.slug);
+        if (featureLines) {
+          parts.push(...featureLines);
+          pendingFeatures.delete(s.config.slug);
+        }
       }
       if (hasGuides) {
         parts.push('');
         parts.push('IMPORTANT: You MUST read a source\'s guide with the Read tool BEFORE using any of its tools. Tool calls WILL BE REJECTED if the guide has not been read first.');
+      }
+    }
+
+    if (pendingFeatures.size > 0) {
+      parts.push('');
+      for (const [slug, lines] of pendingFeatures) {
+        parts.push(`- ${sourceLine(slug)}:`, ...lines);
       }
     }
 
@@ -284,6 +323,38 @@ export class SourceManager {
     }
 
     return output;
+  }
+
+  /**
+   * Indented lines on what a connected MCP source offers beyond tools: resource
+   * and prompt counts with the session tools that read them, and the server's
+   * own instructions (untrusted text: flattened, cut, defanged). Empty when
+   * there is nothing to show.
+   */
+  private formatSourceFeatures(slug: string): string[] {
+    const features = this.config.getSourceFeatures?.(slug);
+    if (!features) return [];
+    const lines: string[] = [];
+
+    const resources = [
+      countLabel(features.resources, 'resource'),
+      countLabel(features.resourceTemplates, 'resource template'),
+    ].filter((label): label is string => label !== null);
+    const prompts = countLabel(features.prompts, 'prompt');
+    if (resources.length > 0 || prompts) {
+      const offers = [...resources, ...(prompts ? [prompts] : [])];
+      const tools = [...(resources.length > 0 ? ['source_list_resources'] : []), ...(prompts ? ['source_list_prompts'] : [])];
+      lines.push(`  Offers ${offers.join(', ')} (${tools.join(' / ')})`);
+    }
+
+    const instructions = features.instructions?.replace(/\s+/g, ' ').trim();
+    if (instructions) {
+      const cut = instructions.length > MAX_SERVER_INSTRUCTIONS_CHARS
+        ? `${instructions.slice(0, MAX_SERVER_INSTRUCTIONS_CHARS - 1).trimEnd()}…`
+        : instructions;
+      lines.push(`  Server instructions: ${sourceLine(cut)}`);
+    }
+    return lines;
   }
 
   // ============================================================

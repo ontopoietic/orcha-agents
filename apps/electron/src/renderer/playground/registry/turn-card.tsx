@@ -66,10 +66,14 @@ function useStreamingSimulation(
 ) {
   const [streamedText, setStreamedText] = useState('')
   const [isComplete, setIsComplete] = useState(false)
+  // TurnCard buffers a stream by its age (shouldShowContent), so a stream without a start time
+  // never reveals mid-stream text — the real transcript always passes one.
+  const [streamStartTime, setStreamStartTime] = useState<number | undefined>(undefined)
 
   useEffect(() => {
     setStreamedText('')
     setIsComplete(false)
+    setStreamStartTime(Date.now())
     let index = 0
     let timeoutId: ReturnType<typeof setTimeout>
 
@@ -109,7 +113,7 @@ function useStreamingSimulation(
     return () => clearTimeout(timeoutId)
   }, [fullText, speed])
 
-  return { streamedText, isComplete }
+  return { streamedText, isComplete, streamStartTime }
 }
 
 /** TurnCard wrapper that simulates streaming response */
@@ -122,7 +126,7 @@ function StreamingSimulationTurnCard({
   intent?: string
   simulationSpeed?: 'slow' | 'normal' | 'fast'
 }) {
-  const { streamedText, isComplete } = useStreamingSimulation(
+  const { streamedText, isComplete, streamStartTime } = useStreamingSimulation(
     streamingTextSample,
     simulationSpeed,
   )
@@ -130,6 +134,7 @@ function StreamingSimulationTurnCard({
   const response: ResponseContent = {
     text: streamedText,
     isStreaming: !isComplete,
+    streamStartTime,
   }
 
   return (

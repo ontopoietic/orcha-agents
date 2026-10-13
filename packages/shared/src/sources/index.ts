@@ -63,6 +63,7 @@ export {
   sourceExists,
   // Parsing utilities
   parseGuideMarkdown,
+  extractTagline,
 } from './storage.ts';
 
 // Credential Manager (unified credential operations)
@@ -70,11 +71,15 @@ export {
   SourceCredentialManager,
   getSourceCredentialManager,
   getSourcesNeedingAuth,
+  isMultiHeaderCredential,
+  parseStoredApiCredential,
+  serializeHeaderCredential,
 } from './credential-manager.ts';
 export type {
   AuthResult,
   ApiCredential,
   BasicAuthCredential,
+  MultiHeaderCredential,
 } from './credential-manager.ts';
 
 // Server Builder (builds MCP/API servers from sources)
