@@ -1,4 +1,5 @@
 import * as React from 'react'
+import { useTranslation } from 'react-i18next'
 import { Markdown } from '../markdown'
 import type { AnnotationV1 } from '@craft-agent/core'
 import { type IslandTransitionConfig } from '../ui'
@@ -75,6 +76,7 @@ export function AnnotatableMarkdownDocument({
   openAnnotationRequest,
   isStreaming = false,
 }: AnnotatableMarkdownDocumentProps) {
+  const { t } = useTranslation()
   const canAnnotate = canAnnotateMessage({
     hasAddAnnotationHandler: !!onAddAnnotation,
     hasMessageId: !!messageId,
@@ -290,6 +292,14 @@ export function AnnotatableMarkdownDocument({
     markSubmitSuccess()
     clearDomSelection()
   }, [activeAnnotationDetail, onUpdateAnnotation, activeAnnotation, closeSelectionMenu, pendingSelection, canAnnotate, onAddAnnotation, messageId, sessionId, markSubmitSuccess])
+
+  const handleQuickAgree = React.useCallback(() => {
+    handleSubmitFollowUp(t('chat.agreeText'))
+  }, [handleSubmitFollowUp, t])
+
+  const handleQuickElaborate = React.useCallback(() => {
+    handleSubmitFollowUp(t('chat.elaborateText'))
+  }, [handleSubmitFollowUp, t])
 
   const handleCancelFollowUp = useAnnotationCancelRestore({
     contentRootRef: contentLayerRef,
@@ -628,6 +638,8 @@ export function AnnotatableMarkdownDocument({
       draft={followUpDraft}
       onDraftChange={setFollowUpDraft}
       onOpenFollowUp={handleOpenFollowUpView}
+      onAgree={handleQuickAgree}
+      onElaborate={handleQuickElaborate}
       onCancel={handleCancelFollowUp}
       onRequestBack={handleSelectionMenuRequestBack}
       onRequestEdit={handleRequestFollowUpEdit}

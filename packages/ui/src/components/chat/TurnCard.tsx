@@ -1008,6 +1008,14 @@ export function ResponseCard({
     })
   }, [saveFollowUp, onSaveAndSendFollowUp])
 
+  const handleQuickAgree = useCallback(() => {
+    void saveFollowUp(t('chat.agreeText'))
+  }, [saveFollowUp, t])
+
+  const handleQuickElaborate = useCallback(() => {
+    void saveFollowUp(t('chat.elaborateText'))
+  }, [saveFollowUp, t])
+
   const handleCancelFollowUp = useAnnotationCancelRestore({
     contentRootRef: contentLayerRef,
     cancelFollowUp,
@@ -1327,6 +1335,8 @@ export function ResponseCard({
       draft={followUpDraft}
       onDraftChange={setFollowUpDraft}
       onOpenFollowUp={handleOpenFollowUpView}
+      onAgree={handleQuickAgree}
+      onElaborate={handleQuickElaborate}
       onCancel={handleCancelFollowUp}
       onRequestBack={handleSelectionMenuRequestBack}
       onRequestEdit={handleRequestFollowUpEdit}
