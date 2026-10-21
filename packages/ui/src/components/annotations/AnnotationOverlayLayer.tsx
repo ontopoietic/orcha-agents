@@ -14,7 +14,7 @@ export interface AnnotationOverlayLayerProps {
   getTooltipText?: (annotation: AnnotationV1, index: number) => string
   /** Whether clicking a chip should open the annotation island/details view. */
   allowChipOpen?: boolean
-  onChipOpen: (params: { annotationId: string; index: number; anchorX: number; anchorY: number; mode: 'view' }) => void
+  onChipOpen: (params: { annotationId: string; index: number; anchorX: number; anchorY: number; mode: 'view' | 'edit' }) => void
 }
 
 export function AnnotationOverlayLayer({

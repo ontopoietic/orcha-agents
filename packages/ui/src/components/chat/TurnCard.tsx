@@ -1009,22 +1009,16 @@ export function ResponseCard({
     })
   }, [saveFollowUp, onSaveAndSendFollowUp])
 
-  // Quick replies pre-fill the follow-up editor (in edit mode) instead of
-  // committing instantly, so the staged text stays editable before it is
-  // collected and sent with the other follow-ups.
+  // Quick replies stage the follow-up immediately (one click, no editor). The
+  // staged note stays editable afterwards by clicking its follow-up chip, which
+  // opens the annotation in edit mode (see interaction-policy).
   const handleQuickAgree = useCallback(() => {
-    if (!pendingSelection) return
-    clearDomSelection()
-    setFollowUpDraft(t('chat.agreeText', { lng: getQuickReplyLanguage() }))
-    openFollowUpFromSelection()
-  }, [pendingSelection, setFollowUpDraft, openFollowUpFromSelection, t])
+    void saveFollowUp(t('chat.agreeText', { lng: getQuickReplyLanguage() }))
+  }, [saveFollowUp, t])
 
   const handleQuickElaborate = useCallback(() => {
-    if (!pendingSelection) return
-    clearDomSelection()
-    setFollowUpDraft(t('chat.elaborateText', { lng: getQuickReplyLanguage() }))
-    openFollowUpFromSelection()
-  }, [pendingSelection, setFollowUpDraft, openFollowUpFromSelection, t])
+    void saveFollowUp(t('chat.elaborateText', { lng: getQuickReplyLanguage() }))
+  }, [saveFollowUp, t])
 
   const handleCancelFollowUp = useAnnotationCancelRestore({
     contentRootRef: contentLayerRef,
