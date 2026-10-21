@@ -1,6 +1,7 @@
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
 import { Markdown } from '../markdown'
+import { getQuickReplyLanguage } from '../../lib/quick-reply-language'
 import type { AnnotationV1 } from '@craft-agent/core'
 import { type IslandTransitionConfig } from '../ui'
 import { AnnotationIslandMenu } from '../annotations/AnnotationIslandMenu'
@@ -293,13 +294,22 @@ export function AnnotatableMarkdownDocument({
     clearDomSelection()
   }, [activeAnnotationDetail, onUpdateAnnotation, activeAnnotation, closeSelectionMenu, pendingSelection, canAnnotate, onAddAnnotation, messageId, sessionId, markSubmitSuccess])
 
+  // Quick replies pre-fill the follow-up editor (in edit mode) instead of
+  // committing instantly, so the staged text stays editable before it is
+  // collected and sent with the other follow-ups.
   const handleQuickAgree = React.useCallback(() => {
-    handleSubmitFollowUp(t('chat.agreeText'))
-  }, [handleSubmitFollowUp, t])
+    if (!pendingSelection) return
+    clearDomSelection()
+    setFollowUpDraft(t('chat.agreeText', { lng: getQuickReplyLanguage() }))
+    openFollowUpFromSelection()
+  }, [pendingSelection, setFollowUpDraft, openFollowUpFromSelection, t])
 
   const handleQuickElaborate = React.useCallback(() => {
-    handleSubmitFollowUp(t('chat.elaborateText'))
-  }, [handleSubmitFollowUp, t])
+    if (!pendingSelection) return
+    clearDomSelection()
+    setFollowUpDraft(t('chat.elaborateText', { lng: getQuickReplyLanguage() }))
+    openFollowUpFromSelection()
+  }, [pendingSelection, setFollowUpDraft, openFollowUpFromSelection, t])
 
   const handleCancelFollowUp = useAnnotationCancelRestore({
     contentRootRef: contentLayerRef,

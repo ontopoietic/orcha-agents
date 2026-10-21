@@ -9,6 +9,7 @@ import { useState, useEffect, useMemo, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
 import { LANGUAGES, type LanguageCode } from '@craft-agent/shared/i18n'
+import { setQuickReplyLanguage } from '@craft-agent/ui'
 import type { ColumnDef } from '@tanstack/react-table'
 import { HeaderMenu } from '@/components/ui/HeaderMenu'
 import { EditPopover, EditButton, getEditConfig } from '@/components/ui/EditPopover'
@@ -158,6 +159,39 @@ export default function AppearanceSettingsPage() {
   const handleConnectionIconsChange = useCallback((checked: boolean) => {
     setShowConnectionIcons(checked)
     storage.set(storage.KEYS.showConnectionIcons, checked)
+  }, [])
+
+  // Response language (agent reply language), decoupled from the UI language.
+  // Persisted in preferences.json (`responseLanguage`). Sentinel 'ui' = follow UI.
+  const [responseLanguage, setResponseLanguageState] = useState<string>('ui')
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      try {
+        const res = await window.electronAPI?.readPreferences?.()
+        if (cancelled || !res?.exists || !res.content) return
+        const prefs = JSON.parse(res.content) as { responseLanguage?: string }
+        setResponseLanguageState(prefs.responseLanguage ?? 'ui')
+      } catch { /* keep default */ }
+    })()
+    return () => { cancelled = true }
+  }, [])
+
+  const handleResponseLanguageChange = useCallback((value: string) => {
+    setResponseLanguageState(value)
+    const pref = value === 'ui' ? undefined : value
+    // Keep annotation quick-replies in the chosen response language.
+    setQuickReplyLanguage(pref && pref !== 'auto' ? pref : undefined)
+    void (async () => {
+      try {
+        const res = await window.electronAPI?.readPreferences?.()
+        const current = (res?.exists && res.content ? JSON.parse(res.content) : {}) as Record<string, unknown>
+        if (pref === undefined) delete current.responseLanguage
+        else current.responseLanguage = pref
+        current.updatedAt = Date.now()
+        await window.electronAPI?.writePreferences?.(JSON.stringify(current, null, 2))
+      } catch { /* ignore write errors — selection already applied in UI */ }
+    })()
   }, [])
 
   // Project color treatment in the SessionList
@@ -460,6 +494,23 @@ export default function AppearanceSettingsPage() {
                 value: code,
                 label: config.nativeName,
               }))}
+            />
+          </SettingsRow>
+          <SettingsRow
+            label={t("settings.appearance.responseLanguage")}
+            description={t("settings.appearance.responseLanguageDesc")}
+          >
+            <SettingsMenuSelect
+              value={responseLanguage}
+              onValueChange={handleResponseLanguageChange}
+              options={[
+                { value: 'ui', label: t("settings.appearance.responseLanguageFollowUi") },
+                { value: 'auto', label: t("settings.appearance.responseLanguageAuto") },
+                ...Object.entries(LANGUAGES).map(([code, config]) => ({
+                  value: code,
+                  label: config.nativeName,
+                })),
+              ]}
             />
           </SettingsRow>
           <SettingsToggle

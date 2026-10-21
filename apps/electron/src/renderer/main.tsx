@@ -6,6 +6,7 @@ import { ThemeProvider } from './context/ThemeContext'
 import { windowWorkspaceIdAtom } from './atoms/sessions'
 import { Toaster } from '@/components/ui/sonner'
 import { setupI18n, i18n } from '@craft-agent/shared/i18n'
+import { setQuickReplyLanguage } from '@craft-agent/ui'
 import { initReactI18next } from 'react-i18next'
 import LanguageDetector from 'i18next-browser-languagedetector'
 // Initialize i18n before any React rendering
@@ -27,6 +28,21 @@ console.info('[i18n] renderer bootstrap push', {
 if (resolvedLanguage) {
   void window.electronAPI?.changeLanguage?.(resolvedLanguage)
 }
+
+// Populate the annotation quick-reply payload language from persisted
+// preferences so "Agree"/"Elaborate" are written in the user's chosen response
+// language (falls back to the UI language when unset or 'auto').
+void (async () => {
+  try {
+    const res = await window.electronAPI?.readPreferences?.()
+    if (!res?.exists || !res.content) return
+    const prefs = JSON.parse(res.content) as { responseLanguage?: string }
+    const lng = prefs.responseLanguage && prefs.responseLanguage !== 'auto'
+      ? prefs.responseLanguage
+      : undefined
+    setQuickReplyLanguage(lng)
+  } catch { /* ignore — fall back to UI language */ }
+})()
 
 // NOTE: Sentry renderer init intentionally removed in this fork (Sentry disabled).
 

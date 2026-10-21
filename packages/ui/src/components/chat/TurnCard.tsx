@@ -40,6 +40,7 @@ import {
 import { clearBlockAnnotationMarkers, applyBlockAnnotationMarker } from '../annotations/block-markers'
 import { canAnnotateMessage, shouldRenderAnnotationIslandInPortal } from '../annotations/annotation-host-config'
 import { clearDomSelection } from '../annotations/selection-restore'
+import { getQuickReplyLanguage } from '../../lib/quick-reply-language'
 import {
   shouldIgnoreSelectionMouseUpTarget,
 } from '../annotations/interaction-policy'
@@ -1008,13 +1009,22 @@ export function ResponseCard({
     })
   }, [saveFollowUp, onSaveAndSendFollowUp])
 
+  // Quick replies pre-fill the follow-up editor (in edit mode) instead of
+  // committing instantly, so the staged text stays editable before it is
+  // collected and sent with the other follow-ups.
   const handleQuickAgree = useCallback(() => {
-    void saveFollowUp(t('chat.agreeText'))
-  }, [saveFollowUp, t])
+    if (!pendingSelection) return
+    clearDomSelection()
+    setFollowUpDraft(t('chat.agreeText', { lng: getQuickReplyLanguage() }))
+    openFollowUpFromSelection()
+  }, [pendingSelection, setFollowUpDraft, openFollowUpFromSelection, t])
 
   const handleQuickElaborate = useCallback(() => {
-    void saveFollowUp(t('chat.elaborateText'))
-  }, [saveFollowUp, t])
+    if (!pendingSelection) return
+    clearDomSelection()
+    setFollowUpDraft(t('chat.elaborateText', { lng: getQuickReplyLanguage() }))
+    openFollowUpFromSelection()
+  }, [pendingSelection, setFollowUpDraft, openFollowUpFromSelection, t])
 
   const handleCancelFollowUp = useAnnotationCancelRestore({
     contentRootRef: contentLayerRef,
