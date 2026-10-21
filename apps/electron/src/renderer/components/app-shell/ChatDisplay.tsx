@@ -1335,7 +1335,9 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
     setOpenAnnotationRequest({
       messageId: item.messageId,
       annotationId: item.annotationId,
-      mode: 'view',
+      // Open unsent follow-ups straight into edit mode so the staged note
+      // (including quick-reply "Agree"/"Elaborate" text) stays editable.
+      mode: 'edit',
       anchorX: anchor?.x,
       anchorY: anchor?.y,
       nonce: followUpOpenNonceRef.current,
