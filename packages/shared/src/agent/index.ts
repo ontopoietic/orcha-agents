@@ -5,6 +5,7 @@ export * from './conversation-summary.ts';
 // Export PiAgent for direct use
 export { PiAgent, PiBackend } from './pi-agent.ts';
 export * from './errors.ts';
+export * from './usage-limit.ts';
 export * from './options.ts';
 
 // Export session-scoped-tools - tools scoped to a specific session

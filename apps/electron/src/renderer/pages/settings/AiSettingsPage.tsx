@@ -14,7 +14,7 @@ import { useTranslation } from 'react-i18next'
 import { Button, IconButton } from '@/components/ui/button'
 import { HeaderMenu } from '@/components/ui/HeaderMenu'
 import { routes } from '@/lib/navigate'
-import { X, MoreHorizontal, Pencil, Trash2, Star, ChevronDown, ChevronRight, CheckCircle2, AlertTriangle, RefreshCcw, Settings2, MessageSquareMore, Zap, Clock, Check } from 'lucide-react'
+import { X, MoreHorizontal, Pencil, Trash2, Star, ChevronDown, ChevronRight, CheckCircle2, AlertTriangle, RefreshCcw, Settings2, MessageSquareMore, Zap, Clock, Check, ArrowRightLeft, ShieldCheck } from 'lucide-react'
 import type { CredentialHealthStatus, CredentialHealthIssue } from '../../../shared/types'
 import { Spinner, FullscreenOverlayBase, Tooltip, TooltipTrigger, TooltipContent, AnimatedCollapsibleContent } from '@craft-agent/ui'
 import { useSetAtom } from 'jotai'
@@ -214,9 +214,15 @@ interface ConnectionRowProps {
   validationError?: string
   /** True when another OAuth connection resolves to the same Anthropic account (issue #838) */
   isDuplicateAccount?: boolean
+  /** Fork (connection failover): other connections on the same backend a session can move to */
+  shareableConnections: LlmConnectionWithStatus[]
+  /** Set ('' clears) the connection sessions move to when this one hits a limit */
+  onSetFailover: (targetSlug: string) => void
+  /** Move all open sessions of this connection to the target now */
+  onMoveSessions: (target: LlmConnectionWithStatus) => void
 }
 
-function ConnectionRow({ connection, isLastConnection, onRenameClick, onDelete, onSetDefault, onValidate, onReauthenticate, onEdit, onSetMidStreamBehavior, validationState, validationError, isDuplicateAccount }: ConnectionRowProps) {
+function ConnectionRow({ connection, isLastConnection, onRenameClick, onDelete, onSetDefault, onValidate, onReauthenticate, onEdit, onSetMidStreamBehavior, validationState, validationError, isDuplicateAccount, shareableConnections, onSetFailover, onMoveSessions }: ConnectionRowProps) {
   const { t } = useTranslation()
   const [menuOpen, setMenuOpen] = useState(false)
   const [piBaseUrl, setPiBaseUrl] = useState<string | undefined>(undefined)
@@ -394,6 +400,42 @@ function ConnectionRow({ connection, isLastConnection, onRenameClick, onDelete, 
               </DropdownMenuSub>
             )
           })()}
+          {shareableConnections.length > 0 && (
+            <>
+              <StyledDropdownMenuSeparator />
+              <DropdownMenuSub>
+                <StyledDropdownMenuSubTrigger>
+                  <ArrowRightLeft className="h-3.5 w-3.5" />
+                  <span>{t("settings.ai.moveSessions.title")}</span>
+                </StyledDropdownMenuSubTrigger>
+                <StyledDropdownMenuSubContent>
+                  {shareableConnections.map(target => (
+                    <StyledDropdownMenuItem key={target.slug} onClick={() => onMoveSessions(target)}>
+                      <span className="flex-1">{target.name}</span>
+                    </StyledDropdownMenuItem>
+                  ))}
+                </StyledDropdownMenuSubContent>
+              </DropdownMenuSub>
+              <DropdownMenuSub>
+                <StyledDropdownMenuSubTrigger>
+                  <ShieldCheck className="h-3.5 w-3.5" />
+                  <span>{t("settings.ai.failover.title")}</span>
+                </StyledDropdownMenuSubTrigger>
+                <StyledDropdownMenuSubContent>
+                  <StyledDropdownMenuItem onClick={() => onSetFailover('')}>
+                    <span className="flex-1">{t("settings.ai.failover.off")}</span>
+                    {!connection.failoverConnection && <Check className="h-3.5 w-3.5" />}
+                  </StyledDropdownMenuItem>
+                  {shareableConnections.map(target => (
+                    <StyledDropdownMenuItem key={target.slug} onClick={() => onSetFailover(target.slug)}>
+                      <span className="flex-1">{target.name}</span>
+                      {connection.failoverConnection === target.slug && <Check className="h-3.5 w-3.5" />}
+                    </StyledDropdownMenuItem>
+                  ))}
+                </StyledDropdownMenuSubContent>
+              </DropdownMenuSub>
+            </>
+          )}
           <StyledDropdownMenuSeparator />
           <StyledDropdownMenuItem
             onClick={onDelete}
@@ -960,6 +1002,52 @@ export default function AiSettingsPage() {
     }
   }, [refreshLlmConnections, t])
 
+  // Fork (connection failover): which connection sessions move to when this one hits a limit.
+  const handleSetFailover = useCallback(async (
+    connection: LlmConnectionWithStatus,
+    targetSlug: string,
+  ) => {
+    if (!window.electronAPI) return
+    if ((connection.failoverConnection ?? '') === targetSlug) return
+    try {
+      const { isAuthenticated: _a, authError: _b, isDefault: _c, ...connectionData } = connection
+      const result = await window.electronAPI.saveLlmConnection({ ...connectionData, failoverConnection: targetSlug } as import('../../../shared/types').LlmConnection)
+      if (result.success) {
+        refreshLlmConnections?.()
+      } else {
+        console.error('Failed to update failover:', result.error)
+        toast.error(t('settings.ai.failover.updateFailed'))
+      }
+    } catch (error) {
+      console.error('Failed to update failover:', error)
+      toast.error(t('settings.ai.failover.updateFailed'))
+    }
+  }, [refreshLlmConnections, t])
+
+  // Fork (connection failover): move every open session of a connection to another one, live.
+  const handleMoveSessions = useCallback(async (
+    from: LlmConnectionWithStatus,
+    to: LlmConnectionWithStatus,
+  ) => {
+    if (!window.electronAPI) return
+    try {
+      const result = await window.electronAPI.migrateLlmConnectionSessions(from.slug, to.slug)
+      if (!result.success) {
+        console.error('Failed to move sessions:', result.error)
+        toast.error(t('settings.ai.moveSessions.failed'), { description: result.error })
+        return
+      }
+      toast.success(t('settings.ai.moveSessions.done', { count: result.moved ?? 0, to: to.name }), {
+        description: result.skippedRunning
+          ? t('settings.ai.moveSessions.skippedRunning', { count: result.skippedRunning })
+          : undefined,
+      })
+    } catch (error) {
+      console.error('Failed to move sessions:', error)
+      toast.error(t('settings.ai.moveSessions.failed'))
+    }
+  }, [t])
+
   // Get the default connection for display
   const defaultConnection = useMemo(() => {
     return llmConnections.find(c => c.isDefault)
@@ -1382,6 +1470,9 @@ export default function AiSettingsPage() {
                 validationState={validationStates[conn.slug]?.state || 'idle'}
                 validationError={validationStates[conn.slug]?.error}
                 isDuplicateAccount={!!conn.oauthAccountUuid && duplicateAccountUuids.has(conn.oauthAccountUuid)}
+                shareableConnections={llmConnections.filter(c => c.slug !== conn.slug && c.providerType === conn.providerType)}
+                onSetFailover={(targetSlug) => handleSetFailover(conn, targetSlug)}
+                onMoveSessions={(target) => handleMoveSessions(conn, target)}
               />
             ))
           )}

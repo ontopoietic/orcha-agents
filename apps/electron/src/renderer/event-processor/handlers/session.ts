@@ -193,6 +193,7 @@ export function handleTypedError(
       action: a.action,
       url: a.url,
       sourceSlug: a.sourceSlug,
+      connectionSlug: a.connectionSlug,
     })),
   }
 
@@ -312,6 +313,7 @@ export function handleInfo(
     content: event.message,
     timestamp: event.timestamp ?? Date.now(),
     infoLevel: event.level,
+    ...(event.statusType === 'connection_failover' ? { statusType: 'connection_failover' as const } : {}),
   }
 
   return {

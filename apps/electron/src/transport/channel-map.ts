@@ -392,6 +392,7 @@ export const CHANNEL_MAP = {
   testLlmConnection: invoke(RPC_CHANNELS.llmConnections.TEST),
   setDefaultLlmConnection: invoke(RPC_CHANNELS.llmConnections.SET_DEFAULT),
   setWorkspaceDefaultLlmConnection: invoke(RPC_CHANNELS.llmConnections.SET_WORKSPACE_DEFAULT),
+  migrateLlmConnectionSessions: invoke(RPC_CHANNELS.llmConnections.MIGRATE_SESSIONS),
 
   // Projects
   getProjects: invoke(RPC_CHANNELS.projects.GET),

@@ -189,6 +189,12 @@ export interface LlmConnection {
    */
   midStreamBehavior?: MidStreamBehavior;
 
+  /**
+   * Fork (connection failover): connection a session moves to when this one hits a usage or
+   * rate limit. Must share the provider type. Unset = no automatic failover.
+   */
+  failoverConnection?: string;
+
   // --- Resolved Anthropic OAuth identity (issue #838) ---
   // Captured from the token-exchange response; lets the UI flag two Claude
   // connections that resolve to the same underlying account. All optional and

@@ -20,6 +20,21 @@ import {
   type BackendHostRuntimeContext,
   type PostInitResult,
 } from '@craft-agent/shared/agent/backend'
+import { type AgentError, parseError, isUsageLimitText } from '@craft-agent/shared/agent'
+import {
+  type TurnLimitHit,
+  type LimitRecoveryState,
+  LIMIT_CONTINUE_PROMPT,
+  canShareSession,
+  decideLimitRecovery,
+  failoverNotice,
+  isMigratableSession,
+  limitedUntilFor,
+  mergeLimitHit,
+  resolveFailoverTarget,
+  resolveModelForTarget,
+  turnMadeProgress,
+} from './connection-failover'
 import { getLlmConnection, getLlmConnections, getDefaultLlmConnection, getDefaultThinkingLevel, resetManagedAnthropicAuthEnvVars, resolveMidStreamBehavior, getPersistedUiLanguage, resolveTitleLanguageName } from '@craft-agent/shared/config'
 import type { MidStreamBehavior } from '@craft-agent/shared/config'
 import { PrivilegedExecutionBroker } from '@craft-agent/server-core/services'
@@ -906,6 +921,16 @@ interface ManagedSession {
   authRetryAttempted?: boolean
   // Flag indicating auth retry is in progress (to prevent complete handler from interfering)
   authRetryInProgress?: boolean
+  // Fork (connection failover): limit hit in the current turn, the limit errors held back until
+  // the turn ends (shown only when no recovery runs), and per-turn recovery bookkeeping.
+  turnLimitHit?: TurnLimitHit
+  heldLimitErrors?: AgentError[]
+  limitRecovery?: LimitRecoveryState
+  // A limit recovery is resending/continuing the turn (complete handler steps aside, like auth retry)
+  limitRecoveryInProgress?: boolean
+  limitRecoveryTimer?: ReturnType<typeof setTimeout>
+  // The next sendMessage is the recovery's own resend: keep limitRecovery instead of resetting it
+  limitRecoveryResend?: boolean
   // Whether this session is hidden from session list (e.g., mini edit sessions)
   hidden?: boolean
   // Nobody answers prompts here (CLI runs); in memory only. See isAttendedSession.
@@ -1288,6 +1313,8 @@ export function canSteerTextPayload(
 
 export class SessionManager implements ISessionManager {
   private sessions: Map<string, ManagedSession> = new Map()
+  /** Fork (connection failover): connection slug → epoch ms until which it counts as limited. */
+  private connectionLimitedUntil: Map<string, number> = new Map()
   // Delta batching for performance - reduces IPC events from 50+/sec to ~20/sec
   private pendingDeltas: Map<string, PendingDelta> = new Map()
   private deltaFlushTimers: Map<string, NodeJS.Timeout> = new Map()
@@ -3263,6 +3290,19 @@ export class SessionManager implements ISessionManager {
     const defaultModel = wsConfig?.defaults?.model
     // Get default enabled sources from workspace config
     const defaultEnabledSourceSlugs = options?.enabledSourceSlugs ?? wsConfig?.defaults?.enabledSourceSlugs
+
+    // Fork (connection failover): a new session does not start on an account that is limited
+    // right now — it starts on that connection's failover target instead.
+    if (!options?.llmConnection) {
+      const defaultSlug = wsConfig?.defaults?.defaultLlmConnection || getDefaultLlmConnection()
+      if (defaultSlug && this.isConnectionLimited(defaultSlug)) {
+        const target = resolveFailoverTarget(defaultSlug, getLlmConnections(), this.connectionLimitedUntil, Date.now())
+        if (target) {
+          sessionLog.info(`[failover] Default connection ${defaultSlug} is limited — new session starts on ${target.slug}`)
+          options = { ...options, llmConnection: target.slug }
+        }
+      }
+    }
 
     // Resolve model tier hints ('fast' / 'default') to actual model IDs.
     // EditPopover uses tier hints instead of hardcoded Anthropic model names
@@ -6962,6 +7002,15 @@ export class SessionManager implements ISessionManager {
     if (!_isAuthRetry) {
       managed.authRetryAttempted = false
     }
+    // Limit recovery: one 429 retry and one failover per user turn; the recovery's own resend keeps
+    // the bookkeeping so it cannot loop.
+    if (managed.limitRecoveryResend) {
+      managed.limitRecoveryResend = false
+    } else if (!_isAuthRetry) {
+      managed.limitRecovery = { rateRetried: false, failedOver: false }
+    }
+    managed.turnLimitHit = undefined
+    managed.heldLimitErrors = undefined
 
     // Store message/attachments for potential retry after auth refresh
     // (SDK subprocess caches token at startup, so if it expires mid-session,
@@ -7225,6 +7274,14 @@ export class SessionManager implements ISessionManager {
             return  // Exit function - retry will handle completion
           }
 
+          // Fork (connection failover): the turn hit a limit — retry / fail over instead of
+          // completing; the recovery's resend handles completion. No recovery → errors are shown.
+          if (managed.turnLimitHit && managed.isProcessing && this.startLimitRecovery(sessionId, managed)) {
+            sendSpan.mark('chat.complete.limit_recovery_pending')
+            sendSpan.end()
+            return
+          }
+
           // Auth/plan handoff paths already stopped processing and emitted a complete
           // event to the renderer. Ignore the backend's trailing complete to avoid
           // double cleanup and duplicate UI completion events.
@@ -7410,6 +7467,14 @@ export class SessionManager implements ISessionManager {
       managed.messages = managed.messages.filter(m => !queuedMessageIds.has(m.id))
     }
 
+    // Fork (connection failover): a pending 429 retry / failover dies with the stop.
+    if (managed.limitRecoveryTimer) {
+      clearTimeout(managed.limitRecoveryTimer)
+      managed.limitRecoveryTimer = undefined
+    }
+    const stoppedDuringLimitRecovery = managed.limitRecoveryInProgress === true
+    managed.limitRecoveryInProgress = false
+
     // Signal intent to stop - let the event loop drain remaining events before clearing isProcessing
     // This prevents losing in-flight messages after soft interrupt
     managed.stopRequested = true
@@ -7454,6 +7519,12 @@ export class SessionManager implements ISessionManager {
       }, managed.workspace.id)
     }
 
+    // The turn's event loop already ended when a limit recovery was waiting: finish now.
+    if (stoppedDuringLimitRecovery) {
+      this.onProcessingStopped(sessionId, 'interrupted')
+      return
+    }
+
     // Safety timeout: if event loop doesn't complete within 5 seconds, force cleanup
     // This handles cases where the generator gets stuck
     setTimeout(() => {
@@ -7472,6 +7543,329 @@ export class SessionManager implements ISessionManager {
    * Shared by both typed_error and plain error auth-retry paths.
    * Returns true if retry was initiated, false if conditions not met.
    */
+  /**
+   * Show a typed error in the transcript: persisted rich error message + typed_error event.
+   */
+  private emitTypedErrorMessage(managed: ManagedSession, error: AgentError, workspaceId: string): void {
+    // Build rich error message with all diagnostic fields for persistence and UI display
+    const typedErrorMessage: Message = {
+      id: generateMessageId(),
+      role: 'error',
+      // Combine title and message for content display (handles undefined gracefully)
+      content: [error.title, error.message].filter(Boolean).join(': ') || 'An error occurred',
+      timestamp: this.monotonic(),
+      // Rich error fields for diagnostics and retry functionality
+      errorCode: error.code,
+      errorTitle: error.title,
+      errorDetails: error.details,
+      errorOriginal: error.originalError,
+      errorCanRetry: error.canRetry,
+      // Fork (connection failover): the switch button must survive a reload
+      ...(error.actions.some(a => a.action === 'switch_connection') ? { errorActions: error.actions } : {}),
+    }
+    managed.messages.push(typedErrorMessage)
+    // Send typed_error event with full structure for renderer to handle
+    this.sendEvent({
+      type: 'typed_error',
+      sessionId: managed.id,
+      error: {
+        code: error.code,
+        title: error.title,
+        message: error.message,
+        actions: error.actions,
+        canRetry: error.canRetry,
+        details: error.details,
+        originalError: error.originalError,
+      },
+      timestamp: typedErrorMessage.timestamp,
+    }, workspaceId)
+  }
+
+  // ============================================
+  // Fork: connection failover on Claude limits
+  // ============================================
+
+  /** The connection a session actually runs on (session pin, else workspace/global default). */
+  private effectiveConnectionSlug(managed: ManagedSession): string | undefined {
+    if (managed.llmConnection) return managed.llmConnection
+    return resolveBackendContext({
+      sessionConnectionSlug: undefined,
+      workspaceDefaultConnectionSlug: loadWorkspaceConfig(managed.workspace.rootPath)?.defaults?.defaultLlmConnection,
+      managedModel: managed.model,
+    }).connection?.slug
+  }
+
+  /** Record a limit error of the running turn; it is shown at turn end unless a recovery runs. */
+  private holdLimitError(managed: ManagedSession, error: AgentError): void {
+    const connectionSlug = this.effectiveConnectionSlug(managed)
+    if (!connectionSlug) {
+      this.emitTypedErrorMessage(managed, error, managed.workspace.id)
+      return
+    }
+    const kind = error.code === 'usage_limit' ? 'usage_limit' : 'rate_limited'
+    managed.turnLimitHit = mergeLimitHit(managed.turnLimitHit, { kind, connectionSlug, resetsAt: error.resetsAt })
+    managed.heldLimitErrors = [...(managed.heldLimitErrors ?? []), error]
+    sessionLog.info(`[failover] ${kind} on ${connectionSlug} for session ${managed.id} — held until turn end`)
+  }
+
+  /** Mark a connection limited so failover and new sessions avoid it until it resets. */
+  private markConnectionLimited(hit: TurnLimitHit): void {
+    const until = limitedUntilFor(hit, Date.now())
+    const current = this.connectionLimitedUntil.get(hit.connectionSlug) ?? 0
+    if (until > current) this.connectionLimitedUntil.set(hit.connectionSlug, until)
+  }
+
+  /** Connections that are not limited right now (for new sessions and the manual switch button). */
+  isConnectionLimited(slug: string): boolean {
+    return (this.connectionLimitedUntil.get(slug) ?? 0) > Date.now()
+  }
+
+  /**
+   * Another connection a limited session could move to by hand: the configured failover target,
+   * else any free connection on the same backend.
+   */
+  private manualSwitchTarget(sourceSlug: string) {
+    const connections = getLlmConnections()
+    const configured = resolveFailoverTarget(sourceSlug, connections, this.connectionLimitedUntil, Date.now())
+    if (configured) return configured
+    const source = connections.find(c => c.slug === sourceSlug)
+    if (!source) return null
+    return connections.find(c => canShareSession(source, c) && !this.isConnectionLimited(c.slug)) ?? null
+  }
+
+  /** Show the held limit errors (no recovery ran), with a manual switch button where possible. */
+  private releaseHeldLimitErrors(managed: ManagedSession): void {
+    const held = managed.heldLimitErrors ?? []
+    const hit = managed.turnLimitHit
+    managed.heldLimitErrors = undefined
+    managed.turnLimitHit = undefined
+    if (held.length === 0) return
+    const target = hit ? this.manualSwitchTarget(hit.connectionSlug) : null
+    // One message is enough: the quota sentence when there is one, else the last throttle.
+    const shown = held.find(e => e.code === 'usage_limit') ?? held[held.length - 1]!
+    const actions = target
+      ? [{ key: 's', label: `Mit ${target.name} fortsetzen`, action: 'switch_connection' as const, connectionSlug: target.slug }, ...shown.actions]
+      : shown.actions
+    this.emitTypedErrorMessage(managed, { ...shown, actions }, managed.workspace.id)
+  }
+
+  /**
+   * Called when a turn that hit a limit completes. Starts the recovery (429 retry on the same
+   * account, or failover) and returns true, or returns false after showing the held errors.
+   */
+  private startLimitRecovery(sessionId: string, managed: ManagedSession): boolean {
+    const hit = managed.turnLimitHit
+    if (!hit) return false
+    // A 429 the SDK recovered from (the turn still produced its final answer) needs no retry.
+    if (hit.kind === 'rate_limited') {
+      const finalId = this.getLastFinalAssistantMessageId(managed.messages)
+      if (finalId && finalId !== managed.turnStartFinalMessageId) {
+        this.releaseHeldLimitErrors(managed)
+        return false
+      }
+    }
+    this.markConnectionLimited(hit)
+    const state = managed.limitRecovery ?? { rateRetried: false, failedOver: false }
+    managed.limitRecovery = state
+    const target = resolveFailoverTarget(hit.connectionSlug, getLlmConnections(), this.connectionLimitedUntil, Date.now())
+    // A 429 retry on the same account must not mark it limited for others yet.
+    const decision = decideLimitRecovery(hit, state, target)
+    if (decision.action === 'retry_same') this.connectionLimitedUntil.delete(hit.connectionSlug)
+    if (decision.action === 'none' || managed.stopRequested) {
+      this.releaseHeldLimitErrors(managed)
+      return false
+    }
+
+    managed.turnLimitHit = undefined
+    managed.heldLimitErrors = undefined
+    managed.limitRecoveryInProgress = true
+    const stopEpoch = managed.stopEpoch ?? 0
+    const workspaceId = managed.workspace.id
+
+    let delayMs = 0
+    if (decision.action === 'retry_same') {
+      state.rateRetried = true
+      delayMs = decision.delayMs
+      this.sendEvent({
+        type: 'info',
+        sessionId,
+        message: `Anfragen werden gerade gedrosselt – neuer Versuch in ${Math.round(delayMs / 1000)} s…`,
+        level: 'warning',
+        timestamp: this.monotonic(),
+      }, workspaceId)
+      sessionLog.info(`[failover] 429 on ${hit.connectionSlug} for session ${sessionId}: retrying same connection in ${delayMs}ms`)
+    } else {
+      state.failedOver = true
+      sessionLog.info(`[failover] ${hit.kind} on ${hit.connectionSlug} for session ${sessionId}: moving to ${decision.target.slug}`)
+    }
+
+    managed.limitRecoveryTimer = setTimeout(() => {
+      managed.limitRecoveryTimer = undefined
+      void (async () => {
+        try {
+          // Stopped or deleted meanwhile: the stop path finishes the turn.
+          if (this.sessions.get(sessionId) !== managed || (managed.stopEpoch ?? 0) !== stopEpoch) {
+            managed.limitRecoveryInProgress = false
+            return
+          }
+          if (decision.action === 'failover') {
+            const from = getLlmConnection(hit.connectionSlug)
+            await this.switchSessionConnection(sessionId, decision.target.slug, {
+              notice: failoverNotice(from?.name ?? hit.connectionSlug, decision.target.name, hit.resetsAt, Date.now(), false),
+            })
+          }
+          await this.resumeAfterLimit(sessionId, managed)
+        } catch (err) {
+          sessionLog.error(`[failover] Recovery failed for session ${sessionId}:`, err)
+          managed.limitRecoveryInProgress = false
+          if (managed.isProcessing) this.onProcessingStopped(sessionId, 'error')
+        }
+      })()
+    }, delayMs)
+    return true
+  }
+
+  /**
+   * Wake the session after a limit: resend the request when the turn produced nothing yet,
+   * otherwise continue with a hidden nudge (resending would run completed tools twice).
+   */
+  private async resumeAfterLimit(sessionId: string, managed: ManagedSession): Promise<void> {
+    const madeProgress = turnMadeProgress(managed.messages, managed.lastSentMessageIds)
+    const retryMessage = managed.lastSentMessage
+    this.setProcessing(managed, false)
+    managed.limitRecoveryResend = true
+    managed.limitRecoveryInProgress = false
+
+    if (!madeProgress && retryMessage) {
+      // Remove the user message(s) of the failed attempt so the resend does not duplicate them.
+      const failedIds = new Set(managed.lastSentMessageIds ?? [])
+      if (failedIds.size > 0 && managed.messages.some(m => failedIds.has(m.id))) {
+        managed.messages = managed.messages.filter(m => !failedIds.has(m.id))
+      } else {
+        const lastUserMsgIndex = managed.messages.findLastIndex(m => m.role === 'user')
+        if (lastUserMsgIndex !== -1) managed.messages.splice(lastUserMsgIndex, 1)
+      }
+      await this.sendMessage(
+        sessionId,
+        retryMessage,
+        managed.lastSentAttachments,
+        managed.lastSentStoredAttachments,
+        managed.lastSentOptions,
+      )
+    } else {
+      await this.sendMessage(sessionId, LIMIT_CONTINUE_PROMPT, undefined, undefined, { hidden: true })
+    }
+  }
+
+  /**
+   * Move a session to another connection of the same backend, also after it has started.
+   * Keeps the SDK session id (resume reads the local transcript) and rebuilds the agent on the
+   * next send with the target's credentials. A `notice` is added as a green transcript line.
+   */
+  async switchSessionConnection(
+    sessionId: string,
+    targetSlug: string,
+    options: { notice?: string } = {},
+  ): Promise<void> {
+    const managed = this.sessions.get(sessionId)
+    if (!managed) throw new Error(`Session ${sessionId} not found`)
+    const target = getLlmConnection(targetSlug)
+    if (!target) throw new Error(`LLM connection "${targetSlug}" not found`)
+    const sourceSlug = this.effectiveConnectionSlug(managed)
+    const source = sourceSlug ? getLlmConnection(sourceSlug) : null
+    if (source && !canShareSession(source, target)) {
+      throw new Error(`Cannot move a ${source.providerType} session to a ${target.providerType} connection`)
+    }
+    if (sourceSlug === targetSlug) return
+    // Lazy sessions: load the transcript first so the notice is appended, not persisted alone.
+    await this.ensureMessagesLoaded(managed)
+
+    // Drop the agent: the next send builds one with the target's credentials and resumes.
+    if (managed.agent) {
+      this.recoverPendingSteers(managed)
+      managed.agent.dispose()
+      managed.agent = null
+    }
+    managed.llmConnection = targetSlug
+    managed.connectionLocked = true
+    managed.model = resolveModelForTarget(managed.model, target)
+
+    if (options.notice) {
+      const noticeMessage: Message = {
+        id: generateMessageId(),
+        role: 'info',
+        content: options.notice,
+        timestamp: this.monotonic(),
+        infoLevel: 'success',
+        statusType: 'connection_failover',
+      }
+      managed.messages.push(noticeMessage)
+      this.sendEvent({
+        type: 'info',
+        sessionId,
+        message: options.notice,
+        level: 'success',
+        statusType: 'connection_failover',
+        timestamp: noticeMessage.timestamp,
+      }, managed.workspace.id)
+    }
+
+    this.persistSession(managed)
+    await this.flushSession(managed.id)
+    sessionLog.info(`[failover] Session ${sessionId} moved from ${sourceSlug ?? '(default)'} to ${targetSlug}`)
+    this.sendEvent({
+      type: 'connection_changed',
+      sessionId,
+      connectionSlug: targetSlug,
+      supportsBranching: resolveSupportsBranching(managed),
+    }, managed.workspace.id)
+  }
+
+  /**
+   * Manual "continue with <connection>" from a limit error: switch, then wake the session.
+   */
+  async failoverSession(sessionId: string, targetSlug: string): Promise<void> {
+    const managed = this.sessions.get(sessionId)
+    if (!managed) throw new Error(`Session ${sessionId} not found`)
+    if (managed.isProcessing) throw new Error('Session is still running')
+    const target = getLlmConnection(targetSlug)
+    if (!target) throw new Error(`LLM connection "${targetSlug}" not found`)
+    const fromSlug = this.effectiveConnectionSlug(managed)
+    // Already there (button clicked twice, or an automatic failover won the race): nothing to do.
+    if (fromSlug === targetSlug) return
+    const from = fromSlug ? getLlmConnection(fromSlug) : null
+    await this.switchSessionConnection(sessionId, targetSlug, {
+      notice: failoverNotice(from?.name ?? fromSlug ?? '', target.name, undefined, Date.now(), true),
+    })
+    managed.limitRecoveryResend = true
+    managed.limitRecovery = { rateRetried: true, failedOver: true }
+    await this.sendMessage(sessionId, LIMIT_CONTINUE_PROMPT, undefined, undefined, { hidden: true })
+  }
+
+  /**
+   * Bulk move (Settings → AI): every open session on `fromSlug` — not archived, not done/cancelled,
+   * not hidden — moves to `toSlug`. Running sessions are skipped; they fail over on their own.
+   */
+  async migrateConnectionSessions(fromSlug: string, toSlug: string): Promise<{ moved: number; skippedRunning: number }> {
+    const from = getLlmConnection(fromSlug)
+    const to = getLlmConnection(toSlug)
+    if (!from || !to) throw new Error('Connection not found')
+    if (!canShareSession(from, to)) throw new Error(`Cannot move ${from.providerType} sessions to a ${to.providerType} connection`)
+
+    let moved = 0
+    let skippedRunning = 0
+    for (const managed of this.sessions.values()) {
+      if (!isMigratableSession({ ...managed, llmConnection: this.effectiveConnectionSlug(managed) }, fromSlug)) continue
+      if (managed.isProcessing) { skippedRunning++; continue }
+      await this.switchSessionConnection(managed.id, toSlug, {
+        notice: failoverNotice(from.name, to.name, undefined, Date.now(), true),
+      })
+      moved++
+    }
+    sessionLog.info(`[failover] Bulk move ${fromSlug} → ${toSlug}: ${moved} moved, ${skippedRunning} running skipped`)
+    return { moved, skippedRunning }
+  }
+
   private attemptAuthRetry(
     sessionId: string,
     managed: ManagedSession,
@@ -7784,6 +8178,10 @@ export class SessionManager implements ISessionManager {
 
     // Backend recovery events precede complete; discard payloads already delivered.
     managed.acceptedSteers?.clear()
+
+    // Fork (connection failover): limit errors still held (turn ended without a complete event)
+    // become visible now.
+    if (managed.heldLimitErrors?.length) this.releaseHeldLimitErrors(managed)
 
     // 1. Cleanup state
     this.setProcessing(managed, false)
@@ -9267,6 +9665,12 @@ export class SessionManager implements ISessionManager {
           break
         }
 
+        // Fork (connection failover): quota text that arrived unclassified is held like a typed one.
+        if (isUsageLimitText(event.message)) {
+          this.holdLimitError(managed, parseError(new Error(event.message)))
+          break
+        }
+
         // AgentEvent uses `message` not `error`
         const errorMessage: Message = {
           id: generateMessageId(),
@@ -9309,36 +9713,14 @@ export class SessionManager implements ISessionManager {
           break
         }
 
-        // Build rich error message with all diagnostic fields for persistence and UI display
-        const typedErrorMessage: Message = {
-          id: generateMessageId(),
-          role: 'error',
-          // Combine title and message for content display (handles undefined gracefully)
-          content: [event.error.title, event.error.message].filter(Boolean).join(': ') || 'An error occurred',
-          timestamp: this.monotonic(),
-          // Rich error fields for diagnostics and retry functionality
-          errorCode: event.error.code,
-          errorTitle: event.error.title,
-          errorDetails: event.error.details,
-          errorOriginal: event.error.originalError,
-          errorCanRetry: event.error.canRetry,
+        // Fork (connection failover): hold limit errors until the turn ends — the complete handler
+        // either recovers (429 retry / failover) or shows them then.
+        if (event.error.code === 'usage_limit' || event.error.code === 'rate_limited') {
+          this.holdLimitError(managed, event.error)
+          break
         }
-        managed.messages.push(typedErrorMessage)
-        // Send typed_error event with full structure for renderer to handle
-        this.sendEvent({
-          type: 'typed_error',
-          sessionId,
-          error: {
-            code: event.error.code,
-            title: event.error.title,
-            message: event.error.message,
-            actions: event.error.actions,
-            canRetry: event.error.canRetry,
-            details: event.error.details,
-            originalError: event.error.originalError,
-          },
-          timestamp: typedErrorMessage.timestamp,
-        }, workspaceId)
+
+        this.emitTypedErrorMessage(managed, event.error, workspaceId)
         break
 
       case 'task_backgrounded':

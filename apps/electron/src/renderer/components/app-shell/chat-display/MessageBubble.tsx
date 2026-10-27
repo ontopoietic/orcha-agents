@@ -152,6 +152,17 @@ export function MessageBubble({
       )
     }
 
+    // Fork (connection failover): the session moved to another account after a limit — a green
+    // marker in the error-alert material, so it reads as "handled" rather than as a failure.
+    if (message.statusType === 'connection_failover') {
+      return (
+        <div className="flex min-w-0 select-none gap-2.5 rounded-lg bg-success-tint inset-ring inset-ring-[var(--success-border)] px-3.5 py-3">
+          <CheckCircle2 aria-hidden className="mt-0.5 size-4 shrink-0 text-success" />
+          <p className="min-w-0 flex-1 break-words text-label leading-5 text-foreground">{message.content}</p>
+        </div>
+      )
+    }
+
     const config = INFO_LEVELS[message.infoLevel || 'info']
     const Icon = config.icon
 

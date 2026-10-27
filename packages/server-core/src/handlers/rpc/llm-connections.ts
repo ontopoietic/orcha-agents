@@ -29,6 +29,7 @@ export const HANDLED_CHANNELS = [
   RPC_CHANNELS.llmConnections.SET_DEFAULT,
   RPC_CHANNELS.llmConnections.SET_WORKSPACE_DEFAULT,
   RPC_CHANNELS.llmConnections.REFRESH_MODELS,
+  RPC_CHANNELS.llmConnections.MIGRATE_SESSIONS,
   RPC_CHANNELS.chatgpt.START_OAUTH,
   RPC_CHANNELS.chatgpt.COMPLETE_OAUTH,
   RPC_CHANNELS.chatgpt.CANCEL_OAUTH,
@@ -569,6 +570,18 @@ export function registerLlmConnectionsHandlers(server: RpcServer, deps: HandlerD
       return { success, error: success ? undefined : 'Connection not found' }
     } catch (error) {
       deps.platform.logger?.error('Failed to set default LLM connection:', error)
+      return { success: false, error: error instanceof Error ? error.message : 'Unknown error' }
+    }
+  })
+
+  // Fork (connection failover): move every open session of one connection to another
+  server.handle(RPC_CHANNELS.llmConnections.MIGRATE_SESSIONS, async (_ctx, fromSlug: string, toSlug: string): Promise<{ success: boolean; moved?: number; skippedRunning?: number; error?: string }> => {
+    try {
+      const result = await sessionManager.migrateConnectionSessions(fromSlug, toSlug)
+      deps.platform.logger?.info(`Moved ${result.moved} session(s) from ${fromSlug} to ${toSlug}`)
+      return { success: true, ...result }
+    } catch (error) {
+      deps.platform.logger?.error('Failed to move sessions between connections:', error)
       return { success: false, error: error instanceof Error ? error.message : 'Unknown error' }
     }
   })

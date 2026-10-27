@@ -19,6 +19,21 @@ describe('handleErrorMessageAction', () => {
     expect(onRetryFocus).toHaveBeenCalledWith({ sessionId: 'session-123' })
   })
 
+  it('moves the session to the action connection for switch_connection actions', () => {
+    const onSwitchConnection = mock(() => {})
+    const action: ErrorMessageAction = {
+      key: 's',
+      label: 'Mit Claude Max Fluxs fortsetzen',
+      action: 'switch_connection',
+      connectionSlug: 'claude-max-2',
+    }
+
+    handleErrorMessageAction(action, { sessionId: 'session-123', onSwitchConnection })
+
+    expect(onSwitchConnection).toHaveBeenCalledTimes(1)
+    expect(onSwitchConnection).toHaveBeenCalledWith('session-123', 'claude-max-2')
+  })
+
   it('opens the provided URL for open_url actions', () => {
     const onOpenUrl = mock(() => {})
     const action: ErrorMessageAction = {

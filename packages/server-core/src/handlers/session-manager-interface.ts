@@ -104,6 +104,9 @@ export interface ISessionManager {
     reconcile?: { name?: string; projectId?: string; workingDirectory?: string; model?: string; llmConnection?: string; permissionMode?: PermissionMode },
   ): Promise<boolean>
   setSessionConnection(sessionId: string, connectionSlug: string): Promise<void>
+  // Fork (connection failover)
+  failoverSession(sessionId: string, targetSlug: string): Promise<void>
+  migrateConnectionSessions(fromSlug: string, toSlug: string): Promise<{ moved: number; skippedRunning: number }>
   updateSessionModel(sessionId: string, workspaceId: string, model: string | null, connection?: string): Promise<void>
 
   // ---------------------------------------------------------------------------

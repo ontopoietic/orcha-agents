@@ -12,6 +12,7 @@ import { BaseAgent, type MiniAgentConfig, MINI_AGENT_TOOLS, MINI_AGENT_MCP_KEYS 
 import type { BackendConfig, PostInitResult, PermissionRequestType, SdkMcpServerConfig } from './backend/types.ts';
 // Plan types are used by UI components; not needed in craft-agent.ts since Safe Mode is user-controlled
 import { parseError, type AgentError } from './errors.ts';
+import { isUsageLimitText } from './usage-limit.ts';
 import { mapClaudeSdkAssistantError, type ClaudeSdkApiError } from './claude-sdk-error-mapper.ts';
 import { runErrorDiagnostics } from './diagnostics.ts';
 import { loadStoredConfig, loadConfigDefaults, type Workspace, type AuthType, getDefaultLlmConnection, getLlmConnection } from '../config/storage.ts';
@@ -2306,6 +2307,15 @@ This is a branched conversation. All prior messages in this conversation are par
           // Auth errors surface immediately - session manager handles retry by recreating agent
           const typedError = parseError(new Error(rawErrorMsg));
           yield { type: 'typed_error', error: typedError };
+          yield { type: 'complete' };
+          return;
+        }
+
+        // Subscription quota ("You've hit your session limit · resets 5pm"): surface as usage_limit
+        // so the session manager can fail over. Never fall through to the resume-retry path below,
+        // which would start a fresh SDK session against the same exhausted account.
+        if (isUsageLimitText(rawErrorMsg)) {
+          yield { type: 'typed_error', error: parseError(new Error(rawErrorMsg)) };
           yield { type: 'complete' };
           return;
         }

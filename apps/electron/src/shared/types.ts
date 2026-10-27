@@ -717,6 +717,8 @@ export interface ElectronAPI {
   getDefaultThinkingLevel(): Promise<ThinkingLevel>
   setDefaultThinkingLevel(level: ThinkingLevel): Promise<{ success: boolean; error?: string }>
   setWorkspaceDefaultLlmConnection(workspaceId: string, slug: string | null): Promise<{ success: boolean; error?: string }>
+  // Fork (connection failover): move open sessions of one connection to another
+  migrateLlmConnectionSessions(fromSlug: string, toSlug: string): Promise<{ success: boolean; moved?: number; skippedRunning?: number; error?: string }>
 
   // Projects (workspace-scoped)
   getProjects(workspaceId: string): Promise<unknown>

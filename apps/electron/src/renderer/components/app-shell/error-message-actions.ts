@@ -10,6 +10,13 @@ export interface HandleErrorMessageActionOptions {
   onOpenSettings?: () => void
   onRetryFocus?: (detail?: { sessionId?: string }) => void
   onRetry?: () => void
+  /** Fork (connection failover): move the session to another connection and continue. */
+  onSwitchConnection?: (sessionId: string, connectionSlug: string) => void
+}
+
+const switchSessionConnection = (sessionId: string, connectionSlug: string) => {
+  void window.electronAPI.sessionCommand(sessionId, { type: 'failoverConnection', connectionSlug })
+    .catch((error: unknown) => console.error('[failover] switching the connection failed:', error))
 }
 
 /**
@@ -27,8 +34,14 @@ export function handleErrorMessageAction(
     onOpenSettings = () => navigate(routes.view.settings()),
     onRetryFocus = dispatchFocusInputEvent,
     onRetry,
+    onSwitchConnection = switchSessionConnection,
   }: HandleErrorMessageActionOptions = {},
 ): void {
+  if (action.action === 'switch_connection') {
+    if (sessionId && action.connectionSlug) onSwitchConnection(sessionId, action.connectionSlug)
+    return
+  }
+
   if (action.action === 'open_url') {
     if (action.url && onOpenUrl) {
       onOpenUrl(action.url)

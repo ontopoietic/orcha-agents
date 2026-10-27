@@ -11,6 +11,7 @@
 
 import type { ErrorCode } from '@craft-agent/core/types';
 import { getProviderMetadata } from '../config/provider-metadata.ts';
+import { isUsageLimitText, parseLimitResetTime } from './usage-limit.ts';
 
 export type { ErrorCode };
 
@@ -29,11 +30,13 @@ export interface RecoveryAction {
   /** Slash command to execute (e.g., '/settings') */
   command?: string;
   /** Custom action type for special handling */
-  action?: 'retry' | 'settings' | 'reauth' | 'open_url' | 'reconnect_source';
+  action?: 'retry' | 'settings' | 'reauth' | 'open_url' | 'reconnect_source' | 'switch_connection';
   /** URL to open (for 'open_url' action) */
   url?: string;
   /** Source slug (for 'reconnect_source' action) */
   sourceSlug?: string;
+  /** Target connection slug (for 'switch_connection' action) */
+  connectionSlug?: string;
 }
 
 export interface AgentError {
@@ -55,6 +58,8 @@ export interface AgentError {
   details?: string[];
   /** Provider info for user-facing context */
   providerInfo?: ProviderInfo;
+  /** When a usage/rate limit lifts (epoch ms), if the provider said so */
+  resetsAt?: number;
 }
 
 /**
@@ -110,6 +115,14 @@ const ERROR_DEFINITIONS: Record<ErrorCode, Omit<AgentError, 'code' | 'originalEr
     ],
     canRetry: true,
     retryDelayMs: 5000,
+  },
+  usage_limit: {
+    title: 'Usage Limit Reached',
+    message: 'This account has used up its current usage allowance.',
+    actions: [
+      { key: 'r', label: 'Retry', action: 'retry' },
+    ],
+    canRetry: false,
   },
   service_error: {
     title: 'Service Error',
@@ -420,6 +433,10 @@ export function parseError(
     } else {
       code = 'invalid_api_key';
     }
+  } else if (isUsageLimitText(fullErrorText)) {
+    // Subscription quota ("You've hit your session limit · resets 5:50pm"). Checked before the
+    // 429 branch: the quota text is not a short throttle and carries its own reset time.
+    code = 'usage_limit';
   } else if (lowerMessage.includes('429') || lowerMessage.includes('rate limit') || lowerMessage.includes('too many requests')) {
     code = 'rate_limited';
   } else if (lowerMessage.includes('500') || lowerMessage.includes('502') || lowerMessage.includes('503') || lowerMessage.includes('504') || lowerMessage.includes('529') || lowerMessage.includes('internal server error') || lowerMessage.includes('service unavailable') || lowerMessage.includes('overloaded')) {
@@ -490,12 +507,29 @@ export function parseError(
     }
   }
 
+  if (code === 'usage_limit') {
+    return {
+      code,
+      ...definition,
+      message: usageLimitMessage(fullErrorText),
+      originalError: errorMessage,
+      providerInfo,
+      resetsAt: parseLimitResetTime(fullErrorText),
+    };
+  }
+
   return {
     code,
     ...definition,
     originalError: errorMessage,
     providerInfo,
   };
+}
+
+/** The provider's own quota sentence is the most useful text; strip the SDK's wrapper prefix. */
+function usageLimitMessage(fullErrorText: string): string {
+  const match = fullErrorText.match(/you(?:'|’)ve hit your[^\n]*/i);
+  return match ? match[0].trim() : ERROR_DEFINITIONS.usage_limit!.message;
 }
 
 /**

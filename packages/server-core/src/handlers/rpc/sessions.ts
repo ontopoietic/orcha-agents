@@ -368,6 +368,9 @@ export function registerSessionsHandlers(server: RpcServer, deps: HandlerDeps): 
       case 'setConnection':
         log.info(`IPC: setConnection received for session ${sessionId}, connection: ${command.connectionSlug}`)
         return sessionManager.setSessionConnection(sessionId, command.connectionSlug)
+      case 'failoverConnection':
+        log.info(`IPC: failoverConnection received for session ${sessionId}, connection: ${command.connectionSlug}`)
+        return sessionManager.failoverSession(sessionId, command.connectionSlug)
       // Pending plan execution (Accept & Compact flow)
       case 'setPendingPlanExecution':
         return sessionManager.setPendingPlanExecution(sessionId, command.planPath, command.draftInputSnapshot)
