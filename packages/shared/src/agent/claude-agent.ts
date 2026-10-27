@@ -13,6 +13,7 @@ import type { BackendConfig, PostInitResult, PermissionRequestType, SdkMcpServer
 // Plan types are used by UI components; not needed in craft-agent.ts since Safe Mode is user-controlled
 import { parseError, type AgentError } from './errors.ts';
 import { isUsageLimitText } from './usage-limit.ts';
+import { buildSessionAuthEnvOverrides } from './session-auth-env.ts';
 import { mapClaudeSdkAssistantError, type ClaudeSdkApiError } from './claude-sdk-error-mapper.ts';
 import { runErrorDiagnostics } from './diagnostics.ts';
 import { loadStoredConfig, loadConfigDefaults, type Workspace, type AuthType, getDefaultLlmConnection, getLlmConnection } from '../config/storage.ts';
@@ -1087,6 +1088,12 @@ export class ClaudeAgent extends BaseAgent {
     for (const [key, value] of Object.entries(result.envVars)) {
       process.env[key] = value;
     }
+    // Fork §15: pin this session's credentials in its own envOverrides — process.env is shared,
+    // and another session may overwrite it before this session's subprocess spawns.
+    this.config.envOverrides = {
+      ...this.config.envOverrides,
+      ...buildSessionAuthEnvOverrides(result.envVars),
+    };
 
     // Pass mini model to SDK subprocess so built-in tools like WebFetch
     // use the correct summarization model (instead of hardcoded Haiku).
