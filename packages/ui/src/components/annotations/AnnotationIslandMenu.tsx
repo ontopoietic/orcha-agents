@@ -1,6 +1,6 @@
 import * as React from 'react'
 import * as ReactDOM from 'react-dom'
-import { CornerDownRight } from 'lucide-react'
+import { CornerDownRight, Check, ChevronsUpDown } from 'lucide-react'
 import {
   Island,
   IslandContentView,
@@ -26,6 +26,10 @@ export interface AnnotationIslandMenuProps {
   draft: string
   onDraftChange: (next: string) => void
   onOpenFollowUp: () => void
+  /** Quick action: stage an "agreed/approved" follow-up without opening the editor. */
+  onAgree?: () => void
+  /** Quick action: stage an "elaborate / go deeper" follow-up without opening the editor. */
+  onElaborate?: () => void
   onCancel: () => void
   onRequestBack?: () => boolean
   onRequestEdit: () => void
@@ -49,6 +53,8 @@ export function AnnotationIslandMenu({
   draft,
   onDraftChange,
   onOpenFollowUp,
+  onAgree,
+  onElaborate,
   onCancel,
   onRequestBack,
   onRequestEdit,
@@ -126,6 +132,34 @@ export function AnnotationIslandMenu({
               <CornerDownRight className="h-3.5 w-3.5" />
               <span>{t('chat.followUp')}</span>
             </button>
+            {onAgree ? (
+              <button
+                type="button"
+                onClick={onAgree}
+                className={cn(
+                  'h-[30px] px-2.5 rounded-[8px] text-[13px] font-medium inline-flex items-center gap-1.5',
+                  'text-foreground/85 hover:text-foreground hover:bg-foreground/5',
+                  'focus:outline-none focus-visible:ring-1 focus-visible:ring-ring'
+                )}
+              >
+                <Check className="h-3.5 w-3.5" />
+                <span>{t('chat.agree')}</span>
+              </button>
+            ) : null}
+            {onElaborate ? (
+              <button
+                type="button"
+                onClick={onElaborate}
+                className={cn(
+                  'h-[30px] px-2.5 rounded-[8px] text-[13px] font-medium inline-flex items-center gap-1.5',
+                  'text-foreground/85 hover:text-foreground hover:bg-foreground/5',
+                  'focus:outline-none focus-visible:ring-1 focus-visible:ring-ring'
+                )}
+              >
+                <ChevronsUpDown className="h-3.5 w-3.5" />
+                <span>{t('chat.elaborate')}</span>
+              </button>
+            ) : null}
           </div>
         </IslandContentView>
 

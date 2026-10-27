@@ -289,6 +289,9 @@ export {
 // Turn utilities (pure functions)
 export * from './components/chat/turn-utils'
 
+// Annotation quick-reply payload language (kept in sync by the host app)
+export { setQuickReplyLanguage, getQuickReplyLanguage } from './lib/quick-reply-language'
+
 // Icons
 export {
   Icon_Folder,

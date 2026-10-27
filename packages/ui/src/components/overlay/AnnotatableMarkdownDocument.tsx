@@ -1,5 +1,7 @@
 import * as React from 'react'
+import { useTranslation } from 'react-i18next'
 import { Markdown } from '../markdown'
+import { getQuickReplyLanguage } from '../../lib/quick-reply-language'
 import type { AnnotationV1 } from '@craft-agent/core'
 import { type IslandTransitionConfig } from '../ui'
 import { AnnotationIslandMenu } from '../annotations/AnnotationIslandMenu'
@@ -75,6 +77,7 @@ export function AnnotatableMarkdownDocument({
   openAnnotationRequest,
   isStreaming = false,
 }: AnnotatableMarkdownDocumentProps) {
+  const { t } = useTranslation()
   const canAnnotate = canAnnotateMessage({
     hasAddAnnotationHandler: !!onAddAnnotation,
     hasMessageId: !!messageId,
@@ -290,6 +293,17 @@ export function AnnotatableMarkdownDocument({
     markSubmitSuccess()
     clearDomSelection()
   }, [activeAnnotationDetail, onUpdateAnnotation, activeAnnotation, closeSelectionMenu, pendingSelection, canAnnotate, onAddAnnotation, messageId, sessionId, markSubmitSuccess])
+
+  // Quick replies stage the follow-up immediately (one click, no editor). The
+  // staged note stays editable afterwards by clicking its follow-up chip, which
+  // opens the annotation in edit mode (see interaction-policy).
+  const handleQuickAgree = React.useCallback(() => {
+    handleSubmitFollowUp(t('chat.agreeText', { lng: getQuickReplyLanguage() }))
+  }, [handleSubmitFollowUp, t])
+
+  const handleQuickElaborate = React.useCallback(() => {
+    handleSubmitFollowUp(t('chat.elaborateText', { lng: getQuickReplyLanguage() }))
+  }, [handleSubmitFollowUp, t])
 
   const handleCancelFollowUp = useAnnotationCancelRestore({
     contentRootRef: contentLayerRef,
@@ -628,6 +642,8 @@ export function AnnotatableMarkdownDocument({
       draft={followUpDraft}
       onDraftChange={setFollowUpDraft}
       onOpenFollowUp={handleOpenFollowUpView}
+      onAgree={handleQuickAgree}
+      onElaborate={handleQuickElaborate}
       onCancel={handleCancelFollowUp}
       onRequestBack={handleSelectionMenuRequestBack}
       onRequestEdit={handleRequestFollowUpEdit}

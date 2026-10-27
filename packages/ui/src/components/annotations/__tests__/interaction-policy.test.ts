@@ -40,13 +40,13 @@ describe('annotation interaction policy', () => {
     expect(isAnnotationChipClickable(annotation)).toBe(false)
   })
 
-  it('keeps pending annotations clickable in view mode', () => {
+  it('opens pending annotations clickable in edit mode', () => {
     const annotation = createAnnotation('Needs follow-up')
 
     const policy = getAnnotationChipInteraction(annotation)
 
     expect(policy.state).toBe('pending')
-    expect(policy.openMode).toBe('view')
+    expect(policy.openMode).toBe('edit')
     expect(policy.clickable).toBe(true)
     expect(policy.tooltipOnly).toBe(false)
     expect(isAnnotationChipClickable(annotation)).toBe(true)

@@ -5,13 +5,14 @@ export type AnnotationChipInteraction = {
   state: AnnotationFollowUpState
   clickable: boolean
   tooltipOnly: boolean
-  openMode: 'view'
+  openMode: 'view' | 'edit'
 }
 
 /**
  * Unified annotation chip behavior:
  * - sent follow-up chips are tooltip-only (no island open on click)
- * - pending/unsent chips open annotation detail in view mode
+ * - pending/unsent chips open annotation detail straight into edit mode, so the
+ *   staged note (including quick-reply "Agree"/"Elaborate" text) stays editable
  */
 export function getAnnotationChipInteraction(annotation?: AnnotationV1 | null): AnnotationChipInteraction {
   const state = annotation ? getAnnotationFollowUpState(annotation) : 'none'
@@ -21,7 +22,7 @@ export function getAnnotationChipInteraction(annotation?: AnnotationV1 | null): 
     state,
     clickable: !isSent,
     tooltipOnly: isSent,
-    openMode: 'view',
+    openMode: isSent ? 'view' : 'edit',
   }
 }
 
@@ -29,8 +30,8 @@ export function isAnnotationChipClickable(annotation?: AnnotationV1 | null): boo
   return getAnnotationChipInteraction(annotation).clickable
 }
 
-export function getAnnotationChipOpenMode(): 'view' {
-  return 'view'
+export function getAnnotationChipOpenMode(annotation?: AnnotationV1 | null): 'view' | 'edit' {
+  return getAnnotationChipInteraction(annotation).openMode
 }
 
 /**

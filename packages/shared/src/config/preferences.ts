@@ -40,6 +40,14 @@ export interface UserPreferences {
    * Not user-editable; not exposed via the `update_user_preferences` tool.
    */
   uiLanguage?: LanguageCode;
+  /**
+   * Preferred language for the agent's *responses*, decoupled from the UI
+   * language. User-editable (Settings → Language).
+   *  - a language code -> always answer in that language
+   *  - 'auto'          -> follow the conversation's own language (no forced line)
+   *  - undefined       -> legacy behaviour: follow the app UI language
+   */
+  responseLanguage?: LanguageCode | 'auto';
   // When the preferences were last updated
   updatedAt?: number;
 }
@@ -137,13 +145,30 @@ export function resolveTitleLanguageName(): string | undefined {
 export function formatPreferencesForPrompt(): string {
   const prefs = loadPreferences();
 
-  // Derive language from the app's i18n setting (Appearance > Language).
-  const langCode = (i18n.resolvedLanguage ?? 'en') as LanguageCode;
-  const langEntry = LOCALE_REGISTRY[langCode];
-  const langName = langEntry?.nativeName ?? 'English';
+  // Resolve the response language to advertise, decoupled from the UI language:
+  //  - explicit code  -> force that language
+  //  - 'auto'         -> advertise nothing (model follows the conversation)
+  //  - undefined      -> legacy: follow the app UI language (Appearance > Language)
+  const uiLangCode = (i18n.resolvedLanguage ?? 'en') as LanguageCode;
+  const responsePref = prefs.responseLanguage;
+  let responseLangName: string | undefined;
+  let responseLangFromUi = false;
+  if (responsePref === 'auto') {
+    responseLangName = undefined;
+  } else if (responsePref && LOCALE_REGISTRY[responsePref]) {
+    responseLangName = LOCALE_REGISTRY[responsePref].nativeName;
+  } else {
+    responseLangName = LOCALE_REGISTRY[uiLangCode]?.nativeName ?? 'English';
+    responseLangFromUi = true;
+  }
 
-  if (Object.keys(prefs).length === 0 ||
-      (!prefs.name && !prefs.timezone && !prefs.location && !prefs.notes && langCode === 'en')) {
+  // The language line is a no-op worth omitting when it would just restate the
+  // legacy English default, or when the user chose 'auto'.
+  const languageLineIsNoop = responseLangName === undefined
+    || (responseLangFromUi && uiLangCode === 'en');
+  const hasPersonalPrefs = !!(prefs.name || prefs.timezone || prefs.location || prefs.notes);
+
+  if (!hasPersonalPrefs && languageLineIsNoop) {
     return '';
   }
 
@@ -170,8 +195,15 @@ export function formatPreferencesForPrompt(): string {
     }
   }
 
-  // UI language is app state, not necessarily an explicitly saved user note.
-  lines.push(`- Preferred response language (from app UI): ${sanitizePromptLine(langName, tags)}`);
+  // Response language: from the explicit `responseLanguage` preference, or the
+  // app UI language as a legacy fallback. Omitted entirely when 'auto' (or the
+  // legacy English default), so the model follows the conversation's language.
+  if (responseLangName !== undefined) {
+    const label = responseLangFromUi
+      ? 'Preferred response language (from app UI)'
+      : 'Preferred response language';
+    lines.push(`- ${label}: ${sanitizePromptLine(responseLangName, tags)}`);
+  }
 
   if (prefs.notes) {
     lines.push('', '### Notes about this user', sanitizePromptBody(prefs.notes, tags));
