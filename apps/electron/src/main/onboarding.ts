@@ -6,6 +6,7 @@
 import { getAuthState, getSetupNeeds } from '@craft-agent/shared/auth'
 import { isSetupDeferred, setSetupDeferred } from '@craft-agent/shared/config/storage'
 import { getCredentialManager } from '@craft-agent/shared/credentials'
+import { getDefaultLlmConnection } from '@craft-agent/shared/config'
 import { prepareClaudeOAuth, exchangeClaudeCode, hasValidOAuthState, clearOAuthState, prepareMcpOAuth } from '@craft-agent/shared/auth'
 import { validateMcpConnection } from '@craft-agent/shared/mcp'
 import { RPC_CHANNELS } from '@craft-agent/shared/protocol'
@@ -132,13 +133,16 @@ export function registerOnboardingHandlers(server: RpcServer, deps: HandlerDeps)
         expiresAt: tokens.expiresAt,
       })
 
-      // Also save to legacy key for validation compatibility
-      await manager.setClaudeOAuthCredentials({
-        accessToken: tokens.accessToken,
-        refreshToken: tokens.refreshToken,
-        expiresAt: tokens.expiresAt,
-        source: 'native',
-      })
+      // Also save to legacy key for validation compatibility — only for the default connection:
+      // the legacy slot mirrors it, and another account must not overwrite it (Fork §15)
+      if (!getDefaultLlmConnection() || getDefaultLlmConnection() === connectionSlug) {
+        await manager.setClaudeOAuthCredentials({
+          accessToken: tokens.accessToken,
+          refreshToken: tokens.refreshToken,
+          expiresAt: tokens.expiresAt,
+          source: 'native',
+        })
+      }
 
       const expiresAtDate = tokens.expiresAt ? new Date(tokens.expiresAt).toISOString() : 'never'
       log.info(`[Onboarding] Claude OAuth saved to LLM connection (expires: ${expiresAtDate})`)

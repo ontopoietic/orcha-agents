@@ -94,8 +94,30 @@ export interface SetupNeeds {
 // ============================================
 
 // Mutex to prevent concurrent token refresh attempts
-// When a refresh is in progress, other callers wait for it to complete
-let refreshInProgress: Promise<TokenResult> | null = null;
+// When a refresh is in progress, other callers wait for it to complete.
+// Fork §15: one mutex per connection — a shared one handed a waiting connection the other
+// connection's freshly refreshed token.
+const refreshInProgress = new Map<string, Promise<TokenResult>>();
+
+/** The legacy global `claude_oauth` slot mirrors the default connection only (Fork §15). */
+function isDefaultConnection(connectionSlug: string): boolean {
+  return getDefaultLlmConnection() === connectionSlug;
+}
+
+/**
+ * Credentials of one Claude OAuth connection. Fork §15: upstream read the global legacy slot
+ * for every connection, so all Claude accounts ran on whichever one signed in last. The
+ * legacy slot is only a fallback for the default connection (pre-migration installs).
+ */
+async function getConnectionClaudeOAuth(
+  manager: ReturnType<typeof getCredentialManager>,
+  connectionSlug: string,
+): Promise<{ accessToken: string; refreshToken?: string; expiresAt?: number; source?: 'native' | 'cli' } | null> {
+  const own = await manager.getLlmOAuth(connectionSlug);
+  if (own?.accessToken) return { ...own, source: 'native' };
+  if (!isDefaultConnection(connectionSlug)) return null;
+  return manager.getClaudeOAuthCredentials();
+}
 
 /**
  * Perform the actual token refresh (internal, called only when holding mutex)
@@ -117,12 +139,15 @@ export async function performTokenRefresh(
     // Store the new credentials
     // If refresh succeeded with our native endpoint, mark as 'native'
     // (successful refresh proves compatibility with our OAuth system)
-    await manager.setClaudeOAuthCredentials({
-      accessToken: refreshed.accessToken,
-      refreshToken: refreshed.refreshToken,
-      expiresAt: refreshed.expiresAt,
-      source: 'native',
-    });
+    // Fork §15: the legacy global slot mirrors the default connection only.
+    if (isDefaultConnection(connectionSlug)) {
+      await manager.setClaudeOAuthCredentials({
+        accessToken: refreshed.accessToken,
+        refreshToken: refreshed.refreshToken,
+        expiresAt: refreshed.expiresAt,
+        source: 'native',
+      });
+    }
 
     // Also save to LLM connection (dual-write for backwards compatibility)
     // This ensures both legacy and modern auth paths have the refreshed token
@@ -163,12 +188,15 @@ export async function performTokenRefresh(
       }
 
       // Clear the incompatible credentials to force fresh authentication
-      // Clear from both legacy and LLM connection locations
-      await manager.setClaudeOAuthCredentials({
-        accessToken: '',
-        refreshToken: undefined,
-        expiresAt: undefined,
-      });
+      // Clear from both legacy and LLM connection locations (legacy only mirrors the default
+      // connection — Fork §15)
+      if (isDefaultConnection(connectionSlug)) {
+        await manager.setClaudeOAuthCredentials({
+          accessToken: '',
+          refreshToken: undefined,
+          expiresAt: undefined,
+        });
+      }
 
       // Also clear from LLM connection (dual-clear for consistency)
       await manager.deleteLlmCredentials(connectionSlug);
@@ -202,8 +230,8 @@ export async function performTokenRefresh(
 export async function getValidClaudeOAuthToken(connectionSlug: string): Promise<TokenResult> {
   const manager = getCredentialManager();
 
-  // Try to get credentials from our store
-  const creds = await manager.getClaudeOAuthCredentials();
+  // Try to get credentials from our store — this connection's own (Fork §15)
+  const creds = await getConnectionClaudeOAuth(manager, connectionSlug);
 
   if (!creds || !creds.accessToken) {
     return { accessToken: null };
@@ -217,15 +245,16 @@ export async function getValidClaudeOAuthToken(connectionSlug: string): Promise<
     // Try to refresh if we have a refresh token
     if (creds.refreshToken) {
       // Check if a refresh is already in progress
-      if (refreshInProgress) {
+      const pending = refreshInProgress.get(connectionSlug);
+      if (pending) {
         debug('[auth] Token refresh already in progress, waiting...');
         try {
-          await refreshInProgress;
+          await pending;
         } catch {
           // Ignore errors from the other refresh attempt
         }
         // Re-read credentials after waiting (they may have been updated)
-        const updatedCreds = await manager.getClaudeOAuthCredentials();
+        const updatedCreds = await getConnectionClaudeOAuth(manager, connectionSlug);
         if (updatedCreds?.accessToken && !isTokenExpired(updatedCreds.expiresAt)) {
           const expiresAtDate = updatedCreds.expiresAt ? new Date(updatedCreds.expiresAt).toISOString() : 'never';
           debug(`[auth] Got refreshed token from concurrent refresh (expires: ${expiresAtDate})`);
@@ -238,14 +267,15 @@ export async function getValidClaudeOAuthToken(connectionSlug: string): Promise<
 
       // Start the refresh and set the mutex
       debug('[auth] Starting token refresh (holding mutex)');
-      refreshInProgress = performTokenRefresh(manager, creds.refreshToken, creds.source, connectionSlug);
+      const refresh = performTokenRefresh(manager, creds.refreshToken, creds.source, connectionSlug);
+      refreshInProgress.set(connectionSlug, refresh);
 
       try {
-        const result = await refreshInProgress;
+        const result = await refresh;
         return result;
       } finally {
         // Release the mutex
-        refreshInProgress = null;
+        refreshInProgress.delete(connectionSlug);
       }
     } else {
       debug('[auth] No refresh token available, cannot refresh expired token');
@@ -354,5 +384,5 @@ export function getSetupNeeds(state: AuthState, setupDeferred?: boolean): SetupN
  * This allows tests to start with a clean state
  */
 export function _resetRefreshMutex(): void {
-  refreshInProgress = null;
+  refreshInProgress.clear();
 }

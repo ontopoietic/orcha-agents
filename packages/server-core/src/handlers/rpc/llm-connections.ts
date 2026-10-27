@@ -272,7 +272,13 @@ export function registerLlmConnectionsHandlers(server: RpcServer, deps: HandlerD
       if (setup.credential && !isMasked) {
         const authType = pendingConnection.authType
         if (authType === 'oauth') {
-          await manager.setLlmOAuth(setup.slug, { accessToken: setup.credential })
+          // Fork §15: after an OAuth sign-in the SETUP call repeats the access token the code
+          // exchange already stored — keep that entry's refresh token and expiry instead of
+          // overwriting it with a bare token that can never be refreshed.
+          const existingOAuth = await manager.getLlmOAuth(setup.slug)
+          await manager.setLlmOAuth(setup.slug, existingOAuth?.accessToken === setup.credential
+            ? existingOAuth
+            : { accessToken: setup.credential })
           deps.platform.logger?.info('Saved OAuth access token to LLM connection')
         } else {
           await manager.setLlmApiKey(setup.slug, setup.credential)
