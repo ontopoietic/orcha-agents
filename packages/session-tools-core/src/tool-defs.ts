@@ -284,14 +284,6 @@ export const CreateTaskSchema = z.object({
   model: z.string().optional().describe('Model ID for the task sessions (workspace default when omitted)'),
   workingDirectory: z.string().optional().describe('Working directory for the task sessions'),
   projectId: z.string().optional().describe("Project ID to bind the task to (defaults to the invoking session's project)"),
-  start: z.boolean().optional().describe('Start the run immediately after creation. Only set this when the user asked for the work to be RUN (e.g. an approved swarm chain) — for "put it on the board" requests leave it unset so the task stays in "todo"'),
-  nodes: z.array(z.object({
-    id: z.string().describe('Node id (kebab-case slug, unique within the task)'),
-    title: z.string().optional().describe('Board tile label (defaults to the id)'),
-    prompt: z.string().describe('Instruction dispatched to the node session. May reference previous node output via ${nodes.<id>.output}'),
-    dependsOn: z.array(z.string()).optional().describe('Node ids this node depends on (for a sequential chain: the previous node)'),
-    model: z.string().optional().describe('Per-node model override (defaults to the task model)'),
-  })).optional().describe('Explicit DAG nodes (e.g. a swarm role chain). When omitted, a single "main" node is synthesized from the description'),
 });
 
 export const ProjectMemoryAppendSchema = z.object({
@@ -678,7 +670,7 @@ Only set anchors when the connection to the artifact is explicit. Don't guess.`,
 Use this to reflect progress or trigger status-based automations (SessionStatusChange events).
 Omit sessionId to target the current session.
 
-IMPORTANT: never move ANOTHER session into a closed status (such as "done" or "cancelled") — closing someone else's task is the user's decision, made on the board; such calls are rejected. You MAY set a closed status on your OWN session (omit sessionId) once your work is fully complete and handed off — e.g. swarm role sessions set themselves "done" after delivering their handoff. When the user still needs to review the work, prefer "needs-review".`,
+IMPORTANT: never move a task into a closed status (such as "done" or "cancelled") yourself — closing a task is the user's decision, made on the board. You may prepare and hand off work by setting an open status like "needs-review"; the user reviews and closes it. Closed-status calls are rejected.`,
 
   archive_session: `Archive or unarchive another session in this workspace by ID.
 
@@ -689,15 +681,11 @@ Requires an explicit sessionId and cannot target your own session. Use list_sess
 
 Use it for durable project knowledge: a decision, a gotcha, a convention, a user preference. Keep notes short. Never rewrite MEMORY.md with Write/Edit — other sessions add notes while you work, and your <project_memory> is a snapshot from when this session started. To correct an outdated note, append the correction. Fails when the session has no project.`,
 
-  create_task: `Create a Craft Agents Task on the kanban board — writes tasks/<slug>/task.yaml and creates its orchestrator session. By default the task lands in "todo" and is NOT run; starting it is the user's (or an automation's) decision.
+  create_task: `Create a Craft Agents Task on the kanban board — writes tasks/<slug>/task.yaml and creates its orchestrator session. CREATION ONLY: the task lands in "todo" and is NOT run; starting it is the user's (or an automation's) decision.
 
 Provide title + description (the description becomes the task goal and the initial node prompt). Optional: acceptanceCriteria (verification rubric), sources / skills (workspace slugs), llmConnection + model, workingDirectory, projectId. When projectId is omitted, the task inherits the invoking session's project.
 
-Set start: true to run the task immediately after creation — ONLY when the user has already asked for the work to be run (e.g. an approved swarm chain); "put it on the board" requests stay unstarted.
-
-Pass nodes to author a multi-node DAG (e.g. a swarm role chain): each node gets id, prompt (may reference \${nodes.<id>.output} of a dependency), optional dependsOn, title, and a per-node model override. Without nodes, a single "main" node is synthesized from the description.
-
-Returns { slug, orchestratorSessionId, taskLabelId, warnings, started?, runId? } — unknown source/skill slugs are reported as warnings, not errors. Use it when the user asks to capture or queue work as a task; to execute work right now in this context, use the current session or spawn_session instead.`,
+Returns { slug, orchestratorSessionId, taskLabelId, warnings } — unknown source/skill slugs are reported as warnings, not errors. Use it when the user asks to capture or queue work as a task; to execute work right now, use the current session or spawn_session instead.`,
 
   list_pages: `List the workspace's Pages — persistent, agent-authored HTML mini dashboards/documents rendered in the app's Pages section (sidebar) and optionally shared via password-protected public links.
 

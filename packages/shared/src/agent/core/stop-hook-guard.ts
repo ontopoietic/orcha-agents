@@ -3,8 +3,7 @@
  *
  * Structural catch-all for the "silently died" incident class: an agent that
  * launches background work via a spawn path the Step-0 gate doesn't cover
- * (e.g. improvising with the `Workflow` tool instead of loading the swarm
- * skill), then ends its turn seconds later. Under streaming mode, keep-alive
+ * (e.g. the `Workflow` tool), then ends its turn seconds later. Under streaming mode, keep-alive
  * is off (see `resolveKeepBackgroundTasksAlive`), so subprocess teardown
  * kills anything still in-query — with zero indicator to the model that it
  * happened.

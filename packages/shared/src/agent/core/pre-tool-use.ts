@@ -800,8 +800,8 @@ export function runPreToolUseChecks(ctx: PreToolUseInput): PreToolUseCheckResult
   // the structural backstop (it tracks shell_backgrounded/shell_killed too).
   // ORCHA p11b — the Monitor tool is the fourth leg: it registers a watch that
   // fires ACROSS turns, which under streaming can never happen (the subprocess
-  // — and the watch with it — dies at turn end). Incident 2026-08-09: a swarm
-  // conductor Monitor-watched a task run-log, ended its turn, and the watch
+  // — and the watch with it — dies at turn end). Incident 2026-08-09: a session
+  // Monitor-watched a task run-log, ended its turn, and the watch
   // died 3 minutes before the run completed. Not a deny — an in-turn Monitor
   // with an until-condition the model awaits is legitimate — just steering.
   const isWorkflowTool = toolName === 'Workflow';

@@ -536,27 +536,6 @@ export interface CreateTaskInput {
   workingDirectory?: string;
   /** Project to bind the task to. Defaults to the invoking session's project. */
   projectId?: string;
-  /**
-   * ORCHA deviation from upstream: start the run immediately after creation
-   * instead of leaving the card in "todo" for the user to start. Only set
-   * this when the user has already asked for the work to be RUN (e.g. a swarm
-   * chain kicked off on their go) — "put it on the board" stays unstarted.
-   */
-  start?: boolean;
-  /**
-   * ORCHA deviation from upstream: explicit DAG nodes (e.g. a swarm chain).
-   * When omitted, a single "main" node is synthesized from the description.
-   * Node prompts may reference previous node output via `${nodes.<id>.output}`.
-   */
-  nodes?: Array<{
-    id: string;
-    title?: string;
-    prompt: string;
-    /** Node ids this node depends on (sequential chains: the previous node). */
-    dependsOn?: string[];
-    /** Per-node model override (e.g. a stronger model for the architect role). */
-    model?: string;
-  }>;
 }
 
 /** Input for project_memory_append. */
@@ -579,10 +558,6 @@ export interface CreateTaskResult {
   taskLabelId?: string;
   /** Fail-soft problems (unknown source/skill slugs, label failure, …). */
   warnings: string[];
-  /** True when `start: true` was requested and the run was actually started. */
-  started?: boolean;
-  /** Run id of the started run (only when `started` is true). */
-  runId?: string;
 }
 
 // ============================================================

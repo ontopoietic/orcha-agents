@@ -2742,14 +2742,6 @@ This is a branched conversation. All prior messages in this conversation are par
 
     parts.push(...contextParts);
 
-    // ORCHA §bg-child-sessions p7 — nudge toward the swarm skill when the raw
-    // user text reads like swarm/role-team orchestration (see prompt-builder's
-    // getSwarmSkillHint for the pattern + on-disk gate).
-    const swarmSkillHint = this.promptBuilder.getSwarmSkillHint(text);
-    if (swarmSkillHint) {
-      parts.push(swarmSkillHint);
-    }
-
     // Add file attachments with stored path info (agent uses Read tool to access content)
     // Text files are NOT embedded inline to prevent context overflow from large files
     if (attachments) {
@@ -2796,12 +2788,6 @@ This is a branched conversation. All prior messages in this conversation are par
 
     for (const part of contextParts) {
       contentBlocks.push({ type: 'text', text: part });
-    }
-
-    // ORCHA §bg-child-sessions p7 — same swarm-skill nudge as buildTextPrompt.
-    const sdkSwarmSkillHint = this.promptBuilder.getSwarmSkillHint(text);
-    if (sdkSwarmSkillHint) {
-      contentBlocks.push({ type: 'text', text: sdkSwarmSkillHint });
     }
 
     // Add attachments - images/PDFs are uploaded inline, text files are path-only

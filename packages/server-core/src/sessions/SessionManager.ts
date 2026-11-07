@@ -1864,59 +1864,6 @@ export class SessionManager implements ISessionManager {
     this.automationBinder = fn
   }
 
-  // ORCHA: run-a-task hook, installed by registerTasksHandlers so the agent-facing
-  // create_task tool (createTaskFn below) can start a run through the SAME
-  // per-workspace TaskRunner registry the tasks:run RPC uses. A second runner
-  // instance here would fork the in-memory run registry (pause/stop from the UI
-  // would not find agent-started runs) — hence injection instead of construction.
-  private taskRunHook: ((workspaceId: string, slug: string, orchestratorSessionId: string) => { runId: string; settled: Promise<{ status: string }> }) | null = null
-
-  setTaskRunHook(fn: (workspaceId: string, slug: string, orchestratorSessionId: string) => { runId: string; settled: Promise<{ status: string }> }): void {
-    this.taskRunHook = fn
-  }
-
-  /**
-   * ORCHA p11 — deliver an agent-started task run's terminal result back into
-   * the invoking (conductor) session as a `background_result` message, mirroring
-   * `notifyParentOnChildComplete` for spawn_session children. Without this, a
-   * conductor that starts a run via create_task(start:true) has NO wake path —
-   * under streaming mode every in-turn wait (Monitor, background shell) dies at
-   * turn end, so the run finished and nobody ever learned of it (incident
-   * 2026-08-09: swarm stopped silently after the gherkin-writer run passed).
-   * Body = the orchestrator's final text (the verdict turn), capped like child
-   * results; delivery uses sendMessage (queued when the conductor is mid-turn).
-   */
-  private async notifyParentOnTaskRunSettled(
-    parentId: string,
-    slug: string,
-    runId: string,
-    orchestratorSessionId: string,
-    status: string,
-  ): Promise<void> {
-    const parent = this.sessions.get(parentId)
-    if (!parent) {
-      sessionLog.warn(`[tasks] parent session ${parentId} not found for settled run ${slug}/${runId}; dropping background_result`)
-      return
-    }
-    const verdictText = this.getSessionFinalText(orchestratorSessionId)?.trim() ?? ''
-    const header = `Task run "${slug}" (${runId}) settled with status: ${status}.`
-    let body = verdictText ? `${header}\n\n${verdictText}` : header
-    const cap = SessionManager.BG_CHILD_RESULT_CAP_BYTES
-    const truncationNote = `\n\n[Result truncated — read the full verdict in session ${orchestratorSessionId}.]`
-    if (Buffer.byteLength(body, 'utf8') > cap) {
-      const contentCap = Math.max(0, cap - Buffer.byteLength(truncationNote, 'utf8'))
-      body = Buffer.from(body, 'utf8').subarray(0, contentCap).toString('utf8') + truncationNote
-    }
-    const resultStatus = status === 'completed' ? 'completed' : 'failed'
-    const wrapped = [
-      `<background_result task="task-run:${slug}" childSessionId="${orchestratorSessionId}" status="${resultStatus}">`,
-      body,
-      `</background_result>`,
-    ].join('\n')
-    sessionLog.info(`[tasks] delivering task-run background_result`, { slug, runId, parentId, status })
-    await this.sendMessage(parentId, wrapped, undefined)
-  }
-
   private browserPaneManager: IBrowserPaneManager | null = null
   private enqueuePageThumbnailFn?: (req: { workspaceId: string; workspaceRootPath: string; slug: string }) => void
   private rpcServer: RpcServer | null = null
@@ -5099,19 +5046,8 @@ export class SessionManager implements ISessionManager {
             if (missing.length) warnings.push(`Unknown skills (kept in the spec, but they don't exist in this workspace): ${missing.join(', ')}`)
           }
 
-          // A spec requires ≥1 node. ORCHA deviation: explicit `nodes` (e.g. a
-          // swarm role chain with per-node model overrides) are accepted;
-          // without them, synthesize the single executable node from the
-          // description as upstream does.
-          const specNodes = input.nodes?.length
-            ? input.nodes.map(n => ({
-                id: n.id,
-                ...(n.title ? { title: n.title } : {}),
-                prompt: n.prompt,
-                ...(n.dependsOn?.length ? { depends_on: n.dependsOn } : {}),
-                ...(n.model ? { model: n.model } : {}),
-              }))
-            : [{ id: 'main', title: input.title, prompt: input.description }]
+          // A spec requires ≥1 node; synthesize the single executable node from the
+          // description. Multi-node DAG authoring stays with the TaskEditor/generate flow.
           const parsed = parseTaskSpec({
             id: slug,
             title: input.title,
@@ -5124,42 +5060,14 @@ export class SessionManager implements ISessionManager {
             ...(input.model || input.llmConnection
               ? { defaults: { ...(input.model ? { model: input.model } : {}), ...(input.llmConnection ? { llmConnection: input.llmConnection } : {}) } }
               : {}),
-            nodes: specNodes,
+            nodes: [{ id: 'main', title: input.title, prompt: input.description }],
           })
           if (!parsed.success) {
             throw new Error(`Invalid task spec: ${parsed.error.issues.map(i => i.message).join('; ')}`)
           }
 
-          const created = await createTaskFromSpec(this, ws.id, ws.rootPath, parsed.data, {
-            // Nest the orchestrator under the invoking session (see createTaskFromSpec).
-            parentSessionId: managed.id,
-          })
-          const result = { ...created, warnings: [...warnings, ...created.warnings] }
-
-          // ORCHA deviation from upstream: `start: true` runs the task right away
-          // (via the injected tasks:run TaskRunner hook) instead of leaving the
-          // card in "todo". Fail-soft: a missing hook or a run error downgrades
-          // to the upstream unstarted behavior plus a warning — the created task
-          // is never rolled back.
-          if (input.start) {
-            if (!this.taskRunHook) {
-              result.warnings.push('start requested, but no task runner is available in this context — task created unstarted.')
-            } else {
-              try {
-                const run = this.taskRunHook(ws.id, created.slug, created.orchestratorSessionId)
-                // p11: when the run settles, deliver the verdict back into the
-                // invoking session — fire-and-forget, never blocks the tool result.
-                void run.settled
-                  .then(s => this.notifyParentOnTaskRunSettled(managed.id, created.slug, run.runId, created.orchestratorSessionId, s.status))
-                  .catch(err => sessionLog.error(`[tasks] task-run settle notification failed for ${created.slug}:`, err))
-                return { ...result, started: true, runId: run.runId }
-              } catch (error) {
-                const message = error instanceof Error ? error.message : String(error)
-                result.warnings.push(`start requested, but the run could not be started: ${message} — task created unstarted.`)
-              }
-            }
-          }
-          return result
+          const created = await createTaskFromSpec(this, ws.id, ws.rootPath, parsed.data)
+          return { ...created, warnings: [...warnings, ...created.warnings] }
         },
         // project_memory_append — one O_APPEND write per note, so sessions sharing a
         // project never drop each other's notes (rewriting MEMORY.md from a

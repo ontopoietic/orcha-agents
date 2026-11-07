@@ -901,11 +901,11 @@ Use session tools to inspect or update Orcha Agent sessions/tasks:
 
 - \`get_session_info\`: inspect current or target session metadata.
 - \`set_session_labels\`: replace labels; valued labels use \`id::value\` and must match the configured type.
-- \`set_session_status\`: set a workflow status. Never move ANOTHER session into a closed status such as \`done\`/\`cancelled\` (rejected — the user owns closure on the board). Your OWN session (omit sessionId) may be set to a closed status once the work is fully complete and handed off (e.g. swarm role sessions set themselves \`done\`); when the user still needs to review, use \`needs-review\`.
+- \`set_session_status\`: set an open workflow status. Never move work into closed statuses such as \`done\`/\`cancelled\`; use \`needs-review\` when ready.
 - \`list_sessions\`: query with filters first; then call \`get_session_info\` for details.
 - \`list_background_tasks\`: the authoritative status source for background work. Report exactly what it returns.
 - \`send_agent_message\`: coordinate with another session; queued means not read yet.
-- \`create_task\`: create a board task in \`todo\`. Pass \`start: true\` only when the user approved running it now (e.g. a swarm chain); \`nodes[]\` authors an explicit DAG. Otherwise do not run it unless separately requested/automated.
+- \`create_task\`: create a board task in \`todo\` only. Do not run it unless separately requested/automated.
 - \`archive_session\`: archive another idle session by explicit ID only.
 
 Setting labels/statuses can trigger automations. Do not guess task closure or background-task outcomes.

@@ -12,12 +12,9 @@ const STATUSES: StatusEntry[] = [
   { id: 'cancelled', label: 'Cancelled', category: 'closed' },
 ];
 
-const OWN_SESSION_ID = 'session-self';
-
 function createCtx(): { ctx: SessionToolContext; sets: Array<{ sessionId?: string; status: string }> } {
   const sets: Array<{ sessionId?: string; status: string }> = [];
   const ctx = {
-    sessionId: OWN_SESSION_ID,
     setSessionStatus: (sessionId: string | undefined, status: string) => {
       sets.push({ sessionId, status });
     },
@@ -40,42 +37,19 @@ describe('handleSetSessionStatus — closed-status guard', () => {
     expect(sets).toEqual([{ sessionId: undefined, status: 'needs-review' }]);
   });
 
-  // ORCHA deviation from upstream: self-closure is allowed (swarm role
-  // sessions set themselves `done` after delivering their handoff).
-  it('allows a closed status (done) on the current session', async () => {
+  it('rejects a closed status (done) and does not write it', async () => {
     const { ctx, sets } = createCtx();
     const result = await handleSetSessionStatus(ctx, { status: 'done' });
-    expect(result.isError).toBeFalsy();
-    expect(sets).toEqual([{ sessionId: undefined, status: 'done' }]);
-  });
-
-  it('allows a closed status when sessionId explicitly names the own session', async () => {
-    const { ctx, sets } = createCtx();
-    const result = await handleSetSessionStatus(ctx, { sessionId: OWN_SESSION_ID, status: 'done' });
-    expect(result.isError).toBeFalsy();
-    expect(sets).toEqual([{ sessionId: OWN_SESSION_ID, status: 'done' }]);
-  });
-
-  it('rejects a closed status (done) on another session and does not write it', async () => {
-    const { ctx, sets } = createCtx();
-    const result = await handleSetSessionStatus(ctx, { sessionId: 'session-other', status: 'done' });
     expect(result.isError).toBe(true);
     expect(result.content[0]?.text).toContain('needs-review');
     expect(sets).toHaveLength(0);
   });
 
-  it('rejects a closed status on another session resolved from a display label (Cancelled)', async () => {
+  it('rejects a closed status resolved from a display label (Cancelled)', async () => {
     const { ctx, sets } = createCtx();
-    const result = await handleSetSessionStatus(ctx, { sessionId: 'session-other', status: 'Cancelled' });
+    const result = await handleSetSessionStatus(ctx, { status: 'Cancelled' });
     expect(result.isError).toBe(true);
     expect(sets).toHaveLength(0);
-  });
-
-  it('still allows an open status on another session', async () => {
-    const { ctx, sets } = createCtx();
-    const result = await handleSetSessionStatus(ctx, { sessionId: 'session-other', status: 'in-progress' });
-    expect(result.isError).toBeFalsy();
-    expect(sets).toEqual([{ sessionId: 'session-other', status: 'in-progress' }]);
   });
 
   it('still rejects an unknown status', async () => {

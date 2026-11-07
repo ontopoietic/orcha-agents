@@ -521,8 +521,8 @@ function AppShellContent({
   const [searchActive, setSearchActive] = React.useState(false)
   const [searchQuery, setSearchQuery] = React.useState('')
 
-  // Escape hatch for `meta.hidden` sessions (e.g. background swarm/role child
-  // sessions spawned with hidden:true) — off by default so the list stays tidy.
+  // Escape hatch for `meta.hidden` sessions (e.g. helper child sessions
+  // spawned with hidden:true) — off by default so the list stays tidy.
   const [showHiddenSessions, setShowHiddenSessions] = React.useState(() => {
     return storage.get(storage.KEYS.showHiddenSessions, false)
   })

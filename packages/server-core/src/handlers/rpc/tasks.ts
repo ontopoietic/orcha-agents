@@ -183,18 +183,6 @@ export function registerTasksHandlers(server: RpcServer, deps: HandlerDeps): voi
     return runner
   }
 
-  // ORCHA: let the agent-facing create_task tool (SessionManager.createTaskFn)
-  // start runs through this same per-workspace runner registry, so agent-started
-  // runs are pausable/stoppable via the normal tasks:* RPCs.
-  deps.sessionManager.setTaskRunHook?.((workspaceId, slug, orchestratorSessionId) => {
-    const runner = runnerFor(workspaceId)
-    const snapshot = runner.run(slug, { orchestratorSessionId })
-    return {
-      runId: snapshot.runId,
-      settled: runner.waitUntilSettled(slug, snapshot.runId).then(s => ({ status: s.status })),
-    }
-  })
-
   // tasks:validate — lint/dry-run; no side effects.
   server.handle(RPC_CHANNELS.tasks.VALIDATE, async (_ctx, _workspaceId: string, yaml: string): Promise<TaskValidationResultDto> => {
     return toValidationDto(parseTaskYaml(yaml))

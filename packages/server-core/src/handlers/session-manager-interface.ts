@@ -309,20 +309,6 @@ export interface ISessionManager {
   setAutomationBinder?(
     fn: (input: { workspaceId: string; sessionId: string; topicName: string }) => Promise<void>,
   ): void
-
-  /**
-   * ORCHA: install the run-a-task hook so the agent-facing create_task tool
-   * (`start: true`) can start runs through the same per-workspace TaskRunner
-   * registry the tasks:run RPC uses. Wired by registerTasksHandlers.
-   * `settled` resolves when the run reaches a terminal state (p11: the
-   * invoking session gets the result delivered as a background_result).
-   */
-  setTaskRunHook?(
-    fn: (workspaceId: string, slug: string, orchestratorSessionId: string) => {
-      runId: string
-      settled: Promise<{ status: string }>
-    },
-  ): void
 }
 
 /**
