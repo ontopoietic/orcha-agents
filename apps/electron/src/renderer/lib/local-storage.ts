@@ -23,8 +23,7 @@ export const KEYS = {
   chatGroupingMode: 'chat-grouping-mode', // How to group chats: 'date' | 'status'
   collapsedSessionGroups: 'collapsed-session-groups', // Collapsed group keys in session list
   showHiddenSessions: 'show-hidden-sessions', // Escape hatch: reveal sessions with meta.hidden in the list
-  // ORCHA §bg-child-sessions (p9): parent session ids whose nested child rows are expanded in the session list
-  expandedChildSessionParents: 'expanded-child-session-parents',
+  collapsedSessionFamilies: 'collapsed-session-families', // Sessions whose sub-sessions are hidden (workspace-scoped via suffix)
 
   // Focus mode
   focusModeEnabled: 'focus-mode-enabled',

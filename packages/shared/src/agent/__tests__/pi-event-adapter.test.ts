@@ -48,6 +48,25 @@ describe('PiEventAdapter', () => {
       expect(events).toHaveLength(1);
       expect(events[0]).toMatchObject({ type: 'complete' });
     });
+
+    it('should count the output and cost of every call in the turn, not only the last', () => {
+      const usage = (input: number, output: number, cost: number) =>
+        ({ input, output, cacheRead: 0, cacheWrite: 0, totalTokens: input + output, cost: { total: cost } });
+      const callOf = (u: ReturnType<typeof usage>, stopReason: string) => ({
+        type: 'message_end',
+        message: { role: 'assistant', stopReason, content: [{ type: 'text', text: 'x' }], usage: u },
+      });
+      const run = () => {
+        collect(adapter.adaptEvent(callOf(usage(1000, 300, 0.25), 'toolUse') as any));
+        collect(adapter.adaptEvent(callOf(usage(1500, 200, 0.5), 'stop') as any));
+        return collect(adapter.adaptEvent({ type: 'agent_end' } as any)).find(e => e.type === 'complete');
+      };
+
+      expect(run().usage).toMatchObject({ inputTokens: 1500, outputTokens: 500, costUsd: 0.75 });
+      // The next turn starts counting from zero
+      adapter.startTurn();
+      expect(run().usage).toMatchObject({ outputTokens: 500, costUsd: 0.75 });
+    });
   });
 
   // ============================================================

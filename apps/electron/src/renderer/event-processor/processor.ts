@@ -13,13 +13,14 @@
  */
 
 import type { SessionState, AgentEvent, ProcessResult } from './types'
-import { handleTextDelta, handleTextComplete, handleTextDiscard } from './handlers/text'
+import { handleTextDelta, handleTextComplete, handleTextDiscard, handleMessagesRetracted } from './handlers/text'
 import { handleToolStart, handleToolResult, handleTaskBackgrounded, handleShellBackgrounded, handleTaskProgress, handleTaskCompleted } from './handlers/tool'
 import {
   handleComplete,
   handleError,
   handleTypedError,
   handleSourcesChanged,
+  handleCodingModeChanged,
   handleLabelsChanged,
   handleAnchorsChanged,
   handleProjectIdChanged,
@@ -70,6 +71,9 @@ export function processEvent(
   switch (event.type) {
     case 'text_discard':
       return { state: handleTextDiscard(state, event), effects: [] }
+
+    case 'messages_retracted':
+      return { state: handleMessagesRetracted(state, event), effects: [] }
 
     case 'retry':
       return handleRetry(state, event)
@@ -168,6 +172,9 @@ export function processEvent(
 
     case 'sources_changed':
       return handleSourcesChanged(state, event)
+
+    case 'coding_mode_changed':
+      return handleCodingModeChanged(state, event)
 
     case 'labels_changed':
       return handleLabelsChanged(state, event)

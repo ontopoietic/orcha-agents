@@ -56,6 +56,7 @@ export {
   saveSession,
   loadSession,
   listSessions,
+  listSessionsAsync,
   deleteSession,
   clearSessionMessages,
   getOrCreateLatestSession,
@@ -103,6 +104,8 @@ export {
 // JSONL helpers (for direct access if needed)
 export {
   readSessionHeader,
+  readSessionHeaderAsync,
+  SESSION_HEADER_READ_TIMEOUT_MS,
   readSessionJsonl,
   writeSessionJsonl,
   createSessionHeader,

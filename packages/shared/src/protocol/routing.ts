@@ -304,6 +304,7 @@ export const REMOTE_ELIGIBLE_CHANNELS = new Set<string>([
   RPC_CHANNELS.llmConnections.SET_DEFAULT,
   RPC_CHANNELS.llmConnections.SET_WORKSPACE_DEFAULT,
   RPC_CHANNELS.llmConnections.REFRESH_MODELS,
+  RPC_CHANNELS.llmConnections.MIGRATE_SESSIONS, // Fork (connection failover)
   RPC_CHANNELS.llmConnections.CHANGED,
 
   // chatgpt — OAuth via capability passthrough
@@ -333,6 +334,10 @@ export const REMOTE_ELIGIBLE_CHANNELS = new Set<string>([
   RPC_CHANNELS.settings.TEST_LLM_CONNECTION_SETUP,
   RPC_CHANNELS.settings.GET_DEFAULT_THINKING_LEVEL,
   RPC_CHANNELS.settings.SET_DEFAULT_THINKING_LEVEL,
+  RPC_CHANNELS.settings.GET_AUTO_COMPACT_WINDOW,
+  RPC_CHANNELS.settings.SET_AUTO_COMPACT_WINDOW,
+  RPC_CHANNELS.settings.GET_SUBAGENT_MODEL,
+  RPC_CHANNELS.settings.SET_SUBAGENT_MODEL,
 
   // decisions — the decision layer's settings and keys live on the server whose sessions ask the
   // model (it can reuse that server's LLM connections); the Laya probe tests what that server reaches
@@ -470,6 +475,19 @@ export const REMOTE_ELIGIBLE_CHANNELS = new Set<string>([
 
   // git — workspace filesystem
   RPC_CHANNELS.git.GET_BRANCH,
+  RPC_CHANNELS.git.LIST_REPOS,
+  RPC_CHANNELS.git.CREATE_WORKTREE,
+
+  // prWatch — the PR watcher runs where the session's repo, source credentials and `gh` live
+  RPC_CHANNELS.prWatch.SUBSCRIBE,
+  RPC_CHANNELS.prWatch.UNSUBSCRIBE,
+  RPC_CHANNELS.prWatch.REFRESH,
+  RPC_CHANNELS.prWatch.GET_DETAILS,
+  RPC_CHANNELS.prWatch.BIND,
+  RPC_CHANNELS.prWatch.UNBIND,
+  RPC_CHANNELS.prWatch.SET_AUTO_MERGE,
+  RPC_CHANNELS.prWatch.SET_AUTO_FIX,
+  RPC_CHANNELS.prWatch.CHANGED,
 
   // resources — workspace resource export/import
   RPC_CHANNELS.resources.EXPORT,

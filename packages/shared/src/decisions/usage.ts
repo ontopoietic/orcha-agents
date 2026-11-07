@@ -176,6 +176,7 @@ export const DECISION_RECORD_TAGS: Record<DecisionLayerFeature, string> = {
   midTurnMessages: 'mid_turn_messages',
   largeResults: 'large_results',
   suggestions: 'suggestions',
+  subagentModels: 'subagent_models',
 };
 
 /** What Settings shows per toggle: checks, failures and how often an answer changed something. */

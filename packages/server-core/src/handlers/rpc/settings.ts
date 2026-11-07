@@ -37,6 +37,10 @@ export const HANDLED_CHANNELS = [
   RPC_CHANNELS.sessions.SET_MODEL,
   RPC_CHANNELS.settings.GET_DEFAULT_THINKING_LEVEL,
   RPC_CHANNELS.settings.SET_DEFAULT_THINKING_LEVEL,
+  RPC_CHANNELS.settings.GET_AUTO_COMPACT_WINDOW,
+  RPC_CHANNELS.settings.SET_AUTO_COMPACT_WINDOW,
+  RPC_CHANNELS.settings.GET_SUBAGENT_MODEL,
+  RPC_CHANNELS.settings.SET_SUBAGENT_MODEL,
   RPC_CHANNELS.tools.GET_BROWSER_TOOL_ENABLED,
   RPC_CHANNELS.tools.SET_BROWSER_TOOL_ENABLED,
   RPC_CHANNELS.settings.GET_NETWORK_PROXY,
@@ -65,6 +69,34 @@ export function registerSettingsHandlers(server: RpcServer, deps: HandlerDeps): 
       throw new Error('Failed to persist default thinking level')
     }
     return { success: true }
+  })
+
+  // Claude auto-compact window (tokens); null = the SDK default. Applies to new and restarted sessions.
+  server.handle(RPC_CHANNELS.settings.GET_AUTO_COMPACT_WINDOW, async () => {
+    const { getAutoCompactWindow } = await import('@craft-agent/shared/config/storage')
+    return getAutoCompactWindow() ?? null
+  })
+
+  server.handle(RPC_CHANNELS.settings.SET_AUTO_COMPACT_WINDOW, async (_ctx, tokens: number | null) => {
+    if (tokens !== null && !(Number.isInteger(tokens) && tokens >= 100_000 && tokens <= 1_000_000)) {
+      throw new Error(`Invalid auto-compact window: ${tokens}. Use 100000–1000000 tokens, or null for the default.`)
+    }
+    const { setAutoCompactWindow } = await import('@craft-agent/shared/config/storage')
+    setAutoCompactWindow(tokens)
+  })
+
+  // Default model for Claude subagents; null = the session's model.
+  server.handle(RPC_CHANNELS.settings.GET_SUBAGENT_MODEL, async () => {
+    const { getSubagentModel } = await import('@craft-agent/shared/config/storage')
+    return getSubagentModel() ?? null
+  })
+
+  server.handle(RPC_CHANNELS.settings.SET_SUBAGENT_MODEL, async (_ctx, model: string | null) => {
+    const { SUBAGENT_MODELS, setSubagentModel } = await import('@craft-agent/shared/config/storage')
+    if (model !== null && !(SUBAGENT_MODELS as readonly string[]).includes(model)) {
+      throw new Error(`Invalid subagent model: ${model}. Valid values: ${SUBAGENT_MODELS.join(', ')}, or null`)
+    }
+    setSubagentModel(model as typeof SUBAGENT_MODELS[number] | null)
   })
 
   // ============================================================
@@ -114,10 +146,12 @@ export function registerSettingsHandlers(server: RpcServer, deps: HandlerDeps): 
       permissionMode: config?.defaults?.permissionMode,
       cyclablePermissionModes: config?.defaults?.cyclablePermissionModes,
       thinkingLevel: normalizeThinkingLevel(config?.defaults?.thinkingLevel),
+      codingMode: config?.defaults?.codingMode === true,
       workingDirectory: config?.defaults?.workingDirectory,
       localMcpEnabled: config?.localMcpServers?.enabled ?? true,
       defaultLlmConnection: config?.defaults?.defaultLlmConnection,
       enabledSourceSlugs: config?.defaults?.enabledSourceSlugs ?? [],
+      chatStarters: config?.chatStarters ?? [],
     }
   })
 
@@ -129,7 +163,7 @@ export function registerSettingsHandlers(server: RpcServer, deps: HandlerDeps): 
       : value
 
     // Validate key is a known workspace setting
-    const validKeys = ['name', 'model', 'enabledSourceSlugs', 'permissionMode', 'cyclablePermissionModes', 'thinkingLevel', 'workingDirectory', 'localMcpEnabled', 'defaultLlmConnection']
+    const validKeys = ['name', 'model', 'enabledSourceSlugs', 'permissionMode', 'cyclablePermissionModes', 'thinkingLevel', 'codingMode', 'workingDirectory', 'localMcpEnabled', 'defaultLlmConnection', 'chatStarters']
     if (!validKeys.includes(key)) {
       throw new Error(`Invalid workspace setting key: ${key}. Valid keys: ${validKeys.join(', ')}`)
     }
@@ -162,6 +196,14 @@ export function registerSettingsHandlers(server: RpcServer, deps: HandlerDeps): 
       // Store in localMcpServers.enabled (top-level, not in defaults)
       config.localMcpServers = config.localMcpServers || { enabled: true }
       config.localMcpServers.enabled = Boolean(normalizedValue)
+    } else if (key === 'codingMode') {
+      // Stored only when on, so workspaces that never enable it keep an unchanged config
+      config.defaults = config.defaults || {}
+      if (normalizedValue === true) config.defaults.codingMode = true
+      else delete config.defaults.codingMode
+    } else if (key === 'chatStarters') {
+      // Top-level field, not in defaults
+      config.chatStarters = (normalizedValue as Array<{ label: string; prompt: string }> | undefined) ?? []
     } else {
       // Update the setting in defaults
       config.defaults = config.defaults || {}

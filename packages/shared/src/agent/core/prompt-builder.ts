@@ -259,7 +259,7 @@ export class PromptBuilder {
    * can safely live in the cached system prefix (issue #862).
    *
    * Blocks (in order):
-   *  1. workspace capabilities
+   *  1. workspace capabilities (not in coding mode: local MCP support is irrelevant to coding)
    *  2. working directory, when available
    *  3. stable git developer context, when the selected working directory is in a repo
    *
@@ -270,7 +270,9 @@ export class PromptBuilder {
     const parts: string[] = [];
 
     // Workspace capabilities
-    parts.push(this.formatWorkspaceCapabilities());
+    if (this.config.agentProfile !== 'coding') {
+      parts.push(this.formatWorkspaceCapabilities());
+    }
 
     // Working directory context
     const workingDirContext = this.getWorkingDirectoryContext();
@@ -729,6 +731,13 @@ Please continue the conversation naturally from where we left off.
     this.config.workspace = workspace;
     this.workspaceRootPath = workspace?.rootPath ?? '';
     this.clearDeveloperContextCache();
+  }
+
+  /**
+   * Update the agent profile (coding mode trims the per-message context).
+   */
+  setAgentProfile(profile: NonNullable<PromptBuilderConfig['agentProfile']>): void {
+    this.config.agentProfile = profile;
   }
 
   /**

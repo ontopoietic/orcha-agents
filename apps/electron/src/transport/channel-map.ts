@@ -171,6 +171,10 @@ export const CHANNEL_MAP = {
   testLlmConnectionSetup: invoke(RPC_CHANNELS.settings.TEST_LLM_CONNECTION_SETUP),
   getDefaultThinkingLevel: invoke(RPC_CHANNELS.settings.GET_DEFAULT_THINKING_LEVEL),
   setDefaultThinkingLevel: invoke(RPC_CHANNELS.settings.SET_DEFAULT_THINKING_LEVEL),
+  getAutoCompactWindow: invoke(RPC_CHANNELS.settings.GET_AUTO_COMPACT_WINDOW),
+  setAutoCompactWindow: invoke(RPC_CHANNELS.settings.SET_AUTO_COMPACT_WINDOW),
+  getSubagentModel: invoke(RPC_CHANNELS.settings.GET_SUBAGENT_MODEL),
+  setSubagentModel: invoke(RPC_CHANNELS.settings.SET_SUBAGENT_MODEL),
   getNetworkProxySettings: invoke(RPC_CHANNELS.settings.GET_NETWORK_PROXY),
   setNetworkProxySettings: invoke(RPC_CHANNELS.settings.SET_NETWORK_PROXY),
 
@@ -347,6 +351,19 @@ export const CHANNEL_MAP = {
 
   // Git
   getGitBranch: invoke(RPC_CHANNELS.git.GET_BRANCH),
+  listCodingRepos: invoke(RPC_CHANNELS.git.LIST_REPOS),
+  createCodingWorktree: invoke(RPC_CHANNELS.git.CREATE_WORKTREE),
+
+  // PR watcher (Coding mode chat-header chip)
+  prWatchSubscribe: invoke(RPC_CHANNELS.prWatch.SUBSCRIBE),
+  prWatchUnsubscribe: invoke(RPC_CHANNELS.prWatch.UNSUBSCRIBE),
+  prWatchRefresh: invoke(RPC_CHANNELS.prWatch.REFRESH),
+  prWatchGetDetails: invoke(RPC_CHANNELS.prWatch.GET_DETAILS),
+  prWatchBind: invoke(RPC_CHANNELS.prWatch.BIND),
+  prWatchUnbind: invoke(RPC_CHANNELS.prWatch.UNBIND),
+  prWatchSetAutoMerge: invoke(RPC_CHANNELS.prWatch.SET_AUTO_MERGE),
+  prWatchSetAutoFix: invoke(RPC_CHANNELS.prWatch.SET_AUTO_FIX),
+  onPrWatchChanged: listener(RPC_CHANNELS.prWatch.CHANGED),
   checkGitBash: invoke(RPC_CHANNELS.gitbash.CHECK),
   browseForGitBash: invoke(RPC_CHANNELS.gitbash.BROWSE),
   setGitBashPath: invoke(RPC_CHANNELS.gitbash.SET_PATH),

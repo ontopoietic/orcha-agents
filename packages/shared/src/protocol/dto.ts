@@ -17,6 +17,7 @@ import type {
 } from '@craft-agent/core/types'
 import type { PermissionMode } from '../agent/mode-types'
 import type { ThinkingLevel } from '../agent/thinking-levels'
+import type { BoundPr, PrMonitorState } from './pr-watch'
 import type { CustomEndpointConfig } from '../config/llm-connections'
 import type {
   AuthRequest as SharedAuthRequest,
@@ -77,6 +78,12 @@ export interface Session {
   model?: string
   llmConnection?: string
   thinkingLevel?: ThinkingLevel
+  /** Coding mode: lean coding prompt + session-tool profile (fixed once the session has messages) */
+  codingMode?: boolean
+  /** Coding mode: PRs pinned to this session (chat-header PR carousel; see pr_bind / pr_unbind) */
+  boundPrs?: BoundPr[]
+  /** Coding mode: per-PR monitor state (auto-fix), keyed by PR id */
+  prMonitors?: Record<string, PrMonitorState>
   lastMessageRole?: 'user' | 'assistant' | 'plan' | 'tool' | 'error'
   lastFinalMessageId?: string
   isAsyncOperationOngoing?: boolean
@@ -111,6 +118,11 @@ export interface Session {
   projectId?: string
   /** Parent session id — when set, this session is a subtask of the parent (undefined = top-level task) */
   parentSessionId?: string
+  /**
+   * Id of the session this one was branched from (undefined = not a branch). Computed on read
+   * from the persisted `branchFromSessionPath`; the session list nests a branch under its source.
+   */
+  branchFromSessionId?: string
   /** Kanban board column id ('todo' | 'in-progress' | 'done'); independent of sessionStatus */
   kanbanColumn?: string
   /** Tasks Conductor: slug of the task spec this session belongs to. */
@@ -148,6 +160,8 @@ export interface CreateSessionOptions {
   hidden?: boolean
   /** Nobody answers prompts in this session (CLI runs): features that would add a prompt skip it. */
   unattended?: boolean
+  /** Start in coding mode (lean coding prompt + session-tool profile). Falls back to the workspace default. */
+  codingMode?: boolean
   sessionStatus?: SessionStatus
   labels?: string[]
   isFlagged?: boolean
@@ -432,6 +446,8 @@ export interface PermissionModeState {
 // turnId: Correlation ID from the API's message.id, groups all events in an assistant turn
 export type SessionEvent =
   | { type: 'text_discard'; sessionId: string; turnId: string }
+  // Remove these turns' assistant text and these tool calls (a reply the backend took back)
+  | { type: 'messages_retracted'; sessionId: string; turnIds: string[]; toolUseIds: string[] }
   | { type: 'retry'; sessionId: string; phase: 'backoff'; message: string }
   | { type: 'retry'; sessionId: string; phase: 'active' | 'end' }
   | { type: 'text_delta'; sessionId: string; delta: string; turnId?: string }
@@ -454,6 +470,7 @@ export type SessionEvent =
   | { type: 'permission_mode_changed'; sessionId: string; permissionMode: PermissionMode; previousPermissionMode?: PermissionMode; transitionDisplay?: string; modeVersion?: number; changedAt?: string; changedBy?: PermissionModeState['changedBy'] }
   | { type: 'plan_submitted'; sessionId: string; message: Message }
   | { type: 'sources_changed'; sessionId: string; enabledSourceSlugs: string[] }
+  | { type: 'coding_mode_changed'; sessionId: string; codingMode: boolean }
   | { type: 'labels_changed'; sessionId: string; labels: string[] }
   | { type: 'anchors_changed'; sessionId: string; anchors: import('../sessions/anchors').AnchorRef[] }
   | { type: 'project_id_changed'; sessionId: string; projectId: string | null }
@@ -520,6 +537,9 @@ export type SessionCommand =
   | { type: 'setActiveViewing'; workspaceId: string }
   | { type: 'setPermissionMode'; mode: PermissionMode }
   | { type: 'setThinkingLevel'; level: ThinkingLevel }
+  | { type: 'setCodingMode'; enabled: boolean }
+  /** Coding mode is fixed once a session has messages: continue in a new session with it switched. Returns `{ sessionId }`. */
+  | { type: 'continueInNewSession'; codingMode: boolean }
   | { type: 'updateWorkingDirectory'; dir: string }
   | { type: 'setSources'; sourceSlugs: string[] }
   | { type: 'setLabels'; labels: string[] }
@@ -818,10 +838,13 @@ export interface WorkspaceSettings {
   permissionMode?: PermissionMode
   cyclablePermissionModes?: PermissionMode[]
   thinkingLevel?: ThinkingLevel
+  /** Start new sessions in coding mode */
+  codingMode?: boolean
   workingDirectory?: string
   localMcpEnabled?: boolean
   defaultLlmConnection?: string
   enabledSourceSlugs?: string[]
+  chatStarters?: Array<{ label: string; prompt: string }>
 }
 
 // ---------------------------------------------------------------------------
@@ -868,6 +891,15 @@ export type TestAutomationActionResult =
 export interface TestAutomationResult {
   actions: TestAutomationActionResult[]
 }
+
+export type { AutomationLoadIssue } from '../automations/types'
+
+/**
+ * `automations:get` returns the raw automations.json with this key added: the
+ * automations that will not run, and why — computed with the same lenient load
+ * the runtime uses, so the screen and the runtime agree. Older clients ignore it.
+ */
+export const AUTOMATIONS_LOAD_ISSUES_KEY = '_loadIssues'
 
 // ---------------------------------------------------------------------------
 // Window types

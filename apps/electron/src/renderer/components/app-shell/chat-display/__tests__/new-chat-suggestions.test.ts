@@ -3,7 +3,9 @@ import type { LoadedSource } from '@craft-agent/shared/sources/types'
 import {
   newChatSuggestionKind,
   newChatSuggestionLabel,
+  newChatSuggestionMentions,
   newChatSuggestionMessage,
+  pickCustomSuggestions,
   pickNewChatSuggestions,
 } from '../new-chat-suggestions'
 
@@ -67,5 +69,53 @@ describe('suggestion text', () => {
     const [pick] = pickNewChatSuggestions([])
     expect(newChatSuggestionLabel(pick!, fakeT)).toBe('chat.suggestions.connectEmail|')
     expect(newChatSuggestionMessage(pick!, fakeT)).toBe('chat.suggestions.connectEmail|')
+  })
+})
+
+describe('custom starters', () => {
+  const starters = [
+    { label: 'Standup', prompt: 'Run [skill:my-ws:daily-standup] using [source:linear] and [source:slack]' },
+    { label: 'Inbox', prompt: 'Check [source:gmail]' },
+    { label: 'Plain', prompt: 'What is new?' },
+    { label: 'Extra', prompt: 'Never shown' },
+  ]
+
+  it('keeps at most three, shown by label and sent as the prompt', () => {
+    const picks = pickCustomSuggestions(starters)
+    expect(picks.map(p => newChatSuggestionLabel(p, fakeT))).toEqual(['Standup', 'Inbox', 'Plain'])
+    expect(newChatSuggestionMessage(picks[0]!, fakeT)).toBe(starters[0]!.prompt)
+  })
+
+  it('enables the mentioned sources and invokes the mentioned skills', () => {
+    const [standup] = pickCustomSuggestions(starters)
+    expect(newChatSuggestionMentions(standup!, ['daily-standup'], ['linear', 'slack', 'gmail']))
+      .toEqual({ sources: ['linear', 'slack'], skills: ['daily-standup'] })
+  })
+
+  it('accepts unqualified skill mentions', () => {
+    const [pick] = pickCustomSuggestions([{ label: 'Review', prompt: '[skill:code-review] the open PR' }])
+    expect(newChatSuggestionMentions(pick!, ['code-review'], []).skills).toEqual(['code-review'])
+  })
+
+  it('ignores mentions of sources and skills the workspace does not have', () => {
+    const [standup] = pickCustomSuggestions(starters)
+    expect(newChatSuggestionMentions(standup!, [], ['slack'])).toEqual({ sources: ['slack'], skills: [] })
+  })
+
+  it('reports nothing for a prompt without mentions', () => {
+    const [, , plain] = pickCustomSuggestions(starters)
+    expect(newChatSuggestionMentions(plain!, ['daily-standup'], ['linear'])).toEqual({ sources: [], skills: [] })
+  })
+})
+
+describe('newChatSuggestionMentions for built-in suggestions', () => {
+  it('enables the suggestion\'s own source', () => {
+    const [pick] = pickNewChatSuggestions([gmail])
+    expect(newChatSuggestionMentions(pick!, [], [])).toEqual({ sources: ['gmail'], skills: [] })
+  })
+
+  it('enables nothing for a top-up', () => {
+    const [pick] = pickNewChatSuggestions([])
+    expect(newChatSuggestionMentions(pick!, [], [])).toEqual({ sources: [], skills: [] })
   })
 })

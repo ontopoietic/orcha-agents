@@ -400,6 +400,23 @@ describe('ClaudeEventAdapter', () => {
       });
     });
 
+    it('reports the SDK running totals, subagent models included', async () => {
+      const events = await adapter.adapt({
+        type: 'result',
+        subtype: 'success',
+        usage: { input_tokens: 10, output_tokens: 500, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+        total_cost_usd: 4.2,
+        modelUsage: {
+          'claude-opus-5-5[1m]': { outputTokens: 9000, contextWindow: 1000000 },
+          'claude-sonnet-5-5': { outputTokens: 3000, contextWindow: 1000000 },
+        },
+        session_id: 'sess-1',
+      } as any);
+
+      const completeEvent = events.find(e => e.type === 'complete') as any;
+      expect(completeEvent.usage.runningTotals).toEqual({ costUsd: 4.2, outputTokens: 12000 });
+    });
+
     it('should emit error then complete on failure', async () => {
       const events = await adapter.adapt({
         type: 'result',

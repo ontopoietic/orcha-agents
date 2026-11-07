@@ -222,6 +222,10 @@ export const RPC_CHANNELS = {
     TEST_LLM_CONNECTION_SETUP: 'settings:testLlmConnectionSetup',
     GET_DEFAULT_THINKING_LEVEL: 'settings:getDefaultThinkingLevel',
     SET_DEFAULT_THINKING_LEVEL: 'settings:setDefaultThinkingLevel',
+    GET_AUTO_COMPACT_WINDOW: 'settings:getAutoCompactWindow',
+    SET_AUTO_COMPACT_WINDOW: 'settings:setAutoCompactWindow',
+    GET_SUBAGENT_MODEL: 'settings:getSubagentModel',
+    SET_SUBAGENT_MODEL: 'settings:setSubagentModel',
     GET_NETWORK_PROXY: 'settings:getNetworkProxy',
     SET_NETWORK_PROXY: 'settings:setNetworkProxy',
     GET_SERVER_CONFIG: 'settings:getServerConfig',
@@ -363,6 +367,28 @@ export const RPC_CHANNELS = {
   },
   git: {
     GET_BRANCH: 'git:getBranch',
+    /** Coding mode's worktree picker: local repos + `gh repo list` (see protocol/git-repos.ts) */
+    LIST_REPOS: 'git:listRepos',
+    /** Creates a worktree (cloning first for a GitHub-only repo) for a new Coding session */
+    CREATE_WORKTREE: 'git:createWorktree',
+  },
+  /** Coding mode PR watcher (chat header PR chip): see protocol/pr-watch.ts */
+  prWatch: {
+    SUBSCRIBE: 'prWatch:subscribe',
+    UNSUBSCRIBE: 'prWatch:unsubscribe',
+    REFRESH: 'prWatch:refresh',
+    /** Card details for one carousel entry: (sessionId, prId) */
+    GET_DETAILS: 'prWatch:getDetails',
+    /** Pin a PR to the session by URL or number (verifies before persisting) */
+    BIND: 'prWatch:bind',
+    /** Remove a pinned PR from the session */
+    UNBIND: 'prWatch:unbind',
+    /** Enable/disable GitHub auto-merge for one of the session's PRs */
+    SET_AUTO_MERGE: 'prWatch:setAutoMerge',
+    /** Turn auto-fix (the card's Fix toggle) on/off for one of the session's PRs: (sessionId, prId, enabled) */
+    SET_AUTO_FIX: 'prWatch:setAutoFix',
+    /** Server → client push: (sessionId, PrWatchSessionState) */
+    CHANGED: 'prWatch:changed',
   },
   gitbash: {
     CHECK: 'gitbash:check',

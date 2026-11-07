@@ -143,7 +143,7 @@ function SessionInfoPopoverContent({ sessionId, sessionFolderPath }: { sessionId
   }, [onRenameSession, sessionId])
 
   return (
-    <div className="h-full min-h-0 flex flex-col">
+    <div className="flex-1 min-h-0 flex flex-col">
       {/* 16px insets, the same edge as the Session Files header and rows below */}
       <div className="shrink-0 px-4 py-3 border-b border-subtle">
         <label htmlFor={`session-info-title-${sessionId}`} className="text-label-sm font-medium text-secondary block mb-1.5 select-none">
@@ -156,7 +156,7 @@ function SessionInfoPopoverContent({ sessionId, sessionFolderPath }: { sessionId
           placeholder={t("chat.titlePlaceholder")}
         />
       </div>
-      <div className="flex-1 min-h-0 overflow-hidden">
+      <div className="flex-1 min-h-0 overflow-y-auto">
         <SessionFilesSection
           sessionId={sessionId}
           sessionFolderPath={sessionFolderPath}

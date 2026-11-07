@@ -6,6 +6,7 @@
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Contributor Covenant](https://img.shields.io/badge/Contributor%20Covenant-2.1-4baaaa.svg)](CODE_OF_CONDUCT.md)
+[![Discord](https://img.shields.io/badge/Discord-Come%20join%20our%20server-5865F2?logo=discord&logoColor=white)](https://discord.gg/bwskSM82p)
 
 ## How it Works (Video)
 To understand what Craft Agents does and how it works watch this video.
@@ -79,7 +80,7 @@ irm https://thecraftagents.com/install-app.ps1 | iex
 ### Build from Source
 
 ```bash
-git clone https://github.com/lukilabs/craft-agents-oss.git
+git clone https://github.com/craft-ai-agents/craft-agents-oss.git
 cd craft-agents-oss
 bun install
 bun run electron:start
@@ -347,19 +348,29 @@ craft-cli --validate-server --url ws://127.0.0.1:9100 --token <token>
 ## Architecture
 
 ```
-craft-agent/
+craft-agents-oss/
 ├── apps/
 │   ├── cli/                   # Terminal client (CLI)
-│   └── electron/              # Desktop GUI (primary)
-│       └── src/
-│           ├── main/          # Electron main process
-│           ├── preload/       # Context bridge
-│           └── renderer/      # React UI (Vite + shadcn)
+│   ├── electron/              # Desktop GUI (primary)
+│   │   └── src/
+│   │       ├── main/          # Electron main process
+│   │       ├── preload/       # Context bridge
+│   │       ├── renderer/      # React UI (Vite + shadcn)
+│   │       └── transport/     # WebSocket RPC client
+│   ├── viewer/                # Web viewer for shared session transcripts
+│   └── webui/                 # Browser UI served by the headless server
 └── packages/
     ├── core/                  # Shared types
+    ├── messaging-gateway/     # Telegram, WhatsApp and Lark messaging gateway
+    ├── messaging-whatsapp-worker/ # WhatsApp worker subprocess
+    ├── pi-agent-server/       # Pi agent subprocess (JSONL over stdio)
+    ├── server/                # Standalone headless server
+    ├── server-core/           # RPC transport, handlers, session management
+    ├── session-tools-core/    # Session-scoped tool implementations
+    ├── ui/                    # Shared React components
     └── shared/                # Business logic
         └── src/
-            ├── agent/         # CraftAgent, permissions
+            ├── agent/         # Claude and Pi agent backends, permissions
             ├── auth/          # OAuth, tokens
             ├── config/        # Storage, preferences, themes
             ├── credentials/   # AES-256-GCM encrypted storage

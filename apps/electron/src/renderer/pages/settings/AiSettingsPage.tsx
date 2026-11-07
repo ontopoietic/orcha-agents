@@ -9,12 +9,12 @@
  * Follows the Appearance settings pattern: app-level defaults + workspace overrides.
  */
 
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef, useId } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Button, IconButton } from '@/components/ui/button'
 import { HeaderMenu } from '@/components/ui/HeaderMenu'
 import { routes } from '@/lib/navigate'
-import { X, MoreHorizontal, Pencil, Trash2, Star, ChevronDown, ChevronRight, CheckCircle2, AlertTriangle, RefreshCcw, Settings2, MessageSquareMore, Zap, Clock, Check, ArrowRightLeft, ShieldCheck } from 'lucide-react'
+import { X, MoreHorizontal, Pencil, Trash2, Star, ChevronDown, ChevronRight, CheckCircle2, AlertTriangle, RefreshCcw, Settings2, MessageSquareMore, Zap, Clock, Check, ArrowRightLeft, ShieldCheck, Plus } from 'lucide-react'
 import type { CredentialHealthStatus, CredentialHealthIssue } from '../../../shared/types'
 import { Spinner, FullscreenOverlayBase, Tooltip, TooltipTrigger, TooltipContent, AnimatedCollapsibleContent } from '@craft-agent/ui'
 import { useSetAtom } from 'jotai'
@@ -54,7 +54,12 @@ import { RtkUpdateDialog, type RtkStatusInfo } from '@/components/RtkUpdateDialo
 import { useWorkspaceIcon } from '@/hooks/useWorkspaceIcon'
 import { OnboardingWizard, type ApiSetupMethod } from '@/components/onboarding'
 import { RenameDialog } from '@/components/ui/rename-dialog'
-import { useAppShellContext } from '@/context/AppShellContext'
+import { useAppShellContext, WORKSPACE_SETTINGS_CHANGED_EVENT } from '@/context/AppShellContext'
+import { RichTextInput, type RichTextInputHandle } from '@/components/ui/rich-text-input'
+import { InlineMentionMenu, useInlineMention, type MentionItem } from '@/components/ui/mention-menu'
+import { MentionBadge } from '@/components/ui/mention-badge'
+import { findMentionMatches } from '@/lib/mentions'
+import type { LoadedSkill, LoadedSource } from '../../../shared/types'
 import { getModelShortName, type ModelDefinition } from '@config/models'
 import { getModelsForProviderType, resolveMidStreamBehavior, type CustomEndpointApi, type MidStreamBehavior } from '@config/llm-connections'
 import { toast } from 'sonner'
@@ -73,6 +78,17 @@ function formatTokenCount(n: number): string {
   if (n < 1000) return String(n)
   if (n < 1_000_000) return `${(n / 1000).toFixed(1)}K`
   return `${(n / 1_000_000).toFixed(1)}M`
+}
+
+/** Auto-compact windows offered as presets (tokens); anything else in 100K–1M is "Custom". */
+const AUTO_COMPACT_PRESETS = [200_000, 400_000, 600_000]
+
+/** "350000", "350,000", "350k" or "0.35m" → tokens; null when it is not a number. */
+function parseTokenCount(text: string): number | null {
+  const match = /^([\d.]+)\s*([km]?)$/i.exec(text.trim().replace(/[,_\s](?=\d)/g, ''))
+  if (!match) return null
+  const value = Number(match[1]) * (match[2]?.toLowerCase() === 'k' ? 1_000 : match[2]?.toLowerCase() === 'm' ? 1_000_000 : 1)
+  return Number.isFinite(value) ? Math.round(value) : null
 }
 
 /**
@@ -677,6 +693,221 @@ function getApiKeyMethodForConnection(conn: LlmConnectionWithStatus): ApiSetupMe
 }
 
 // ============================================
+// Chat Starters Section (per-workspace)
+// ============================================
+
+interface ChatStartersSectionProps {
+  workspaceId: string
+  onSettingsChange: () => void
+}
+
+/** A starter prompt with its source/skill mentions drawn as badges, as in the composer. */
+function MentionText({ text, skills, sources, workspaceId }: {
+  text: string
+  skills: LoadedSkill[]
+  sources: LoadedSource[]
+  workspaceId?: string
+}) {
+  const matches = findMentionMatches(text, skills.map(s => s.slug), sources.map(s => s.config.slug))
+  if (matches.length === 0) return <>{text}</>
+
+  const parts: React.ReactNode[] = []
+  let lastIndex = 0
+  for (const match of matches) {
+    if (match.startIndex > lastIndex) parts.push(text.slice(lastIndex, match.startIndex))
+    const skill = match.type === 'skill' ? skills.find(s => s.slug === match.id) : undefined
+    const source = match.type === 'source' ? sources.find(s => s.config.slug === match.id) : undefined
+    const label = skill?.metadata.name ?? source?.config.name ?? match.id.split('/').pop() ?? match.id
+    parts.push(
+      <MentionBadge
+        key={match.startIndex}
+        type={match.type}
+        label={label}
+        skill={skill}
+        source={source}
+        workspaceId={workspaceId}
+        className="h-5 mx-0.5 align-middle"
+      />
+    )
+    lastIndex = match.startIndex + match.fullMatch.length
+  }
+  if (lastIndex < text.length) parts.push(text.slice(lastIndex))
+  return <>{parts}</>
+}
+
+function ChatStartersSection({ workspaceId, onSettingsChange }: ChatStartersSectionProps) {
+  const { t } = useTranslation()
+  const { skills = [], enabledSources: sources = [], workspaces } = useAppShellContext()
+  // Skill mentions are qualified by the workspace slug, as the composer writes them
+  const workspaceSlug = workspaces.find(w => w.id === workspaceId)?.slug ?? workspaceId
+  const [starters, setStarters] = useState<Array<{ label: string; prompt: string }>>([])
+  const [labelDraft, setLabelDraft] = useState('')
+  const [promptDraft, setPromptDraft] = useState('')
+  const [saving, setSaving] = useState(false)
+  const promptInputRef = useRef<RichTextInputHandle>(null)
+  const promptLabelId = useId()
+
+  useEffect(() => {
+    if (!window.electronAPI) return
+    window.electronAPI.getWorkspaceSettings(workspaceId).then(ws => {
+      setStarters(ws?.chatStarters ?? [])
+    }).catch(console.error)
+  }, [workspaceId])
+
+  const saveStarters = useCallback(async (next: Array<{ label: string; prompt: string }>) => {
+    if (!window.electronAPI) return false
+    setSaving(true)
+    try {
+      await window.electronAPI.updateWorkspaceSetting(workspaceId, 'chatStarters', next)
+      setStarters(next)
+      onSettingsChange()
+      window.dispatchEvent(new CustomEvent(WORKSPACE_SETTINGS_CHANGED_EVENT, { detail: { workspaceId } }))
+      return true
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : 'Unknown error'
+      toast.error(t("toast.failedToSaveSetting", { setting: 'chat starters' }), { description: msg })
+      return false
+    } finally {
+      setSaving(false)
+    }
+  }, [workspaceId, onSettingsChange, t])
+
+  // No basePath: starters belong to the workspace, so file mentions (relative to a session's folder) are not offered
+  const inlineMention = useInlineMention({
+    inputRef: promptInputRef,
+    skills,
+    sources,
+    onSelect: () => {},
+    workspaceId: workspaceSlug,
+  })
+
+  const handleMentionSelect = useCallback((item: MentionItem) => {
+    const { value, cursorPosition } = inlineMention.handleSelect(item)
+    setPromptDraft(value)
+    // Restore focus and caret once the badge has rendered
+    setTimeout(() => {
+      promptInputRef.current?.focus()
+      promptInputRef.current?.setSelectionRange(cursorPosition, cursorPosition)
+    }, 0)
+  }, [inlineMention])
+
+  const canAdd = labelDraft.trim().length > 0 && promptDraft.trim().length > 0
+
+  const handleAdd = useCallback(async () => {
+    const label = labelDraft.trim()
+    const prompt = promptDraft.trim()
+    if (!label || !prompt) return
+    if (await saveStarters([...starters, { label, prompt }])) {
+      setLabelDraft('')
+      setPromptDraft('')
+    }
+  }, [labelDraft, promptDraft, starters, saveStarters])
+
+  const handlePromptKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (e.nativeEvent.isComposing) return
+    if (inlineMention.isOpen) {
+      // The open menu handles navigation and selection keys itself
+      const hasItems = inlineMention.sections.some(s => s.items.length > 0) || inlineMention.isSearching
+      if (hasItems && (e.key === 'Enter' || e.key === 'Tab' || e.key === 'ArrowUp' || e.key === 'ArrowDown')) return
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        inlineMention.close()
+        return
+      }
+    }
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault()
+      if (canAdd && !saving) void handleAdd()
+    }
+  }, [inlineMention, canAdd, saving, handleAdd])
+
+  const handleDelete = useCallback((index: number) => {
+    void saveStarters(starters.filter((_, i) => i !== index))
+  }, [starters, saveStarters])
+
+  return (
+    <SettingsSection
+      title={t("settings.ai.chatStarters.title", "Chat Starters")}
+      description={t("settings.ai.chatStarters.desc", "Custom starter prompts shown on the new chat screen. Up to 3 are displayed; extras are ignored.")}
+    >
+      <SettingsCard>
+        {starters.length === 0 && (
+          <div className="px-3.5 py-3 text-label text-tertiary">
+            {t("settings.ai.chatStarters.empty", "No custom starters — auto-generated prompts will be shown.")}
+          </div>
+        )}
+        {starters.map((starter, i) => (
+          <SettingsRow
+            key={`${i}:${starter.label}`}
+            label={starter.label}
+            description={<MentionText text={starter.prompt} skills={skills} sources={sources} workspaceId={workspaceSlug} />}
+          >
+            <IconButton
+              size="sm"
+              aria-label={t("common.delete")}
+              icon={<Trash2 className="size-3.5" />}
+              tooltip
+              onClick={() => handleDelete(i)}
+              disabled={saving}
+            />
+          </SettingsRow>
+        ))}
+        <div className="border-t border-hairline px-3.5 py-3 flex flex-col gap-3">
+          <SettingsInput
+            label={t("settings.ai.chatStarters.label", "Label")}
+            placeholder={t("settings.ai.chatStarters.labelPlaceholder", "e.g. Summarize my day")}
+            value={labelDraft}
+            onChange={setLabelDraft}
+          />
+          <div className="space-y-2">
+            <div id={promptLabelId} className={settingsUI.label}>
+              {t("settings.ai.chatStarters.prompt", "Prompt")}
+            </div>
+            <div className="field-surface rounded-md">
+              <RichTextInput
+                ref={promptInputRef}
+                aria-labelledby={promptLabelId}
+                value={promptDraft}
+                onChange={setPromptDraft}
+                onInput={(value, cursor) => inlineMention.handleInputChange(value, cursor)}
+                onKeyDown={handlePromptKeyDown}
+                placeholder={t("settings.ai.chatStarters.promptPlaceholder")}
+                skills={skills}
+                sources={sources}
+                workspaceId={workspaceSlug}
+                className="px-2.5 py-2 text-label"
+              />
+            </div>
+          </div>
+          <div className="flex justify-end">
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => void handleAdd()}
+              disabled={!canAdd || saving}
+            >
+              <Plus className="size-3.5 mr-1" />
+              {t("settings.ai.chatStarters.add", "Add Starter")}
+            </Button>
+          </div>
+        </div>
+        <InlineMentionMenu
+          open={inlineMention.isOpen}
+          onOpenChange={(open) => !open && inlineMention.close()}
+          sections={inlineMention.sections}
+          onSelect={handleMentionSelect}
+          filter={inlineMention.filter}
+          position={inlineMention.position}
+          workspaceId={workspaceId}
+          maxWidth={280}
+          isSearching={inlineMention.isSearching}
+        />
+      </SettingsCard>
+    </SettingsSection>
+  )
+}
+
+// ============================================
 // Main Component
 // ============================================
 
@@ -705,6 +936,12 @@ export default function AiSettingsPage() {
   const [defaultThinking, setDefaultThinking] = useState<ThinkingLevel>(DEFAULT_THINKING_LEVEL)
   const [extendedPromptCache, setExtendedPromptCache] = useState(false)
   const [enable1MContext, setEnable1MContext] = useState(false)
+  // Claude auto-compact window (null = model default) and default subagent model (null = session's)
+  const [autoCompactWindow, setAutoCompactWindowValue] = useState<number | null>(null)
+  const [autoCompactCustom, setAutoCompactCustom] = useState(false)
+  const [autoCompactDraft, setAutoCompactDraft] = useState('')
+  const [autoCompactError, setAutoCompactError] = useState<string | undefined>(undefined)
+  const [subagentModel, setSubagentModelValue] = useState<'haiku' | 'sonnet' | null>(null)
   const [rtkEnabled, setRtkEnabled] = useState(false)
   const [rtkStatus, setRtkStatus] = useState<RtkStatusInfo | null>(null)
   const [rtkUpdateOpen, setRtkUpdateOpen] = useState(false)
@@ -753,6 +990,10 @@ export default function AiSettingsPage() {
       setDefaultThinking(settings.thinking)
       setExtendedPromptCache(settings.extendedCache)
       setEnable1MContext(settings.enable1M)
+      setAutoCompactWindowValue(settings.autoCompactWindow)
+      setAutoCompactCustom(settings.autoCompactWindow !== null && !AUTO_COMPACT_PRESETS.includes(settings.autoCompactWindow))
+      setAutoCompactDraft(settings.autoCompactWindow !== null ? String(settings.autoCompactWindow) : '')
+      setSubagentModelValue(settings.subagentModel)
       setRtkEnabled(settings.rtkEnabled)
       setRtkStatus(settings.rtkStatus)
       setCredentialHealthIssues(settings.health.healthy ? [] : settings.health.issues)
@@ -1105,6 +1346,51 @@ export default function AiSettingsPage() {
     await window.electronAPI?.setEnable1MContext(enabled)
   }, [])
 
+  const saveAutoCompactWindow = useCallback(async (tokens: number | null) => {
+    const previous = autoCompactWindow
+    setAutoCompactWindowValue(tokens)
+    try {
+      await window.electronAPI?.setAutoCompactWindow(tokens)
+    } catch (error) {
+      console.error('Failed to set auto-compact window:', error)
+      setAutoCompactWindowValue(previous)
+    }
+  }, [autoCompactWindow])
+
+  const handleAutoCompactSelect = useCallback((value: string) => {
+    if (value === 'custom') {
+      setAutoCompactCustom(true)
+      setAutoCompactDraft(String(autoCompactWindow ?? 400_000))
+      return
+    }
+    setAutoCompactCustom(false)
+    setAutoCompactError(undefined)
+    void saveAutoCompactWindow(value === 'default' ? null : Number(value))
+  }, [autoCompactWindow, saveAutoCompactWindow])
+
+  const commitAutoCompactDraft = useCallback(() => {
+    const tokens = parseTokenCount(autoCompactDraft)
+    if (tokens === null || tokens < 100_000 || tokens > 1_000_000) {
+      setAutoCompactError(t("settings.ai.compactWindowInvalid"))
+      return
+    }
+    setAutoCompactError(undefined)
+    setAutoCompactDraft(String(tokens))
+    if (tokens !== autoCompactWindow) void saveAutoCompactWindow(tokens)
+  }, [autoCompactDraft, autoCompactWindow, saveAutoCompactWindow, t])
+
+  const handleSubagentModelChange = useCallback(async (value: string) => {
+    const model = value === 'haiku' || value === 'sonnet' ? value : null
+    const previous = subagentModel
+    setSubagentModelValue(model)
+    try {
+      await window.electronAPI?.setSubagentModel(model)
+    } catch (error) {
+      console.error('Failed to set subagent model:', error)
+      setSubagentModelValue(previous)
+    }
+  }, [subagentModel])
+
   const handleRtkToggle = useCallback(async (enabled: boolean) => {
     setRtkEnabled(enabled)
     await window.electronAPI?.setRtkEnabled(enabled)
@@ -1204,6 +1490,7 @@ export default function AiSettingsPage() {
       { feature: 'suggestions', label: t("settings.ai.decisions.featureSuggestions"), description: t("settings.ai.decisions.featureSuggestionsDesc"), tooltip: t("settings.ai.decisions.featureSuggestionsTooltip") },
       { feature: 'adaptiveThinking', label: t("settings.ai.decisions.featureAdaptiveThinking"), description: t("settings.ai.decisions.featureAdaptiveThinkingDesc"), tooltip: t("settings.ai.decisions.featureAdaptiveThinkingTooltip") },
       { feature: 'largeResults', label: t("settings.ai.decisions.featureLargeResults"), description: t("settings.ai.decisions.featureLargeResultsDesc"), tooltip: t("settings.ai.decisions.featureLargeResultsTooltip") },
+      { feature: 'subagentModels', label: t("settings.ai.decisions.featureSubagentModels"), description: t("settings.ai.decisions.featureSubagentModelsDesc"), tooltip: t("settings.ai.decisions.featureSubagentModelsTooltip") },
     ] },
     { id: 'conversation', title: t("settings.ai.decisions.groupConversation"), toggles: [
       { feature: 'midTurnMessages', label: t("settings.ai.decisions.featureMidTurnMessages"), description: t("settings.ai.decisions.featureMidTurnMessagesDesc"), tooltip: t("settings.ai.decisions.featureMidTurnMessagesTooltip") },
@@ -1441,6 +1728,14 @@ export default function AiSettingsPage() {
         </SettingsSection>
       )}
 
+      {/* Chat Starters — per-workspace custom starter prompts */}
+      {workspaces.length > 0 && activeWorkspaceId && (
+        <ChatStartersSection
+          workspaceId={activeWorkspaceId}
+          onSettingsChange={handleWorkspaceSettingsChange}
+        />
+      )}
+
       {/* Connections Management */}
       <SettingsSection title={t("settings.ai.connections")} description={t("settings.ai.connectionsDesc")}>
         <SettingsCard>
@@ -1492,6 +1787,46 @@ export default function AiSettingsPage() {
             description={t("settings.ai.extendedContextDesc")}
             checked={enable1MContext}
             onCheckedChange={handleEnable1MContextChange}
+          />
+          <SettingsMenuSelectRow
+            label={t("settings.ai.compactWindow")}
+            description={t("settings.ai.compactWindowDesc")}
+            value={autoCompactCustom ? 'custom' : autoCompactWindow === null ? 'default' : String(autoCompactWindow)}
+            onValueChange={handleAutoCompactSelect}
+            options={[
+              { value: 'default', label: t("settings.ai.compactWindowDefault"), description: t("settings.ai.compactWindowDefaultDesc") },
+              ...AUTO_COMPACT_PRESETS.map(tokens => ({
+                value: String(tokens),
+                label: `${tokens / 1000}K`,
+                description: t(`settings.ai.compactWindowPreset${tokens / 1000}k`),
+              })),
+              { value: 'custom', label: t("settings.ai.compactWindowCustom"), description: t("settings.ai.compactWindowCustomDesc") },
+            ]}
+            menuWidth={300}
+          />
+          {autoCompactCustom && (
+            <SettingsInput
+              inCard
+              label={t("settings.ai.compactWindowTokens")}
+              value={autoCompactDraft}
+              onChange={(value) => { setAutoCompactDraft(value); setAutoCompactError(undefined) }}
+              onBlur={commitAutoCompactDraft}
+              onKeyDown={(e) => { if (e.key === 'Enter') commitAutoCompactDraft() }}
+              placeholder="350000"
+              error={autoCompactError}
+            />
+          )}
+          <SettingsMenuSelectRow
+            label={t("settings.ai.subagentModel")}
+            description={t("settings.ai.subagentModelDesc")}
+            value={subagentModel ?? 'session'}
+            onValueChange={(value) => { void handleSubagentModelChange(value) }}
+            options={[
+              { value: 'session', label: t("settings.ai.subagentModelSession"), description: t("settings.ai.subagentModelSessionDesc") },
+              { value: 'sonnet', label: 'Sonnet', description: t("settings.ai.subagentModelSonnetDesc") },
+              { value: 'haiku', label: 'Haiku', description: t("settings.ai.subagentModelHaikuDesc") },
+            ]}
+            menuWidth={300}
           />
           <SettingsToggle
             label={t("settings.ai.extendedPromptCache")}

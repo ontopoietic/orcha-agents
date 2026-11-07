@@ -15,6 +15,15 @@ import type { PermissionMode } from '../agent/mode-manager.ts';
 import type { ThinkingLevel } from '../agent/thinking-levels.ts';
 
 /**
+ * A user-defined prompt chip shown on the new-chat screen.
+ * Stored in workspace config.json under `chatStarters`.
+ */
+export interface ChatStarter {
+  label: string;
+  prompt: string;
+}
+
+/**
  * Local MCP server configuration
  * Controls whether stdio-based (local subprocess) MCP servers can be spawned.
  */
@@ -47,6 +56,7 @@ export interface WorkspaceConfig {
     cyclablePermissionModes?: PermissionMode[]; // Which modes can be cycled with SHIFT+TAB (min 2, default: Explore, Ask, Execute)
     workingDirectory?: string;
     thinkingLevel?: ThinkingLevel; // Default thinking level for new sessions (default: 'medium')
+    codingMode?: boolean; // Start new sessions in coding mode (default: off)
     colorTheme?: string; // Color theme override for this workspace (preset ID). Undefined = inherit from app default.
   };
 
@@ -56,6 +66,13 @@ export interface WorkspaceConfig {
    * Resolution order: ENV (CRAFT_LOCAL_MCP_ENABLED) > workspace config > default (true)
    */
   localMcpServers?: LocalMcpConfig;
+
+  /**
+   * Custom prompt chips shown on the new-chat screen for this workspace.
+   * When non-empty, replaces the auto-generated source-based suggestions.
+   * Capped at 3 chips.
+   */
+  chatStarters?: ChatStarter[];
 
   createdAt: number;
   updatedAt: number;

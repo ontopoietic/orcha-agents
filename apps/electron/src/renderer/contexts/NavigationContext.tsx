@@ -76,7 +76,6 @@ import {
   DEFAULT_NAVIGATION_STATE,
 } from '../../shared/types'
 import { sessionMetaMapAtom, updateSessionMetaAtom, type SessionMeta } from '@/atoms/sessions'
-import { findNearestVisibleAncestor } from '@/components/app-shell/session-list-nesting'
 import { sourcesAtom } from '@/atoms/sources'
 import { skillsAtom } from '@/atoms/skills'
 import { guardedModeAvailableAtom } from '@/atoms/permission-modes'
@@ -541,12 +540,11 @@ export function NavigationProvider({
   const filterSessionsByFilter = useCallback(
     (filter: SessionFilter): SessionMeta[] => {
       // First filter out hidden sessions - they should never appear in any view
-      const inWorkspace = sessionMetas.filter(
-        s => !workspaceId || s.workspaceId === workspaceId
+      const visibleSessions = sessionMetas.filter(
+        s => !s.hidden && (!workspaceId || s.workspaceId === workspaceId)
       )
-      const visibleSessions = inWorkspace.filter(s => !s.hidden)
 
-      const matched = visibleSessions.filter((session) => {
+      return visibleSessions.filter((session) => {
         switch (filter.kind) {
           case 'allSessions':
             return session.isArchived !== true
@@ -569,19 +567,8 @@ export function NavigationProvider({
             return false
         }
       })
-
-      // ORCHA §bg-child-sessions (p9) / §session-nesting: sessions that render
-      // nested in the list (any ancestor — resolved through the full meta map,
-      // skipping archived/hidden intermediates — is itself in this view) must
-      // never be auto-selected as a top-level item. Mirrors the list's
-      // nearest-visible-ancestor nesting exactly.
-      const matchedIds = new Set(matched.map(s => s.id))
-      const lookup = (id: string) => sessionMetaMap.get(id)
-      return matched.filter(s =>
-        !s.parentSessionId || !findNearestVisibleAncestor(s, id => matchedIds.has(id), lookup)
-      )
     },
-    [sessionMetas, sessionMetaMap, workspaceId, labelConfigs]
+    [sessionMetas, workspaceId, labelConfigs]
   )
 
   const getFirstSessionId = useCallback(

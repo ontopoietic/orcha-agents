@@ -80,7 +80,7 @@ import { SessionFilterMenu } from "./SessionFilterMenu"
 import { ShellResizeHandle } from "./ShellResizeHandle"
 import { useSession } from "@/hooks/useSession"
 import { ensureSessionMessagesLoadedAtom } from "@/atoms/sessions"
-import { AppShellProvider, type AppShellContextType } from "@/context/AppShellContext"
+import { AppShellProvider, WORKSPACE_SETTINGS_CHANGED_EVENT, type AppShellContextType } from "@/context/AppShellContext"
 import { EscapeInterruptProvider, useEscapeInterrupt } from "@/context/EscapeInterruptContext"
 import { useTheme } from "@/context/ThemeContext"
 import { getResizeGradientStyle } from "@/hooks/useResizeGradient"
@@ -611,6 +611,7 @@ function AppShellContent({
   }, [])
   // Sources state (workspace-scoped)
   const [sources, setSources] = React.useState<LoadedSource[]>([])
+  const [chatStarters, setChatStarters] = React.useState<Array<{ label: string; prompt: string }> | undefined>(undefined)
   // Sync sources to atom for NavigationContext auto-selection
   const setSourcesAtom = useSetAtom(sourcesAtom)
   React.useEffect(() => {
@@ -661,8 +662,9 @@ function AppShellContent({
   // Enabled permission modes for Shift+Tab cycling (min 2 modes)
   const [enabledModes, setEnabledModes] = React.useState<PermissionMode[]>(['safe', 'ask', 'allow-all'])
 
-  // Load workspace settings (for localMcpEnabled and cyclablePermissionModes) on workspace change
-  React.useEffect(() => {
+  // Load workspace settings (localMcpEnabled, cyclablePermissionModes, chatStarters) on workspace
+  // change, and again when a settings page reports a change to the active workspace
+  const loadWorkspaceSettings = React.useCallback(() => {
     if (!activeWorkspaceId) return
     window.electronAPI.getWorkspaceSettings(activeWorkspaceId).then((settings) => {
       if (settings) {
@@ -671,11 +673,25 @@ function AppShellContent({
         if (settings.cyclablePermissionModes && settings.cyclablePermissionModes.length >= 2) {
           setEnabledModes(settings.cyclablePermissionModes)
         }
+        setChatStarters(settings.chatStarters && settings.chatStarters.length > 0 ? settings.chatStarters : undefined)
       }
     }).catch((err) => {
       console.error('[Chat] Failed to load workspace settings:', err)
     })
   }, [activeWorkspaceId])
+
+  React.useEffect(() => {
+    loadWorkspaceSettings()
+  }, [loadWorkspaceSettings])
+
+  React.useEffect(() => {
+    const handleChanged = (event: Event) => {
+      const changedId = (event as CustomEvent<{ workspaceId?: string }>).detail?.workspaceId
+      if (!changedId || changedId === activeWorkspaceId) loadWorkspaceSettings()
+    }
+    window.addEventListener(WORKSPACE_SETTINGS_CHANGED_EVENT, handleChanged)
+    return () => window.removeEventListener(WORKSPACE_SETTINGS_CHANGED_EVENT, handleChanged)
+  }, [activeWorkspaceId, loadWorkspaceSettings])
 
   // Guarded permission mode is offered while the decision layer and its `guardedMode` feature
   // are on, on the server this workspace talks to. Refreshed on workspace switch and when the AI
@@ -1438,6 +1454,7 @@ function AppShellContent({
     onDeleteSession: handleDeleteSession,
     enabledSources: sources,
     skills,
+    chatStarters,
     activeSessionWorkingDirectory,
     labels: displayLabelConfigs,
     onSessionLabelsChange: handleSessionLabelsChange,
@@ -1459,7 +1476,7 @@ function AppShellContent({
     automationTestResults,
     getAutomationHistory,
     onReplayAutomation: handleReplayAutomation,
-  }), [contextValue, handleDeleteSession, sources, skills, activeSessionWorkingDirectory, displayLabelConfigs, handleSessionLabelsChange, enabledModes, effectiveSessionStatuses, handleSessionSourcesChange, handleJumpToTaskSessions, isAutoCompact, searchActive, searchQuery, handleChatMatchInfoChange, handleTestAutomation, handleToggleAutomation, handleDuplicateAutomation, handleDeleteAutomation, automationTestResults, getAutomationHistory, handleReplayAutomation])
+  }), [contextValue, handleDeleteSession, sources, skills, chatStarters, activeSessionWorkingDirectory, displayLabelConfigs, handleSessionLabelsChange, enabledModes, effectiveSessionStatuses, handleSessionSourcesChange, handleJumpToTaskSessions, isAutoCompact, searchActive, searchQuery, handleChatMatchInfoChange, handleTestAutomation, handleToggleAutomation, handleDuplicateAutomation, handleDeleteAutomation, automationTestResults, getAutomationHistory, handleReplayAutomation])
 
   // Persist expanded folders to localStorage (workspace-scoped)
   React.useEffect(() => {

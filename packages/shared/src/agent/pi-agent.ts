@@ -82,7 +82,7 @@ import { getPermissionModeDiagnostics } from './mode-manager.ts';
 // call_llm pre-execution pipeline
 
 // McpClientPool for source tool proxying (centralized pool from main process)
-import type { McpClientPool } from '../mcp/mcp-pool.ts';
+import type { McpClientPool, ProxyToolDef } from '../mcp/mcp-pool.ts';
 
 // Path utilities
 import { join } from 'path';
@@ -99,7 +99,7 @@ import { runPreToolUseChecks, type PreToolUseCheckResult, type PreToolUseInput }
 import type { PermissionRemember } from './core/permission-remember.ts';
 import { applyGuardedModeCheck, needsGuardedModeCheck } from './core/guarded-mode.ts';
 import { getRtkPath } from './core/rtk-detector.ts';
-import { getRtkEnabled, getRtkExcludeCommands, getBrowserToolEnabled } from '../config/storage.ts';
+import { getRtkEnabled, getRtkExcludeCommands } from '../config/storage.ts';
 import type { RtkContext } from './core/rtk-rewrite.ts';
 
 // Workspace slug extraction for skill qualification
@@ -181,6 +181,9 @@ export class PiAgent extends BaseAgent {
 
   // Pi session ID (managed by subprocess, reported back)
   private piSessionId: string | null = null;
+
+  // Proxy tool set last sent to the current subprocess (JSON; null: none yet), see syncProxyTools
+  private sentProxyTools: string | null = null;
 
   // Callback server port (managed by subprocess)
   private callbackPort: number = 0;
@@ -590,6 +593,7 @@ export class PiAgent extends BaseAgent {
       baseUrl: runtime.baseUrl,
       customEndpoint: runtime.customEndpoint,
       customModels: runtime.customModels,
+      autoCompactWindow: this.config.autoCompactWindow,
       // Branch params for Pi SDK session fork
       branchFromSdkSessionId: this.config.session?.branchFromSdkSessionId,
       branchFromSessionPath: this.config.session?.branchFromSessionPath,
@@ -609,19 +613,24 @@ export class PiAgent extends BaseAgent {
       this.debug(`Failed to configure PI auto-compaction (continuing): ${error instanceof Error ? error.message : String(error)}`);
     }
 
-    // Register session-scoped tools as proxy tools in the subprocess.
-    // These tools (SubmitPlan, config_validate, source auth, call_llm, etc.)
-    // are executed in the main process when the LLM calls them.
     this.assertBackendSessionToolParity();
-    let sessionToolDefs = getSessionToolProxyDefs();
+    this.sentProxyTools = null;
+    this.syncProxyTools();
+  }
 
-    // Mirror Claude's gate: hide `browser_tool` when the user has disabled
-    // the built-in browser tool. Without this filter, Pi would still advertise
-    // `mcp__session__browser_tool` while Claude doesn't — sessions would behave
-    // inconsistently depending on backend.
-    if (!getBrowserToolEnabled()) {
-      sessionToolDefs = sessionToolDefs.filter(d => d.name !== 'mcp__session__browser_tool');
-    }
+  /**
+   * The tools the subprocess serves through the main process: the session tools (SubmitPlan,
+   * source auth, call_llm, etc., executed here when the model calls them) and the sources' tools
+   * from the pool.
+   */
+  private buildProxyToolDefs(): ProxyToolDef[] {
+    // Same visibility filters as Claude (session-scoped-tools.ts): feature flags, the
+    // "Built-in browser" setting and the agent profile (coding mode).
+    const sessionToolDefs = getSessionToolProxyDefs({
+      profile: this._agentProfile,
+      hasEnabledSources: this.sourceManager.getIntendedSlugs().size > 0,
+      hasProject: !!this.config.session?.projectId,
+    });
 
     // Patch call_llm description with provider-specific model hint
     if (this.config.miniModel) {
@@ -631,29 +640,24 @@ export class PiAgent extends BaseAgent {
       }
     }
 
-    this.send({
-      type: 'register_tools',
-      tools: sessionToolDefs,
-    });
-    this.debug(`Registered ${sessionToolDefs.length} session tools with subprocess`);
-
-    // If pool has source tools, register them with the subprocess.
-    this.registerPoolToolsWithSubprocess();
+    return [...sessionToolDefs, ...(this.mcpPool?.getProxyToolDefs() ?? [])];
   }
 
   /**
-   * Send pool's proxy tool defs to subprocess for model visibility.
+   * Send the subprocess its proxy tools when they changed since the last send. It replaces its set
+   * with them and builds its Pi session again at the next prompt, so a tool that drops out (a
+   * source turned off, the Coding profile's source tools once no source is left) is gone from then
+   * on: before, the subprocess merged them into what it had, and a call to a turned-off source's
+   * tool turned the source back on.
    */
-  private registerPoolToolsWithSubprocess(): void {
-    if (!this.mcpPool) return;
-    const proxyDefs = this.mcpPool.getProxyToolDefs();
-    if (proxyDefs.length > 0) {
-      this.send({
-        type: 'register_tools',
-        tools: proxyDefs,
-      });
-      this.debug(`Registered ${proxyDefs.length} MCP source tools from pool with subprocess`);
-    }
+  private syncProxyTools(): void {
+    if (!this.subprocess?.stdin?.writable) return;
+    const tools = this.buildProxyToolDefs();
+    const json = JSON.stringify(tools);
+    if (json === this.sentProxyTools) return;
+    this.send({ type: 'register_tools', tools });
+    this.sentProxyTools = json;
+    this.debug(`Sent ${tools.length} proxy tools to the subprocess`);
   }
 
   /**
@@ -1213,6 +1217,13 @@ export class PiAgent extends BaseAgent {
         this.resetPrerequisiteState();
       }
 
+      // Coding mode post-tool hook: a Bash `gh pr create` pins the PR it opened (fire-and-forget;
+      // Pi has no hook output to tell the model, the carousel shows it)
+      if (agentEvent.type === 'tool_result' && !agentEvent.isError && agentEvent.toolName === 'Bash') {
+        const command = (agentEvent.input as { command?: unknown } | undefined)?.command;
+        void this.pinCreatedPr(command, typeof agentEvent.result === 'string' ? agentEvent.result : '');
+      }
+
       // Fire PostToolUse / PostToolUseFailure hook events (fire-and-forget)
       if (agentEvent.type === 'tool_result') {
         const hookEvent = agentEvent.isError ? 'PostToolUseFailure' : 'PostToolUse';
@@ -1269,7 +1280,7 @@ export class PiAgent extends BaseAgent {
       this.debug(`Captured pre-tool metadata for ${toolName} (${toolCallId}, sessionId=${debugSessionId}): intent=${!!preIntent}, displayName=${!!preDisplayName}`);
     }
 
-    // Fire PreToolUse automation event — await so automations run before tool executes
+    // Report PreToolUse to the AutomationSystem (matched only — agent events run no actions, #1117)
     await this.emitAutomationEvent('PreToolUse', {
       hook_event_name: 'PreToolUse',
       tool_name: toolName,
@@ -2153,10 +2164,11 @@ export class PiAgent extends BaseAgent {
         'Orcha Agents Backend', // backendName
         this.pinnedIncludeCoAuthoredBy ?? undefined,
         this.pinnedProjectContext ?? undefined,
+        this._agentProfile,
       );
 
       // Build context from sources
-      const sourceContext = this.sourceManager.formatSourceState();
+      const sourceContext = this.sourceManager.formatSourceState({ activeOnly: this._agentProfile === 'coding' });
 
       const promptModeDiagnostics = getPermissionModeDiagnostics(this._sessionId)
       this.debug(
@@ -2223,6 +2235,10 @@ export class PiAgent extends BaseAgent {
         turnThinkingOverride = options.thinkingOverride;
         this.send({ type: 'set_thinking_level', level: turnThinkingOverride });
       }
+
+      // The session tools follow the session's state (a project assigned, the Coding profile's
+      // source tools), which can change without a source change
+      this.syncProxyTools();
 
       // Send prompt to subprocess
       const turnId = `turn-${++this.rpcIdCounter}`;
@@ -2400,8 +2416,7 @@ export class PiAgent extends BaseAgent {
     //   2. McpClientPool sync (connecting/disconnecting MCP + API sources)
     await super.setSourceServers(mcpServers, apiServers, intendedSlugs);
 
-    // Register pool's proxy tool defs with subprocess so the model can call them.
-    this.registerPoolToolsWithSubprocess();
+    this.syncProxyTools();
   }
 
   // ============================================================

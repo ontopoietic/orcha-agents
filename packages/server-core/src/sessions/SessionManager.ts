@@ -7,7 +7,7 @@ import { createScopedLogger, CONSOLE_LOGGER, type PlatformServices, type Logger 
 import { basename, dirname, join } from 'path'
 import { existsSync } from 'fs'
 import { readFile, writeFile, mkdir } from 'fs/promises'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { type AgentEvent, type ChatOptions, getPermissionMode, setPermissionMode, setGuardedModeActiveResolver, clampPermissionMode, planExecutionMode, parsePermissionMode, hydratePreviousPermissionMode, getPermissionModeDiagnostics, type PermissionMode, unregisterSessionScopedToolCallbacks, mergeSessionScopedToolCallbacks, AbortReason, type AuthRequest, type AuthResult, type CredentialAuthRequest, type BrowserPaneFns, generateConversationSummary, resolveKeepBackgroundTasksAlive } from '@craft-agent/shared/agent'
 import {
   resolveSessionConnection,
@@ -57,7 +57,7 @@ import type { ActiveSessionInfo, ContextUsageSnapshot, PermissionRisk, SessionPr
 import { loadWorkspaceConfig } from '@craft-agent/shared/workspaces'
 import {
   // Session persistence functions
-  listSessions as listStoredSessions,
+  listSessionsAsync as listStoredSessionsAsync,
   loadSession as loadStoredSession,
   saveSession as saveStoredSession,
   createSession as createStoredSession,
@@ -73,6 +73,7 @@ import {
   getSessionPath as getSessionStoragePath,
   ensureSessionDir,
   getSessionFilePath,
+  readSessionHeader,
   generateSessionId,
   sessionPersistenceQueue,
   getHeaderMetadataSignature,
@@ -91,9 +92,13 @@ import {
   validateAnchorsLenient,
 } from '@craft-agent/shared/sessions'
 import { serializeHeaderCredential, loadWorkspaceSources, loadAllSources, getSourcesBySlugs, isSourceUsable, type LoadedSource, type McpServerConfig, getSourcesNeedingAuth, getSourceCredentialManager, TokenRefreshManager } from '@craft-agent/shared/sources'
-import { listTaskSlugs, parseTaskSpec, uniqueTaskSlug } from '@craft-agent/shared/tasks'
+import { buildTaskSessionContext, listTaskSlugs, loadTaskSpec, parseTaskSpec, taskSubtasks, taskYamlPath, uniqueTaskSlug, type TaskSpec } from '@craft-agent/shared/tasks'
+import type { SessionTaskInfo } from '@craft-agent/session-tools-core'
 import { createTaskFromSpec, resolveCreateTaskProjectId } from '../tasks'
 import { buildPagesToolCallbacks } from '../pages/tool-callbacks'
+import { buildPrWatchToolCallbacks } from '../pr-watch/tool-callbacks'
+import { prEntryId } from '@craft-agent/shared/pr-watch'
+import { getPrAutoFixMonitor, getPrWatchRegistry } from '../handlers/rpc/pr-watch'
 import { buildDecisionToolCallbacks } from '../decisions/tool-callbacks'
 import { buildServersFromSources as buildServersFromSourcesShared } from '../sources/build-servers'
 import { buildMcpSourceToolCallbacks } from '../sources/mcp-source-tool-callbacks'
@@ -106,9 +111,9 @@ import { redactBrowserPasswordFills } from '@craft-agent/shared/agent'
 import { restoreFiles } from '@craft-agent/shared/utils/bundle-files'
 import { getCredentialManager } from '@craft-agent/shared/credentials'
 import { CraftMcpClient, McpClientPool, McpPoolServer } from '@craft-agent/shared/mcp'
-import { type Session, type SessionEvent, type FileAttachment, type SendMessageOptions, type UnreadSummary, type RemoteSessionTransferPayload, type ImportRemoteSessionTransferResult, type BackgroundTaskOutput, type StopBackgroundTaskResult, RPC_CHANNELS, generateMessageId } from '@craft-agent/shared/protocol'
+import { type Session, type SessionEvent, type FileAttachment, type SendMessageOptions, type UnreadSummary, type RemoteSessionTransferPayload, type ImportRemoteSessionTransferResult, type BackgroundTaskOutput, type StopBackgroundTaskResult, type BoundPr, type PrMonitorState, RPC_CHANNELS, generateMessageId } from '@craft-agent/shared/protocol'
 import { launchOutputFile, readBackgroundTaskOutput } from './background-task-output'
-import { messageToStored, storedToMessage, type Message, type StoredAttachment, type ToolDisplayMeta, type TokenUsage } from '@craft-agent/core/types'
+import { messageToStored, storedToMessage, withoutRetractedMessages, type Message, type StoredAttachment, type ToolDisplayMeta, type TokenUsage } from '@craft-agent/core/types'
 import { formatPathsToRelative, formatToolInputPaths, perf, encodeIconToDataUrlAsync, getEmojiIcon, resetSummarizationClient, resolveToolIcon, readFileAttachment, selectSpreadMessages, normalizePath } from '@craft-agent/shared/utils'
 import { loadAllSkills, loadSkillBySlug, invalidateSkillsCache, type LoadedSkill } from '@craft-agent/shared/skills'
 import { invalidateContextFileCache } from '@craft-agent/shared/prompts/system'
@@ -127,6 +132,7 @@ import { isDecisionFeatureActive, type DecisionLayerFeature, type DecisionResult
 import { setLargeResultFilter } from '@craft-agent/shared/utils'
 import { buildLargeResultFilter, finishLargeResultExcerpts, noteLargeResultFileUse } from '../decisions/large-results'
 import { buildGuardedModeCheck } from '../decisions/guarded-mode'
+import { buildSubagentModelPicker } from '../decisions/subagent-models'
 import { assessPermissionRisks } from '../decisions/permission-risks'
 import { checkAutomationCondition } from '../decisions/automation-condition'
 import { listLabels, loadLabelConfig } from '@craft-agent/shared/labels/storage'
@@ -135,11 +141,13 @@ import { ensureLabelsExist, ensureTaskItemLabel } from '@craft-agent/shared/labe
 import { loadStatusConfig } from '@craft-agent/shared/statuses/storage'
 import { AutomationSystem, createPromptHistoryEntry, appendAutomationHistoryEntry, type AutomationSystemMetadataSnapshot, type PendingPrompt } from '@craft-agent/shared/automations'
 import { buildBackendRuntimeSignature, buildRestartRequiredSignature, filterAttachmentsForModelInput } from './runtime-config'
-import { buildSpawnedChildSessionOptions, isNestedSpawn } from './spawn-child-session-options'
+import { orchaSpawnOverrides, isNestedSpawn } from './spawn-child-session-options'
 import { buildChildSessionBackgroundTaskEntry } from './child-session-background-task-entry'
 import { buildChildSessionBackgroundedEvent, buildChildSessionCompletedEvent } from './child-session-backgrounded-event'
 import { validateArchiveTarget } from './archive-guards'
 import { planArchiveCascade, planUnarchiveCascade, type CascadeNode } from './archive-cascade'
+import { spawnedSessionOptions } from './spawn-options'
+import { addTurnUsage, branchStartTotals, type BranchParent } from './turn-usage'
 
 // Import from server-core domain utilities
 import { sanitizeForTitle, shouldActivateBrowserOverlay, normalizeBrowserToolName, rollbackFailedBranchCreation, releaseBrowserOwnershipOnForcedStop } from '@craft-agent/server-core/domain'
@@ -793,6 +801,8 @@ interface ManagedSession {
     contextWindow?: number
     /** Current occupancy, separate from cumulative/billable counters. */
     contextUsage?: ContextUsageSnapshot
+    /** Backend running totals already counted into costUsd/outputTokens (see `addTurnUsage`). */
+    lastRunningTotals?: { costUsd: number; outputTokens: number }
   }
   // Session status (user-controlled) - determines open vs closed
   // Dynamic status ID referencing workspace status config
@@ -827,6 +837,8 @@ interface ManagedSession {
   taskNodeCount?: number
   // Tasks Conductor: hidden generate-time orchestrator awaiting validated adoption (off the board)
   taskDraft?: boolean
+  // Tasks Conductor: fingerprint of the task context last sent to this task session's agent
+  taskContextFingerprint?: string
   // Working directory for this session (used by agent for bash commands)
   workingDirectory?: string
   // SDK cwd for session storage - set once at creation, never changes.
@@ -844,6 +856,12 @@ interface ManagedSession {
   connectionLocked?: boolean
   // Thinking level for this session ('off', 'think', 'max')
   thinkingLevel?: ThinkingLevel
+  // Coding mode: lean coding prompt + session-tool profile (fixed once the session has messages)
+  codingMode?: boolean
+  // Coding mode: PRs pinned to this session (chat-header PR carousel; see pr_bind / pr_unbind)
+  boundPrs?: BoundPr[]
+  // Coding mode: per-PR monitor state (auto-fix toggle + what it last acted on), keyed by PR id
+  prMonitors?: Record<string, PrMonitorState>
   // System prompt preset for mini agents ('default' | 'mini')
   systemPromptPreset?: 'default' | 'mini' | string
   // Role/type of the last message (for badge display without loading messages)
@@ -959,6 +977,9 @@ interface ManagedSession {
   transferredSessionSummary?: string
   // Whether the transferred-session summary has already been injected.
   transferredSessionSummaryApplied?: boolean
+  // Continued from another session: its summary is still being generated (continueSessionInNewSession).
+  // The first turn waits for it, at most HANDOFF_SUMMARY_WAIT_MS. Not persisted.
+  pendingHandoffSummary?: Promise<void>
   // Token refresh manager for OAuth token refresh with rate limiting
   tokenRefreshManager: TokenRefreshManager
   // Metadata for sessions created by automations
@@ -1016,6 +1037,8 @@ interface ManagedSession {
   turnFromUser?: boolean
   /** Suggestion hint sent with the current request; an auth retry sends it again. */
   turnSuggestionHint?: string | null
+  /** Task context sent with the current request; an auth retry sends it again. */
+  turnTaskContext?: string | null
   /** Adaptive thinking's answer for the last user turn, for the next turn's `corrected`/`accepted` follow-up. */
   thinkingTrace?: DecisionResult
   /** Suggestions answer for the current request and the candidates it used, for the follow-up line. */
@@ -1060,7 +1083,7 @@ export function claimAutoRetryPending(
  * fallback (bugfix/session-continuation). The per-turn capture
  * (`getCurrentTurnUserMessage`) can come back empty — an empty/attachment-only turn,
  * or a capture that raced turn teardown — which used to strand the session: the
- * activation force-aborted the turn but nothing was re-sent. Falling back to the last
+ * activation ended the turn but nothing was re-sent. Falling back to the last
  * persisted user message keeps the turn continuing, while preserving the "no bogus
  * empty resend" intent (returns '' only when there is genuinely nothing to resend).
  */
@@ -1098,6 +1121,17 @@ export const MAX_AUTOMATION_CHAIN_DEPTH = 3
 export function isAttendedSession(managed: ManagedSession): boolean {
   return !(managed.triggeredBy || managed.taskRunId || managed.taskSlug || managed.hidden || managed.unattended
     || managed.systemPromptPreset === 'mini')
+}
+
+/**
+ * Whether the session's conversation has started. The agent's system prompt is fixed from then on
+ * (Claude pins it per SDK session), so per-session settings that shape it,
+ * like coding mode, can only change before this.
+ */
+export function hasConversationStarted(managed: Pick<ManagedSession, 'sdkSessionId' | 'messageCount' | 'messages'>): boolean {
+  return !!managed.sdkSessionId
+    || (managed.messageCount ?? 0) > 0
+    || managed.messages.some(m => m.role === 'user')
 }
 
 /**
@@ -1182,6 +1216,17 @@ const DEFAULT_TOKEN_USAGE = {
   contextTokens: 0, costUsd: 0,
 }
 
+/** Two bound PRs are the same pin when their host/owner/repo/number match (case-insensitive). */
+function sameBoundPr(
+  a: { host: string; owner: string; repo: string; number: number },
+  b: { host: string; owner: string; repo: string; number: number },
+): boolean {
+  return a.number === b.number
+    && a.host.toLowerCase() === b.host.toLowerCase()
+    && a.owner.toLowerCase() === b.owner.toLowerCase()
+    && a.repo.toLowerCase() === b.repo.toLowerCase()
+}
+
 /**
  * Convert a ManagedSession to a renderer-side Session object.
  * Uses pickSessionFields() for persistent fields so new fields propagate automatically.
@@ -1202,12 +1247,20 @@ function managedToSession(m: ManagedSession, overrides?: Partial<Session>): Sess
     isProcessing: m.isProcessing,
     sessionFolderPath: getSessionStoragePath(m.workspace.rootPath, m.id),
     supportsBranching: resolveSupportsBranching(m),
+    // The source's session folder is named by its id
+    branchFromSessionId: m.branchFromSessionPath ? basename(m.branchFromSessionPath) : undefined,
     ...overrides,
   } as Session
 }
 
 // Performance: Batch IPC delta events to reduce renderer load
 const DELTA_BATCH_INTERVAL_MS = 50  // Flush batched deltas every 50ms
+
+/**
+ * How long the first turn of a session continued from another one (Coding mode switch) waits for
+ * the earlier conversation's summary, which is generated in the background (a few seconds).
+ */
+const HANDOFF_SUMMARY_WAIT_MS = 30_000
 
 interface PendingDelta {
   delta: string
@@ -1315,6 +1368,8 @@ export class SessionManager implements ISessionManager {
   private sessions: Map<string, ManagedSession> = new Map()
   /** Fork (connection failover): connection slug → epoch ms until which it counts as limited. */
   private connectionLimitedUntil: Map<string, number> = new Map()
+  /** Test seam for HANDOFF_SUMMARY_WAIT_MS. */
+  private handoffSummaryWaitMs = HANDOFF_SUMMARY_WAIT_MS
   // Delta batching for performance - reduces IPC events from 50+/sec to ~20/sec
   private pendingDeltas: Map<string, PendingDelta> = new Map()
   private deltaFlushTimers: Map<string, NodeJS.Timeout> = new Map()
@@ -1346,8 +1401,13 @@ export class SessionManager implements ISessionManager {
    * marked as unread when assistant completes - if user is viewing it, don't mark unread.
    */
   private activeViewingSession: Map<string, string> = new Map()
-  /** Coordinates startup initialization waiters from IPC handlers. */
+  /** Coordinates fast-path startup waiters (auth, config watchers). Resolves
+   *  before sessions are loaded so the first window can open. */
   private initGate = new InitGate()
+  /** Coordinates waiters for the background session-disk load, which runs off
+   *  the critical path (so cloud-evicted files can't block the first window —
+   *  craft-agents#1113). List endpoints await this via waitForSessionsLoaded. */
+  private sessionsGate = new InitGate()
   /**
    * WS2 keep-alive flag (default ON, opt-out via `CRAFT_KEEP_BG_AGENTS_ALIVE=0`).
    * When true, a persistent streaming query keeps the subprocess alive across
@@ -1833,6 +1893,64 @@ export class SessionManager implements ISessionManager {
   }
 
   /**
+   * The task context a task's own session sends with this turn: its spec from task.yaml, once and
+   * again whenever the spec changes (`taskContextFingerprint`). The session has no messages until a
+   * run's verification, so without it "do the task" reached an agent that had never seen the goal.
+   * Subtask sessions get their prompt as their first message instead. An auth retry re-sends what
+   * the rejected attempt carried. `null` = nothing to send.
+   */
+  private takeTaskSessionContext(managed: ManagedSession, authRetry?: boolean): string | null {
+    if (authRetry) return managed.turnTaskContext ?? null
+    managed.turnTaskContext = null
+    if (!managed.taskSlug || managed.parentSessionId) return null
+    const workspaceRoot = managed.workspace.rootPath
+    let spec: TaskSpec | undefined
+    try {
+      spec = loadTaskSpec(workspaceRoot, managed.taskSlug)?.spec
+    } catch (e) {
+      sessionLog.warn(`[task-context] Could not read task "${managed.taskSlug}" for session ${managed.id}:`, e)
+    }
+    if (!spec) return null
+    const context = buildTaskSessionContext(spec, taskYamlPath(workspaceRoot, managed.taskSlug))
+    const fingerprint = createHash('sha256').update(context).digest('hex').slice(0, 16)
+    if (managed.taskContextFingerprint === fingerprint) return null
+    managed.taskContextFingerprint = fingerprint
+    managed.turnTaskContext = context
+    this.persistSession(managed)
+    sessionLog.info(`[task-context] Sending task "${managed.taskSlug}" with this turn of session ${managed.id}`)
+    return context
+  }
+
+  /**
+   * What `get_session_info` reports about a session's task: the spec's path, the subtask (DAG
+   * node) the session runs, and the task's content so another session can work on a backlog item.
+   */
+  private taskInfoForSession(session: ManagedSession): SessionTaskInfo | undefined {
+    const slug = session.taskSlug
+    if (!slug) return undefined
+    const workspaceRoot = session.workspace.rootPath
+    let spec: TaskSpec | undefined
+    try {
+      spec = loadTaskSpec(workspaceRoot, slug)?.spec
+    } catch (e) {
+      sessionLog.warn(`[task-context] Could not read task "${slug}" for session ${session.id}:`, e)
+    }
+    return {
+      slug,
+      specPath: taskYamlPath(workspaceRoot, slug),
+      ...(session.parentSessionId && session.taskNodeId ? { nodeId: session.taskNodeId } : {}),
+      ...(spec
+        ? {
+            title: spec.title,
+            goal: spec.goal,
+            ...(spec.acceptance_criteria ? { acceptanceCriteria: spec.acceptance_criteria } : {}),
+            subtasks: taskSubtasks(spec),
+          }
+        : {}),
+    }
+  }
+
+  /**
    * Centralized setter for session processing state.
    * Automatically notifies the power manager on transitions (true→false, false→true)
    * so callers don't need to remember to call onSessionStarted/onSessionStopped.
@@ -1847,10 +1965,20 @@ export class SessionManager implements ISessionManager {
     }
   }
 
-  /** Wait until initialize() has completed (sessions loaded from disk).
-   *  Resolves immediately if already initialized. */
+  /** Wait until the fast path of initialize() has completed (migrations, auth,
+   *  config watchers). Sessions may still be loading from disk in the
+   *  background — use waitForSessionsLoaded() when you need the session map.
+   *  Resolves immediately once settled. */
   waitForInit(): Promise<void> {
     return this.initGate.wait()
+  }
+
+  /** Wait until the background disk load has populated the in-memory session
+   *  map (or failed). List endpoints (getSessions, unread, badge) await this so
+   *  they never return an empty list mid-startup. Resolves immediately once
+   *  settled; rejects only if the fast-path init itself failed. */
+  waitForSessionsLoaded(): Promise<void> {
+    return this.sessionsGate.wait()
   }
 
   /**
@@ -2189,10 +2317,13 @@ export class SessionManager implements ISessionManager {
         const automationSystem = this.automationSystems.get(workspaceRootPath)
         if (automationSystem) {
           const result = automationSystem.reloadConfig()
-          if (result.errors.length === 0) {
-            sessionLog.info(`Reloaded ${result.automationCount} automations for workspace ${workspaceId}`)
-          } else {
+          if (!result.success) {
             sessionLog.error(`Failed to reload automations for workspace ${workspaceId}:`, result.errors)
+          } else if (result.errors.length > 0) {
+            // Loaded; only these entries were skipped (invalid) or will never fire.
+            sessionLog.warn(`Reloaded ${result.automationCount} automations for workspace ${workspaceId}; some will not run:`, result.errors)
+          } else {
+            sessionLog.info(`Reloaded ${result.automationCount} automations for workspace ${workspaceId}`)
           }
         }
         // Notify renderer to re-read automations.json
@@ -2416,7 +2547,7 @@ export class SessionManager implements ISessionManager {
    * Bun's automatic .env loading is disabled in the subprocess (--env-file=/dev/null)
    * to prevent a user's project .env from injecting ANTHROPIC_API_KEY and overriding
    * OAuth auth — Claude Code prioritizes API key over OAuth token when both are set.
-   * See: https://github.com/lukilabs/craft-agents-oss/issues/39
+   * See: https://github.com/craft-ai-agents/craft-agents-oss/issues/39
    */
   /**
    * Reinitialize authentication environment variables.
@@ -2498,91 +2629,114 @@ export class SessionManager implements ISessionManager {
         this.setupConfigWatcher(workspace.rootPath, workspace.id)
       }
 
-      // Load existing sessions from disk
-      this.loadSessionsFromDisk()
-
-      // Signal that initialization is complete — IPC handlers waiting on initGate will proceed
+      // Signal fast-path readiness so the first window can open immediately.
+      // Session discovery (disk I/O that can block on cloud-evicted files) runs
+      // in the background behind sessionsGate — see loadSessionsFromDiskAsync.
       this.initGate.markReady()
+
+      // Load existing sessions from disk off the critical path. Fire-and-forget:
+      // it settles sessionsGate (ready) on its own; list handlers await that.
+      void this.loadSessionsFromDiskAsync()
     } catch (error) {
       this.initGate.markFailed(error)
+      // The background load never starts on a fast-path failure, so settle its
+      // gate here too — otherwise list handlers would hang forever.
+      this.sessionsGate.markFailed(error)
       throw error
     }
   }
 
-  // Load all existing sessions from disk into memory (metadata only - messages are lazy-loaded)
-  private loadSessionsFromDisk(): void {
+  /**
+   * Load all existing sessions from disk into memory (metadata only — messages
+   * are lazy-loaded). Runs off the critical path so a cloud-evicted session file
+   * can't block the first window (craft-agents#1113): listStoredSessionsAsync
+   * reads headers on the libuv threadpool and skips offloaded/unreadable files.
+   * Settles sessionsGate in `finally` so list handlers (getSessions, unread,
+   * badge) resolve against a populated map even if a workspace fails.
+   */
+  private async loadSessionsFromDiskAsync(): Promise<void> {
     try {
       const workspaces = getWorkspaces()
       let totalSessions = 0
-
-      // Iterate over each workspace and load its sessions
       for (const workspace of workspaces) {
-        const workspaceRootPath = workspace.rootPath
-        const sessionMetadata = listStoredSessions(workspaceRootPath)
-        // Load workspace config once per workspace for default working directory
-        const wsConfig = loadWorkspaceConfig(workspaceRootPath)
-        const wsDefaultWorkingDir = wsConfig?.defaults?.workingDirectory
-        // Label tree once per workspace: stored labels are read in canonical form (canonicalLabels)
-        let labelTree: LabelConfig[] | undefined
-        try { labelTree = listLabels(workspaceRootPath) } catch (e) { sessionLog.warn(`Could not read labels for ${workspaceRootPath}:`, e) }
+        totalSessions += this.ingestWorkspaceSessions(workspace, await listStoredSessionsAsync(workspace.rootPath))
+      }
+      sessionLog.info(`Loaded ${totalSessions} sessions from disk (metadata only, async)`)
+    } catch (error) {
+      sessionLog.error('Failed to load sessions from disk (async):', error)
+    } finally {
+      // Idempotent: no-op if initialize() already markFailed'd on a fast-path error.
+      this.sessionsGate.markReady()
+    }
+  }
 
-        for (const meta of sessionMetadata) {
-          // Create managed session from metadata only (messages lazy-loaded on demand)
-          // This dramatically reduces memory usage at startup - messages are loaded
-          // when getSession() is called for a specific session
-          const managed = createManagedSession(meta, workspace, {
-            // The header carries the session's explicit source selection (persisted at
-            // creation / by setSessionSources). Seed it now so the renderer's very first
-            // session list shows the right chips — sessions without one hydrate any legacy
-            // body value on message load (see hydrateMessagesForColdPersist).
-            enabledSourceSlugs: meta.enabledSourceSlugs,
-            workingDirectory: meta.workingDirectory ?? wsDefaultWorkingDir,
-          })
+  /**
+   * Hydrate in-memory ManagedSessions from one workspace's on-disk session
+   * metadata. Called per workspace by loadSessionsFromDiskAsync. Returns the
+   * number of sessions ingested.
+   */
+  private ingestWorkspaceSessions(workspace: Workspace, sessionMetadata: SessionMetadata[]): number {
+    const workspaceRootPath = workspace.rootPath
+    // Load workspace config once per workspace for default working directory
+    const wsConfig = loadWorkspaceConfig(workspaceRootPath)
+    const wsDefaultWorkingDir = wsConfig?.defaults?.workingDirectory
+    // Label tree once per workspace: stored labels are read in canonical form (canonicalLabels)
+    let labelTree: LabelConfig[] | undefined
+    try { labelTree = listLabels(workspaceRootPath) } catch (e) { sessionLog.warn(`Could not read labels for ${workspaceRootPath}:`, e) }
 
-          // Older auto-labelling stored values on plain labels (`bug::bug`, `bug::Bug`) and empty values
-          // (`trip::`). Read them in canonical form before the automation snapshot below, so the cleanup
-          // fires no label events; the canonical list reaches disk with the session's next save.
-          if (labelTree) managed.labels = this.canonicalLabels(workspaceRootPath, managed.labels, labelTree)
+    let count = 0
+    for (const meta of sessionMetadata) {
+      // Create managed session from metadata only (messages lazy-loaded on demand)
+      // This dramatically reduces memory usage at startup - messages are loaded
+      // when getSession() is called for a specific session
+      const managed = createManagedSession(meta, workspace, {
+        // The header carries the session's explicit source selection (persisted at
+        // creation / by setSessionSources). Seed it now so the renderer's very first
+        // session list shows the right chips — sessions without one hydrate any legacy
+        // body value on message load (see hydrateMessagesForColdPersist).
+        enabledSourceSlugs: meta.enabledSourceSlugs,
+        workingDirectory: meta.workingDirectory ?? wsDefaultWorkingDir,
+      })
 
-          // Migration: clear orphaned llmConnection references (e.g., after connection was deleted)
-          if (managed.llmConnection) {
-            const conn = resolveSessionConnection(managed.llmConnection, undefined)
-            if (!conn) {
-              sessionLog.warn(`Session ${meta.id} has orphaned llmConnection "${managed.llmConnection}", clearing`)
-              managed.llmConnection = undefined
-              managed.connectionLocked = false
-            }
-          }
+      // Older auto-labelling stored values on plain labels (`bug::bug`, `bug::Bug`) and empty values
+      // (`trip::`). Read them in canonical form before the automation snapshot below, so the cleanup
+      // fires no label events; the canonical list reaches disk with the session's next save.
+      if (labelTree) managed.labels = this.canonicalLabels(workspaceRootPath, managed.labels, labelTree)
 
-          // Initialize mode-manager state for restored sessions even before agent creation.
-          // This keeps diagnostics/effective mode aligned with persisted session metadata.
-          setPermissionMode(meta.id, managed.permissionMode ?? 'ask', { changedBy: 'restore' })
-          if (managed.previousPermissionMode) {
-            hydratePreviousPermissionMode(meta.id, managed.previousPermissionMode)
-          }
-
-          this.sessions.set(meta.id, managed)
-
-          // Initialize session metadata in AutomationSystem for diffing
-          const automationSystem = this.automationSystems.get(workspaceRootPath)
-          if (automationSystem) {
-            automationSystem.setInitialSessionMetadata(meta.id, {
-              permissionMode: meta.permissionMode,
-              labels: managed.labels,
-              isFlagged: meta.isFlagged,
-              sessionStatus: meta.sessionStatus,
-              sessionName: managed.name,
-            })
-          }
-
-          totalSessions++
+      // Migration: clear orphaned llmConnection references (e.g., after connection was deleted)
+      if (managed.llmConnection) {
+        const conn = resolveSessionConnection(managed.llmConnection, undefined)
+        if (!conn) {
+          sessionLog.warn(`Session ${meta.id} has orphaned llmConnection "${managed.llmConnection}", clearing`)
+          managed.llmConnection = undefined
+          managed.connectionLocked = false
         }
       }
 
-      sessionLog.info(`Loaded ${totalSessions} sessions from disk (metadata only)`)
-    } catch (error) {
-      sessionLog.error('Failed to load sessions from disk:', error)
+      // Initialize mode-manager state for restored sessions even before agent creation.
+      // This keeps diagnostics/effective mode aligned with persisted session metadata.
+      setPermissionMode(meta.id, managed.permissionMode ?? 'ask', { changedBy: 'restore' })
+      if (managed.previousPermissionMode) {
+        hydratePreviousPermissionMode(meta.id, managed.previousPermissionMode)
+      }
+
+      this.sessions.set(meta.id, managed)
+
+      // Initialize session metadata in AutomationSystem for diffing
+      const automationSystem = this.automationSystems.get(workspaceRootPath)
+      if (automationSystem) {
+        automationSystem.setInitialSessionMetadata(meta.id, {
+          permissionMode: meta.permissionMode,
+          labels: managed.labels,
+          isFlagged: meta.isFlagged,
+          sessionStatus: meta.sessionStatus,
+          sessionName: managed.name,
+        })
+      }
+
+      count++
     }
+    return count
   }
 
   /**
@@ -2599,6 +2753,13 @@ export class SessionManager implements ISessionManager {
       sessionLog.warn('Could not canonicalize session labels:', e)
       return labels
     }
+  }
+
+  /** The session a branch was forked from: live in memory, else its header on disk. */
+  private branchParent(managed: ManagedSession): BranchParent | null {
+    if (!managed.branchFromSessionPath) return null
+    const parentId = basename(managed.branchFromSessionPath)
+    return this.sessions.get(parentId) ?? readSessionHeader(getSessionFilePath(managed.workspace.rootPath, parentId))
   }
 
   // Suppress fs.watch metadata-revert events for the window in which our own
@@ -2639,7 +2800,7 @@ export class SessionManager implements ISessionManager {
       managed.tokenUsage = stored.tokenUsage
       managed.pendingPlanExecution = stored.pendingPlanExecution
       // Deferred-load fields (intentionally undefined after startup, see
-      // loadSessionsFromDisk). Populate from disk only if not already set in
+      // ingestWorkspaceSessions). Populate from disk only if not already set in
       // memory — a caller may have mutated them via setSessionSources etc.
       if (managed.enabledSourceSlugs === undefined) managed.enabledSourceSlugs = stored.enabledSourceSlugs
       if (managed.lastReadMessageId === undefined) managed.lastReadMessageId = stored.lastReadMessageId
@@ -3011,14 +3172,6 @@ export class SessionManager implements ISessionManager {
     return result
   }
 
-  /**
-   * Reload all sessions from disk.
-   * Used after importing sessions to refresh the in-memory session list.
-   */
-  reloadSessions(): void {
-    this.loadSessionsFromDisk()
-  }
-
   getSessions(workspaceId?: string): Session[] {
     // Returns session metadata only - messages are NOT included to save memory
     // Use getSession(id) to load messages for a specific session
@@ -3296,11 +3449,13 @@ export class SessionManager implements ISessionManager {
     // workingDirectory configured, inherit it (only when the caller didn't pass an
     // explicit override). This lets "+ New session in {project}" reuse the project's
     // bound directory without duplicating logic on the renderer side.
-    // Subtasks inherit the parent's project when the caller didn't bind one explicitly —
-    // a child of a project-bound task belongs to that project (board quick-add passes none),
-    // so project-scoped filtering sees the whole task family.
-    const inheritedProjectId = options?.parentSessionId
-      ? this.sessions.get(options.parentSessionId)?.projectId
+    // Subtasks and branches inherit their parent's / source's project when the caller didn't
+    // bind one explicitly — a child of a project-bound task belongs to that project (board
+    // quick-add passes none), and so does a branch, so project-scoped filtering sees the whole
+    // family.
+    const inheritFromSessionId = options?.parentSessionId ?? options?.branchFromSessionId
+    const inheritedProjectId = inheritFromSessionId
+      ? this.sessions.get(inheritFromSessionId)?.projectId
       : undefined
     const requestedProjectId = options?.projectId ?? inheritedProjectId
     let resolvedProjectId: string | undefined
@@ -3326,6 +3481,8 @@ export class SessionManager implements ISessionManager {
 
     // Validate branch request up-front so branch metadata is only set for valid branches.
     // This prevents creating sessions that claim to be branched but don't have copied history.
+    // A branch keeps its parent's coding mode: an SDK fork carries the parent's pinned system prompt.
+    let branchSourceCodingMode: boolean | undefined
     let validatedBranch: {
       sourceSessionId: string
       sourceMessageId: string
@@ -3367,6 +3524,7 @@ export class SessionManager implements ISessionManager {
       }
 
       const sourceSession = loadStoredSession(workspaceRootPath, options.branchFromSessionId)
+      branchSourceCodingMode = sourceManaged?.codingMode ?? sourceSession?.codingMode
       if (!sourceSession) {
         sessionLog.warn('Branch validation failed: source session not found on disk', {
           workspaceId,
@@ -3616,6 +3774,8 @@ export class SessionManager implements ISessionManager {
       model: resolvedModel,
       llmConnection: options?.llmConnection,
       thinkingLevel: defaultThinkingLevel,
+      // Coding mode: branch source → caller → workspace default. Stored only when on, so default sessions stay unchanged.
+      codingMode: (validatedBranch ? branchSourceCodingMode : options?.codingMode ?? wsConfig?.defaults?.codingMode) || undefined,
       systemPromptPreset: options?.systemPromptPreset,
       enabledSourceSlugs: defaultEnabledSourceSlugs,
       branchFromMessageId: validatedBranch?.sourceMessageId,
@@ -3742,6 +3902,12 @@ export class SessionManager implements ISessionManager {
    *  sessions inherit the orchestrator's cwd). Undefined if the session has none or is unknown. */
   getSessionWorkingDirectory(sessionId: string): string | undefined {
     return this.sessions.get(sessionId)?.workingDirectory
+  }
+
+  /** Parent of a live sub-session (the Tasks Conductor refuses to run on one). Undefined if the
+   *  session is top-level or unknown. */
+  getSessionParentId(sessionId: string): string | undefined {
+    return this.sessions.get(sessionId)?.parentSessionId
   }
 
   private async disposeManagedAgentRuntime(managed: ManagedSession, reason: string): Promise<void> {
@@ -4084,6 +4250,8 @@ export class SessionManager implements ISessionManager {
         // Retire branch-only fork metadata now that child session is established
         if (managed.branchFromSdkSessionId) {
           sessionLog.info(`Branch fork established for ${managed.id}: child=${sdkSessionId}, retiring parent fork metadata (parent=${managed.branchFromSdkSessionId})`)
+          const startTotals = branchStartTotals(this.branchParent(managed), managed.branchFromSdkSessionId)
+          if (startTotals) managed.tokenUsage = { ...(managed.tokenUsage ?? DEFAULT_TOKEN_USAGE), lastRunningTotals: startTotals }
           managed.branchFromSdkSessionId = undefined
           managed.branchFromSdkCwd = undefined
           managed.branchFromSdkTurnId = undefined
@@ -4201,8 +4369,10 @@ export class SessionManager implements ISessionManager {
         skipConfigWatcher: true, // Server owns workspace-level ConfigWatcher — don't duplicate in agents
         automationSystem: this.automationSystems.get(managed.workspace.rootPath),
         systemPromptPreset: managed.systemPromptPreset,
+        agentProfile: managed.codingMode ? 'coding' : undefined,
         debugMode: _platform?.isDebugMode ? { enabled: true, logFilePath: _platform.getLogFilePath?.() } : undefined,
         enable1MContext: await (async () => { const { getEnable1MContext } = await import('@craft-agent/shared/config/storage'); return getEnable1MContext(); })(),
+        autoCompactWindow: await (async () => { const { getAutoCompactWindow } = await import('@craft-agent/shared/config/storage'); return getAutoCompactWindow(); })(),
         // Image resize callback — prevents oversized images from entering conversation history
         onImageResize: async (filePath: string, maxSizeBytes: number): Promise<string | null> => {
           try {
@@ -4620,6 +4790,12 @@ export class SessionManager implements ISessionManager {
         log: (line) => sessionLog.info(line),
         isInteractive: () => isAttendedSession(managed),
       })
+      // Subagent model choice (decision model, toggle `subagentModels`): the Claude agent asks it
+      // for Agent calls that name no model; no answer leaves the Settings default in charge.
+      managed.agent.subagentModelPicker = buildSubagentModelPicker({
+        sessionId: managed.id,
+        log: (line) => sessionLog.info(line),
+      })
 
       managed.agent.onPermissionRequest = (request: {
         requestId: string;
@@ -4912,17 +5088,17 @@ export class SessionManager implements ISessionManager {
         }
 
         const session = await this.createSession(managed.workspace.id, {
-          // ORCHA §bg-child-sessions — parentSessionId + notifyParentOnComplete
-          // marker and inheritance defaults (bg-child-routing-03/04) live in
-          // buildSpawnedChildSessionOptions so they're unit-testable in isolation.
-          ...buildSpawnedChildSessionOptions(request, managed),
+          ...spawnedSessionOptions(request, managed),
+          // ORCHA §bg-child-sessions / §session-nesting — completion feedback to
+          // the parent, opt-in hidden, and `standalone` (drops the parent link).
+          ...orchaSpawnOverrides(request),
           permissionMode,
           // Nobody watches a session an automation, task or CLI run spawns either.
           unattended: !isAttendedSession(managed) || undefined,
         })
 
         // ORCHA §session-nesting — `standalone: true` spawns an independent
-        // top-level session: no parent link (see buildSpawnedChildSessionOptions)
+        // top-level session: no parent link (see orchaSpawnOverrides)
         // and NOT registered as this session's background child, so no running
         // chip / background_result expectation is created.
         if (isNestedSpawn(request)) {
@@ -5114,6 +5290,16 @@ export class SessionManager implements ISessionManager {
           sessionId: managed.id,
           log: (message: string) => sessionLog.info(message),
         }),
+        // PR watcher tools (pr_status/pr_bind/pr_unbind/pr_set_auto_merge) — Coding mode. Bound to the
+        // invoking session; the registry (handlers/rpc/pr-watch) owns the GitHub credentials and the
+        // watcher, so tokens never reach the agent. getRegistry resolves the current instance at call
+        // time (it is recreated when the RPC handlers re-register).
+        prWatch: buildPrWatchToolCallbacks({
+          sessionId: managed.id,
+          sessionManager: this,
+          getRegistry: getPrWatchRegistry,
+          getAutoFixMonitor: getPrAutoFixMonitor,
+        }),
         getSessionInfoFn: (sessionId?: string) => {
           const targetId = sessionId ?? managed.id
           const session = this.sessions.get(targetId)
@@ -5127,9 +5313,11 @@ export class SessionManager implements ISessionManager {
             createdAt: session.createdAt ?? 0,
             workingDirectory: session.workingDirectory,
             projectId: session.projectId,
+            parentSessionId: session.parentSessionId,
             llmConnection: session.llmConnection,
             model: session.model,
             isActive: session.agent != null,
+            task: this.taskInfoForSession(session),
           }
         },
         listSessionsFn: (options) => {
@@ -5178,6 +5366,8 @@ export class SessionManager implements ISessionManager {
               status: s.sessionStatus ?? 'todo',
               createdAt: s.createdAt ?? 0,
               projectId: s.projectId,
+              parentSessionId: s.parentSessionId,
+              taskSlug: s.taskSlug,
             })),
           }
         },
@@ -5276,14 +5466,16 @@ export class SessionManager implements ISessionManager {
               reason: 'Activation failed — source may be unusable (disabled/unauthenticated) or server build failed. Check session logs.',
             }
           }
-          // Both backends need the current turn to end before new tools are visible:
-          // Claude SDK freezes mcpServers at query() start; Pi only picks up new proxy
-          // tool defs on the next handlePrompt (`toolsChanged` flag in pi-agent-server).
-          // Mark a pending restart on the agent — ClaudeAgent/PiAgent consume it after
-          // the next tool_result, yield source_activated, and forceAbort. The
-          // `source_activated` handler in this class then schedules a server-side
-          // resend of the original user message with a "[{slug} activated]" suffix —
-          // landing in a fresh turn with tools live (craft-agents-oss#804).
+          // Both backends show new tools from the next turn on: Claude sets each turn's
+          // MCP servers on its keep-alive query at turn start (a per-turn query gets them
+          // at creation); Pi picks up new proxy tool defs on the next handlePrompt
+          // (`toolsChanged` flag in pi-agent-server). Mark a pending restart on the agent —
+          // ClaudeAgent/PiAgent consume it after the next tool_result, yield
+          // source_activated, and end the turn (Claude's keep-alive query is stopped like
+          // a user Stop, so its background agents survive). The `source_activated` handler
+          // in this class then schedules a server-side resend of the original user message
+          // with a "[{slug} activated]" suffix — a new turn with the tools live
+          // (craft-agents-oss#804).
           const userMessage = managed.agent?.getCurrentTurnUserMessage?.() ?? ''
           if (userMessage) {
             managed.agent?.setPendingSourceActivationRestart({ sourceSlug, userMessage })
@@ -7054,6 +7246,10 @@ export class SessionManager implements ISessionManager {
       sendSpan.mark('servers.applied')
     }
 
+    // Continued from another session: the summary this first turn carries may still be generating
+    // (the agent above was set up meanwhile)
+    if (managed.pendingHandoffSummary) await this.waitForHandoffSummary(managed)
+
     try {
       sessionLog.info('Starting chat for session:', sessionId)
       sessionLog.info('Workspace:', JSON.stringify(managed.workspace, null, 2))
@@ -7122,9 +7318,12 @@ export class SessionManager implements ISessionManager {
         return
       }
       if (suggestionHint) turnContext.push(suggestionHint)
-      // A /compact turn takes neither: trailing text would become compaction instructions.
+      // A /compact turn takes no context: text around it would become compaction instructions (a
+      // task's spec then goes with the next turn).
+      const sessionContext = isCompactCommand ? null : this.takeTaskSessionContext(managed, _isAuthRetry)
       const chatOptions: ChatOptions = {
         ...(thinkingOverride ? { thinkingOverride } : {}),
+        ...(sessionContext ? { sessionContext } : {}),
         ...(turnContext.length > 0 && !isCompactCommand ? { turnContext: turnContext.join('\n\n') } : {}),
       }
 
@@ -8933,9 +9132,9 @@ export class SessionManager implements ISessionManager {
    * its own path. The guard in the adopt method stays untouched.
    *
    * Returns `true` on success (including an idempotent re-bind of the same slug). Returns `false`
-   * — leaving the session untouched — when the session is missing or already bound to a *different*
-   * slug. Callers MUST treat `false` as a hard error and must NOT fall back to creating a fresh
-   * orchestrator (that would mint a duplicate tile).
+   * — leaving the session untouched — when the session is missing, is a sub-session, or is already
+   * bound to a *different* slug. Callers MUST treat `false` as a hard error and must NOT fall back
+   * to creating a fresh orchestrator (that would mint a duplicate tile).
    *
    * Unlike adopt, this reconciles `llmConnection` too (a fresh create sets it; adopt skips it) so
    * the bound tile doesn't render a stale backend.
@@ -8948,6 +9147,14 @@ export class SessionManager implements ISessionManager {
     const managed = this.sessions.get(sessionId)
     if (!managed) {
       sessionLog.warn('bindExistingSessionToTask: session not found', { sessionId, taskSlug })
+      return false
+    }
+    // Tasks are one level deep, so a sub-session can't orchestrate. Checked before the slug: the
+    // Conductor's children carry their task's slug, which the idempotent re-bind would accept.
+    if (managed.parentSessionId) {
+      sessionLog.warn('bindExistingSessionToTask: refusing a sub-session', {
+        sessionId, taskSlug, parentSessionId: managed.parentSessionId,
+      })
       return false
     }
     if (managed.taskSlug) {
@@ -9027,6 +9234,189 @@ export class SessionManager implements ISessionManager {
       // Persist to disk
       this.persistSession(managed)
     }
+  }
+
+  /**
+   * Turn coding mode on or off: the lean coding system prompt and session-tool profile.
+   * Only before the conversation starts (see {@link hasConversationStarted}); after that the UI
+   * offers to continue in a new session instead, so this throws.
+   */
+  setSessionCodingMode(sessionId: string, enabled: boolean): void {
+    const managed = this.sessions.get(sessionId)
+    if (!managed || !!managed.codingMode === enabled) return
+    if (hasConversationStarted(managed)) {
+      throw new Error('Coding mode is fixed once a session has messages. Continue in a new session to switch it.')
+    }
+
+    // Stored only when on, so sessions that never use it keep an unchanged header
+    managed.codingMode = enabled || undefined
+    managed.agent?.setAgentProfile(enabled ? 'coding' : 'default')
+
+    sessionLog.info(`Session ${sessionId}: coding mode ${enabled ? 'on' : 'off'}`)
+    this.persistSession(managed)
+    this.sendEvent({ type: 'coding_mode_changed', sessionId, codingMode: enabled }, managed.workspace.id)
+  }
+
+  /**
+   * Continue a started session in a new one with coding mode set to `codingMode` (coding mode is
+   * fixed once a conversation starts, see {@link setSessionCodingMode}). The new session keeps the
+   * working directory, model, connection, thinking level, permission mode, sources and project, and
+   * gets a summary of this conversation as one-shot hidden context on its first turn (the same
+   * handoff remote transfers use). The source session is left untouched.
+   *
+   * The summary is a model call that takes seconds, so the new session is returned at once and the
+   * summary is attached in the background (`attachHandoffSummary`); a first message sent before it
+   * is ready waits for it in `sendMessage`.
+   */
+  async continueSessionInNewSession(sessionId: string, codingMode: boolean): Promise<{ sessionId: string }> {
+    const managed = this.sessions.get(sessionId)
+    if (!managed) throw new Error(`Session ${sessionId} not found`)
+
+    const session = await this.createSession(managed.workspace.id, {
+      permissionMode: managed.permissionMode,
+      thinkingLevel: managed.thinkingLevel,
+      workingDirectory: managed.workingDirectory ?? 'none',
+      model: managed.model,
+      llmConnection: managed.llmConnection,
+      enabledSourceSlugs: managed.enabledSourceSlugs,
+      projectId: managed.projectId,
+      codingMode,
+    })
+
+    const created = this.sessions.get(session.id)
+    if (created) {
+      const pending: Promise<void> = this.attachHandoffSummary(managed, created).finally(() => {
+        if (created.pendingHandoffSummary === pending) created.pendingHandoffSummary = undefined
+      })
+      created.pendingHandoffSummary = pending
+    }
+    sessionLog.info(`Session ${sessionId}: continued in ${session.id} with coding mode ${codingMode ? 'on' : 'off'}; summarizing the conversation in the background`)
+    return { sessionId: session.id }
+  }
+
+  /** Wait for a continued session's handoff summary, at most `handoffSummaryWaitMs`. */
+  private async waitForHandoffSummary(managed: ManagedSession): Promise<void> {
+    const pending = managed.pendingHandoffSummary
+    if (!pending) return
+    const startedAt = Date.now()
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const ready = await Promise.race([
+      pending.then(() => true),
+      new Promise<boolean>(resolve => { timer = setTimeout(() => resolve(false), this.handoffSummaryWaitMs) }),
+    ])
+    clearTimeout(timer)
+    sessionLog.info(`Session ${managed.id}: first turn waited ${Date.now() - startedAt} ms for the previous session's summary${ready ? '' : ', starting without it'}`)
+  }
+
+  /**
+   * Summarize `source`'s conversation and give it to `target` as one-shot hidden context for its
+   * first turn (`transferredSessionSummary`). Never throws: without a summary the new session just
+   * starts without the earlier context.
+   */
+  private async attachHandoffSummary(source: ManagedSession, target: ManagedSession): Promise<void> {
+    const startedAt = Date.now()
+    try {
+      const summary = await this.generateSessionHandoffSummary(source)
+      // Deleted while the summary was generated
+      if (this.sessions.get(target.id) !== target) return
+      if (summary) {
+        target.transferredSessionSummary = summary
+        target.transferredSessionSummaryApplied = false
+        this.persistSession(target)
+        await sessionPersistenceQueue.flush(target.id)
+      }
+      sessionLog.info(`Session ${target.id}: summary of ${source.id} ${summary ? `ready (${summary.length} chars)` : 'empty'} after ${Date.now() - startedAt} ms`)
+    } catch (error) {
+      sessionLog.warn(`Session ${target.id}: summary of ${source.id} failed after ${Date.now() - startedAt} ms:`, error)
+    }
+  }
+
+  /** Coding mode: PRs pinned to a session (chat-header PR carousel), in addedAt order. */
+  getSessionBoundPrs(sessionId: string): BoundPr[] {
+    return this.sessions.get(sessionId)?.boundPrs ?? []
+  }
+
+  /**
+   * Pin a PR to a session (pr_bind). Deduped by host/owner/repo#number — re-binding an existing PR
+   * refreshes its position — then persisted. Returns the new list (addedAt order).
+   */
+  bindPrToSession(sessionId: string, pr: BoundPr): BoundPr[] {
+    const managed = this.sessions.get(sessionId)
+    if (!managed) throw new Error(`Session ${sessionId} not found`)
+    const next = [...(managed.boundPrs ?? []).filter(p => !sameBoundPr(p, pr)), pr].sort((a, b) => a.addedAt - b.addedAt)
+    managed.boundPrs = next
+    sessionLog.info(`Session ${sessionId}: bound PR ${pr.owner}/${pr.repo}#${pr.number} (${next.length} total)`)
+    this.persistSession(managed)
+    return next
+  }
+
+  /** Remove a pinned PR from a session (pr_unbind); persists and returns the new list. */
+  unbindPrFromSession(sessionId: string, pr: { host: string; owner: string; repo: string; number: number }): BoundPr[] {
+    const managed = this.sessions.get(sessionId)
+    if (!managed) throw new Error(`Session ${sessionId} not found`)
+    const next = (managed.boundPrs ?? []).filter(p => !sameBoundPr(p, pr))
+    // Stored only when non-empty, so sessions that never bind keep an unchanged header (like codingMode)
+    managed.boundPrs = next.length ? next : undefined
+    // An unbound PR's auto-fix goes with it
+    const monitorId = prEntryId(pr)
+    if (managed.prMonitors?.[monitorId]) {
+      const { [monitorId]: _dropped, ...rest } = managed.prMonitors
+      managed.prMonitors = Object.keys(rest).length ? rest : undefined
+    }
+    sessionLog.info(`Session ${sessionId}: unbound PR ${pr.owner}/${pr.repo}#${pr.number} (${next.length} left)`)
+    this.persistSession(managed)
+    return next
+  }
+
+  /** Coding mode: per-PR monitor state (auto-fix), keyed by PR id. */
+  getSessionPrMonitors(sessionId: string): Record<string, PrMonitorState> {
+    return this.sessions.get(sessionId)?.prMonitors ?? {}
+  }
+
+  /**
+   * Turn auto-fix (the PR card's Fix toggle) on or off for one PR of a session; persists and returns
+   * the monitors. Turning it off keeps what the last run acted on, so turning it back on only fixes
+   * feedback that is new since then.
+   */
+  setSessionPrAutoFix(sessionId: string, prId: string, enabled: boolean): Record<string, PrMonitorState> {
+    const managed = this.sessions.get(sessionId)
+    if (!managed) throw new Error(`Session ${sessionId} not found`)
+    const monitors = { ...(managed.prMonitors ?? {}) }
+    const entry: PrMonitorState = { ...(monitors[prId] ?? {}), autoFix: enabled || undefined }
+    if (entry.autoFix || entry.lastFixAt) monitors[prId] = entry
+    else delete monitors[prId]
+    managed.prMonitors = Object.keys(monitors).length ? monitors : undefined
+    sessionLog.info(`Session ${sessionId}: auto-fix ${enabled ? 'on' : 'off'} for ${prId}`)
+    this.persistSession(managed)
+    return managed.prMonitors ?? {}
+  }
+
+  /** Record an auto-fix run: when, and the review feedback (signature) it acted on. */
+  recordPrAutoFixRun(sessionId: string, prId: string, signature: string[], at: number): void {
+    const managed = this.sessions.get(sessionId)
+    if (!managed) return
+    managed.prMonitors = { ...(managed.prMonitors ?? {}), [prId]: { ...(managed.prMonitors?.[prId] ?? {}), lastFixAt: at, lastFixSignature: signature } }
+    this.persistSession(managed)
+  }
+
+  /** A session's metadata without loading its messages (cheap, unlike getSession). */
+  getSessionSnapshot(sessionId: string): Session | null {
+    const managed = this.sessions.get(sessionId)
+    return managed ? managedToSession(managed) : null
+  }
+
+  /**
+   * Start a turn in an idle session with an app-generated notice: hidden (never a transcript bubble)
+   * and labelled as sent by Craft Agents, not the user — the same path background-task completions
+   * use. Returns false, sending nothing, when the session is missing or busy, so the caller can retry.
+   */
+  wakeIdleSessionWithNotice(sessionId: string, text: string): boolean {
+    const managed = this.sessions.get(sessionId)
+    if (!managed || managed.isProcessing) return false
+    void this.sendMessage(sessionId, labelSystemNotice(text), [], [], { hidden: true }).catch((err) => {
+      sessionLog.error(`Session ${sessionId}: failed to start a system-notice turn:`, err)
+    })
+    return true
   }
 
   /**
@@ -9159,6 +9549,47 @@ export class SessionManager implements ISessionManager {
         }
         this.sendEvent({ ...event, sessionId }, workspaceId)
         break
+
+      case 'messages_retracted': {
+        // A reply the backend took back (Claude: one the model's safeguards stopped, which a fallback
+        // model answers instead). Unfinished text went with a text_discard just before.
+        for (const turnId of event.turnIds) this.discardDelta(sessionId, turnId)
+        if (managed.streamingTurnId && event.turnIds.includes(managed.streamingTurnId)) {
+          managed.streamingText = ''
+          managed.streamingTurnId = undefined
+        }
+        const kept = withoutRetractedMessages(managed.messages, event)
+        if (kept.length !== managed.messages.length) {
+          managed.messages = kept
+          if (managed.lastFinalMessageId && !kept.some(m => m.id === managed.lastFinalMessageId)) {
+            managed.lastFinalMessageId = kept.findLast(m => m.role === 'assistant' && !m.isIntermediate)?.id
+          }
+          this.persistSession(managed)
+        }
+        this.sendEvent({ type: 'messages_retracted', sessionId, turnIds: event.turnIds, toolUseIds: event.toolUseIds }, workspaceId)
+        break
+      }
+
+      case 'model_refusal': {
+        // The model's safeguards stopped a reply: say so where it happened, and when the backend goes
+        // on with another model, make that the session's model (the model picker shows it, and picking
+        // the old one again switches back)
+        const notice: Message = {
+          id: generateMessageId(),
+          role: 'info',
+          content: event.message,
+          timestamp: this.monotonic(),
+          infoLevel: 'warning',
+        }
+        managed.messages.push(notice)
+        this.persistSession(managed)
+        this.sendEvent({ type: 'info', sessionId, message: event.message, level: 'warning', timestamp: notice.timestamp }, workspaceId)
+        if (event.fallbackModel && event.fallbackModel !== managed.model) {
+          sessionLog.info(`Session ${sessionId}: the model's safeguards stopped a reply; continuing on ${event.fallbackModel}`)
+          await this.updateSessionModel(sessionId, workspaceId, event.fallbackModel)
+        }
+        break
+      }
 
       case 'retry':
         // Retry progress is transient; do not persist it as transcript history.
@@ -9896,7 +10327,7 @@ export class SessionManager implements ISessionManager {
 
         // The captured original message can be empty — an empty/attachment-only turn,
         // or a per-turn capture that raced turn teardown. Fall back to the last
-        // persisted user message so an activation that force-aborted the turn still
+        // persisted user message so an activation that ended the turn still
         // continues; skip only when there is genuinely nothing to resend (preserves
         // the "no bogus empty resend" intent). See bugfix/session-continuation.
         const capturedMessage = event.originalMessage ?? ''
@@ -9996,9 +10427,8 @@ export class SessionManager implements ISessionManager {
           // Each API call sends the full conversation history, so we use the latest value
           managed.tokenUsage.inputTokens = event.usage.inputTokens
           // outputTokens and costUsd are accumulated across all turns (total session usage)
-          managed.tokenUsage.outputTokens += event.usage.outputTokens
+          addTurnUsage(managed.tokenUsage, event.usage)
           managed.tokenUsage.totalTokens = managed.tokenUsage.inputTokens + managed.tokenUsage.outputTokens
-          managed.tokenUsage.costUsd += event.usage.costUsd ?? 0
           // Cache tokens reflect current state, not accumulated
           managed.tokenUsage.cacheReadTokens = event.usage.cacheReadTokens ?? 0
           managed.tokenUsage.cacheCreationTokens = event.usage.cacheCreationTokens ?? 0
@@ -10050,7 +10480,23 @@ export class SessionManager implements ISessionManager {
     }
   }
 
+  private readonly turnCompleteListeners = new Set<(sessionId: string) => void>()
+
+  onTurnComplete(listener: (sessionId: string) => void): () => void {
+    this.turnCompleteListeners.add(listener)
+    return () => this.turnCompleteListeners.delete(listener)
+  }
+
   private sendEvent(event: SessionEvent, workspaceId?: string): void {
+    if (event.type === 'complete') {
+      for (const listener of this.turnCompleteListeners) {
+        try {
+          listener(event.sessionId)
+        } catch (error) {
+          sessionLog.warn('turn-complete listener failed:', error)
+        }
+      }
+    }
     if (!this.eventSink) {
       sessionLog.warn('Cannot send event - no event sink')
       return
@@ -10265,7 +10711,11 @@ export class SessionManager implements ISessionManager {
   // Export / Import / Dispatch
   // ============================================
 
-  private async generateRemoteTransferSummary(managed: ManagedSession): Promise<string | null> {
+  /**
+   * Summarize a session's conversation for a handoff into a fresh session: remote transfer and
+   * "continue in a new session" (coding mode switch). Null when there is nothing to summarize.
+   */
+  private async generateSessionHandoffSummary(managed: ManagedSession): Promise<string | null> {
     await this.ensureMessagesLoaded(managed)
 
     const messages = managed.messages
@@ -10347,7 +10797,7 @@ export class SessionManager implements ISessionManager {
     this.persistSession(managed)
     await sessionPersistenceQueue.flush(sessionId)
 
-    const summary = await this.generateRemoteTransferSummary(managed)
+    const summary = await this.generateSessionHandoffSummary(managed)
     if (!summary) {
       sessionLog.warn(`[dispatch] Failed to generate remote transfer summary for ${sessionId}`)
       return null
@@ -10500,6 +10950,8 @@ export class SessionManager implements ISessionManager {
       llmConnection: header.llmConnection,
       connectionLocked: header.connectionLocked,
       thinkingLevel: header.thinkingLevel,
+      // Keeps the SDK session (and its pinned prompt/tool profile) when not forked, so the mode travels with it
+      codingMode: header.codingMode,
       hidden: header.hidden,
       transferredSessionSummary: header.transferredSessionSummary,
       transferredSessionSummaryApplied: header.transferredSessionSummaryApplied,

@@ -5,7 +5,8 @@
  * a four-level rubric, reading it with the end of the previous reply and the
  * names of attached files (a short "here" can continue demanding work); simple
  * requests run with a lower thinking level for that turn only. It never raises
- * the level above the session's, no confident answer keeps the session level,
+ * the level above the session's; an unsure answer caps the turn at `high` only
+ * when a hard problem is unlikely and otherwise keeps the session level,
  * pushback on the previous reply keeps it, and a request to change or send
  * something hard to undo gets at least `high`.
  *
@@ -29,6 +30,13 @@ export const ADAPTIVE_THINKING_PREVIOUS_REPLY_CHARS = 1_200
 export const ADAPTIVE_THINKING_CORRECTION_AT = 0.6
 /** "Changes or sends something hard to undo" at or above this: at least `high`. */
 export const ADAPTIVE_THINKING_CONSEQUENTIAL_AT = 0.5
+/**
+ * An unsure rating (below the confidence bar) still caps the turn at `high` when the "hard
+ * problem" level gets less than this probability. In the log up to 2026-10-13 that applied to 74%
+ * of the unsure turns that had kept `max`, and turns lowered to `high` were corrected about as
+ * often as turns kept at `max` (9% vs 7%).
+ */
+export const ADAPTIVE_THINKING_UNSURE_HARD_BELOW = 0.15
 
 /** Thinking cap per rubric level; the top level keeps the session's setting. */
 const CAP_BY_LEVEL: readonly (ThinkingLevel | null)[] = ['low', 'medium', 'high', null]
@@ -86,16 +94,21 @@ const noul = (result: DecisionResult | null, key: string): number | undefined =>
 }
 
 export type TurnLevelChoice =
-  | { level: ThinkingLevel; floored: boolean }
+  | { level: ThinkingLevel; floored: boolean; unsure?: true }
   | { keep: 'no_answer' | 'low_confidence' | 'correction' | 'needs_session_level' | 'not_lower' }
 
 /** The policy, on the answers alone. */
 export function chooseTurnLevel(result: DecisionResult | null, sessionLevel: ThinkingLevel): TurnLevelChoice {
   const demand = result?.answers.demand
   if (!demand || demand.type !== 'score') return { keep: 'no_answer' }
-  if (demand.confidence < ADAPTIVE_THINKING_MIN_CONFIDENCE) return { keep: 'low_confidence' }
   // Pushback gets the session's full thinking.
   if ((noul(result, 'corrects_previous') ?? 0) >= ADAPTIVE_THINKING_CORRECTION_AT) return { keep: 'correction' }
+  if (demand.confidence < ADAPTIVE_THINKING_MIN_CONFIDENCE) {
+    // Unsure between neighbouring levels: `high` still covers everything short of a hard problem.
+    if ((demand.probabilities['3'] ?? 1) >= ADAPTIVE_THINKING_UNSURE_HARD_BELOW) return { keep: 'low_confidence' }
+    const level = lowerOf('high', sessionLevel)
+    return level === sessionLevel ? { keep: 'low_confidence' } : { level, floored: false, unsure: true }
+  }
   let cap = CAP_BY_LEVEL[Math.min(CAP_BY_LEVEL.length - 1, Math.max(0, Math.round(demand.score)))]
   if (!cap) return { keep: 'needs_session_level' }
   const floored = cap !== 'high' && (noul(result, 'consequential') ?? 0) >= ADAPTIVE_THINKING_CONSEQUENTIAL_AT
@@ -126,7 +139,8 @@ export async function pickTurnThinkingLevel(
     recordDecisionOutcome(result, { action: 'keep', changed: false, detail: { reason: choice.keep, sessionLevel } })
     return { level: null, result }
   }
-  recordDecisionOutcome(result, { action: `thinking:${choice.level}`, changed: true, detail: { sessionLevel, ...(choice.floored ? { reason: 'consequential_floor' } : {}) } })
+  const reason = choice.floored ? 'consequential_floor' : choice.unsure ? 'unsure_not_hard' : undefined
+  recordDecisionOutcome(result, { action: `thinking:${choice.level}`, changed: true, detail: { sessionLevel, ...(reason ? { reason } : {}) } })
   return { level: choice.level, result }
 }
 

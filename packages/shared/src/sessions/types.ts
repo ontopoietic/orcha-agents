@@ -11,6 +11,7 @@
 
 import type { PermissionMode } from '../agent/mode-manager.ts';
 import type { ThinkingLevel } from '../agent/thinking-levels.ts';
+import type { BoundPr, PrMonitorState } from '../protocol/pr-watch.ts';
 import type { StoredAttachment, MessageRole, ToolStatus, AuthRequestType, AuthStatus, CredentialInputMode, StoredMessage, ContextUsageSnapshot } from '@craft-agent/core/types';
 import type { AnchorRef } from './anchors.ts';
 
@@ -37,6 +38,12 @@ export const SESSION_PERSISTENT_FIELDS = [
   'enabledSourceSlugs', 'permissionMode', 'previousPermissionMode', 'workingDirectory',
   // Model/Connection
   'model', 'llmConnection', 'connectionLocked', 'thinkingLevel',
+  // Coding mode (lean coding prompt + tool profile; fixed once the session has messages)
+  'codingMode',
+  // Coding mode: PRs pinned to this session (chat-header PR carousel; see protocol/pr-watch BoundPr)
+  'boundPrs',
+  // Coding mode: per-PR monitor state (auto-fix toggle + what it last acted on), keyed by PR id
+  'prMonitors',
   // Sharing
   'sharedUrl', 'sharedId',
   // Plan execution
@@ -67,6 +74,7 @@ export const SESSION_PERSISTENT_FIELDS = [
   'taskNodeId',
   'taskNodeCount',
   'taskDraft',
+  'taskContextFingerprint',
 ] as const;
 
 export type SessionPersistentField = typeof SESSION_PERSISTENT_FIELDS[number];
@@ -101,6 +109,8 @@ export interface SessionTokenUsage {
   contextWindow?: number;
   /** Current occupancy, independent from billable/cumulative token counters. */
   contextUsage?: ContextUsageSnapshot;
+  /** Backend running totals already counted into costUsd/outputTokens (see AgentEventUsage.runningTotals). */
+  lastRunningTotals?: { costUsd: number; outputTokens: number };
 }
 
 /**
@@ -167,6 +177,12 @@ export interface SessionConfig {
   connectionLocked?: boolean;
   /** Thinking level for this session ('off', 'think', 'max') */
   thinkingLevel?: ThinkingLevel;
+  /** Coding mode: lean coding system prompt and session-tool profile. Fixed once the session has messages. */
+  codingMode?: boolean;
+  /** Coding mode: PRs pinned to this session, shown in the chat-header PR carousel (pr_bind / pr_unbind). */
+  boundPrs?: BoundPr[];
+  /** Coding mode: per-PR monitor state (auto-fix), keyed by PR id `host/owner/repo#number`. */
+  prMonitors?: Record<string, PrMonitorState>;
   /**
    * Pending plan execution state - tracks "Accept & Compact" flow.
    * When set, indicates a plan needs to be executed after compaction completes.
@@ -245,6 +261,8 @@ export interface SessionConfig {
   taskNodeCount?: number;
   /** Tasks Conductor: generate-time draft orchestrator. Hidden from the board until adopted (promoted) by createTask. */
   taskDraft?: boolean;
+  /** Tasks Conductor: fingerprint of the task spec context last sent to this task session's agent (sent again when the spec changes). */
+  taskContextFingerprint?: string;
 }
 
 /**
@@ -315,6 +333,12 @@ export interface SessionHeader {
   connectionLocked?: boolean;
   /** Thinking level for this session ('off', 'think', 'max') */
   thinkingLevel?: ThinkingLevel;
+  /** Coding mode: lean coding system prompt and session-tool profile. Fixed once the session has messages. */
+  codingMode?: boolean;
+  /** Coding mode: PRs pinned to this session, shown in the chat-header PR carousel (pr_bind / pr_unbind). */
+  boundPrs?: BoundPr[];
+  /** Coding mode: per-PR monitor state (auto-fix), keyed by PR id `host/owner/repo#number`. */
+  prMonitors?: Record<string, PrMonitorState>;
   /**
    * Pending plan execution state - tracks "Accept & Compact" flow.
    * When set, indicates a plan needs to be executed after compaction completes.
@@ -368,6 +392,8 @@ export interface SessionHeader {
   taskNodeCount?: number;
   /** Tasks Conductor: generate-time draft orchestrator. Hidden from the board until adopted (promoted) by createTask. */
   taskDraft?: boolean;
+  /** Tasks Conductor: fingerprint of the task spec context last sent to this task session's agent (sent again when the spec changes). */
+  taskContextFingerprint?: string;
   // Pre-computed fields for fast list loading
   /** Number of messages in session */
   messageCount: number;
@@ -433,6 +459,12 @@ export interface SessionMetadata {
   connectionLocked?: boolean;
   /** Thinking level for this session ('off', 'think', 'max') */
   thinkingLevel?: ThinkingLevel;
+  /** Coding mode: lean coding system prompt and session-tool profile. Fixed once the session has messages. */
+  codingMode?: boolean;
+  /** Coding mode: PRs pinned to this session, shown in the chat-header PR carousel (pr_bind / pr_unbind). */
+  boundPrs?: BoundPr[];
+  /** Coding mode: per-PR monitor state (auto-fix), keyed by PR id `host/owner/repo#number`. */
+  prMonitors?: Record<string, PrMonitorState>;
   /** ID of last message user has read - for unread detection */
   lastReadMessageId?: string;
   /** ID of the last final (non-intermediate) assistant message - for unread detection */
@@ -471,4 +503,6 @@ export interface SessionMetadata {
   taskNodeCount?: number;
   /** Tasks Conductor: generate-time draft orchestrator. Hidden from the board until adopted (promoted) by createTask. */
   taskDraft?: boolean;
+  /** Tasks Conductor: fingerprint of the task spec context last sent to this task session's agent (sent again when the spec changes). */
+  taskContextFingerprint?: string;
 }

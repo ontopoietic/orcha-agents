@@ -89,6 +89,22 @@ describe('chooseTurnLevel', () => {
     expect(chooseTurnLevel(answer(0, { consequential: 0.5 }), 'max')).toEqual({ level: 'high', floored: true })
     expect(chooseTurnLevel(answer(2, { consequential: 0.9 }), 'max')).toEqual({ level: 'high', floored: false })
   })
+
+  it('caps an unsure rating at high only when a hard problem is unlikely', () => {
+    const unsure = (pHard: number, nouls: Record<string, number> = {}) => ({
+      model: 'm', modelReported: true, requestedModel: 'm', usage: { inputTokens: 1, outputTokens: 0 }, latencyMs: 1, state: { sha256: 'x', bytes: 1, truncated: false },
+      answers: {
+        demand: { type: 'score' as const, score: 1.5, confidence: 0.45, probabilities: { '0': 0.1, '1': 0.45 - pHard / 2, '2': 0.45 - pHard / 2, '3': pHard } },
+        ...Object.fromEntries(Object.entries(nouls).map(([k, v]) => [k, { type: 'noul' as const, noul: v }])),
+      },
+    })
+    expect(chooseTurnLevel(unsure(0.05), 'max')).toEqual({ level: 'high', floored: false, unsure: true })
+    expect(chooseTurnLevel(unsure(0.05), 'xhigh')).toEqual({ level: 'high', floored: false, unsure: true })
+    expect(chooseTurnLevel(unsure(0.15), 'max')).toEqual({ keep: 'low_confidence' })
+    // Never raises, and pushback still keeps the session level
+    expect(chooseTurnLevel(unsure(0.05), 'high')).toEqual({ keep: 'low_confidence' })
+    expect(chooseTurnLevel(unsure(0.05, { corrects_previous: 0.9 }), 'max')).toEqual({ keep: 'correction' })
+  })
 })
 
 describe('thinking follow-up', () => {

@@ -70,7 +70,8 @@ import { ProcessingIndicator } from "./chat-display/ProcessingIndicator"
 import { ScrollOnMount } from "./chat-display/ScrollOnMount"
 import { TurnFrame } from "./chat-display/TurnFrame"
 import { NewChatSuggestions } from "./chat-display/NewChatSuggestions"
-import { newChatSuggestionMessage, pickNewChatSuggestions, type NewChatSuggestion } from "./chat-display/new-chat-suggestions"
+import { TaskBriefState } from "./chat-display/TaskBrief"
+import { newChatSuggestionMentions, newChatSuggestionMessage, pickNewChatSuggestions, pickCustomSuggestions, type NewChatSuggestion } from "./chat-display/new-chat-suggestions"
 import {
   CompactEmptyState,
   NewChatEmptyState,
@@ -175,6 +176,11 @@ interface ChatDisplayProps {
   thinkingLevel?: ThinkingLevel
   /** Callback when thinking level changes */
   onThinkingLevelChange?: (level: ThinkingLevel) => void
+  // Coding mode (session-level, fixed once the conversation starts)
+  /** Coding mode is on: lean coding prompt and session tools */
+  codingMode?: boolean
+  /** Toggle coding mode (only before the first message) */
+  onCodingModeChange?: (enabled: boolean) => void
   // Advanced options
   /** Current permission mode */
   permissionMode?: PermissionMode
@@ -195,6 +201,8 @@ interface ChatDisplayProps {
   // Source selection
   /** Available sources (enabled only) */
   sources?: LoadedSource[]
+  /** User-defined chat starters from workspace config; replaces auto-generated suggestions when non-empty. */
+  chatStarters?: Array<{ label: string; prompt: string }>
   /** Callback when source selection changes */
   onSourcesChange?: (slugs: string[]) => void
   // Skill selection (for @mentions)
@@ -295,6 +303,8 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
   // Thinking level
   thinkingLevel = 'medium',
   onThinkingLevelChange,
+  codingMode = false,
+  onCodingModeChange,
   // Advanced options
   permissionMode = 'ask',
   previousPermissionMode,
@@ -307,6 +317,7 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
   onAttachmentsChange,
   // Sources
   sources,
+  chatStarters,
   onSourcesChange,
   // Skills (for @mentions)
   skills,
@@ -884,8 +895,31 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
     onSendMessage(runCommandMessage(command))
   }, [onSendMessage])
 
-  // New-chat starter prompts (design spec §7.8), from the workspace's working sources
-  const newChatSuggestions = useMemo(() => pickNewChatSuggestions(sources ?? []), [sources])
+  // New-chat starter prompts (design spec §7.8): use custom starters from workspace config when
+  // defined (capped at 3), otherwise fall back to source-based auto-generation.
+  const newChatSuggestions = useMemo(
+    () => chatStarters && chatStarters.length > 0
+      ? pickCustomSuggestions(chatStarters)
+      : pickNewChatSuggestions(sources ?? []),
+    [chatStarters, sources]
+  )
+
+  // Coding mode is fixed once the conversation starts: continue in a new session with it switched.
+  // The server carries the folder, model, sources and a summary of this conversation over.
+  const handleContinueWithCodingMode = useCallback(async (enabled: boolean) => {
+    if (!session) return
+    const toastId = toast.loading(t('chat.codingMode.continuing'))
+    try {
+      const result = await window.electronAPI.sessionCommand(session.id, { type: 'continueInNewSession', codingMode: enabled })
+      toast.dismiss(toastId)
+      navigate(routes.view.allSessions(result.sessionId))
+    } catch (error) {
+      toast.error(t('chat.codingMode.continueFailed'), {
+        id: toastId,
+        description: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }, [session, navigate, t])
 
   // A background task's full output, from its chip card
   const handleOpenTaskOutput = useCallback((task: BackgroundTask, output: BackgroundTaskOutput) => {
@@ -1012,6 +1046,9 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
     let debounceTimer: ReturnType<typeof setTimeout> | null = null
 
     const resizeObserver = new ResizeObserver(() => {
+      // Nothing to follow without turns; a task brief, read from the top, stays at its top
+      if (totalTurnCountRef.current === 0) return
+
       // Unfocused panels: always scroll to bottom instantly (user isn't reading them)
       if (!isFocusedPanelRef.current) {
         messagesEndRef.current?.scrollIntoView({ behavior: 'instant' })
@@ -1154,15 +1191,24 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
     }, 0)
   }, [session, isInputDisabled, disableSend, connectionUnavailable])
 
-  // A new-chat suggestion chip sends its prompt as if typed. A workspace source is mentioned as
-  // [source:slug] and enabled first, like an @-mention sent from the composer.
+  // A new-chat suggestion chip sends its prompt as if typed: mentioned sources are enabled first
+  // and mentioned skills invoked, like @-mentions sent from the composer.
   const canRunSuggestion = !!session && !isInputDisabled && !disableSend && !connectionUnavailable
   const handleRunSuggestion = (suggestion: NewChatSuggestion) => {
     if (!session || !canRunSuggestion) return
-    const slug = suggestion.sourceSlug
+    const mentions = newChatSuggestionMentions(
+      suggestion,
+      (skills ?? []).map(s => s.slug),
+      (sources ?? []).map(s => s.config.slug),
+    )
     const enabled = session.enabledSourceSlugs ?? []
-    if (slug && onSourcesChange && !enabled.includes(slug)) onSourcesChange([...enabled, slug])
-    handleSubmit(newChatSuggestionMessage(suggestion, (key, options) => t(key, options)))
+    const toEnable = mentions.sources.filter(slug => !enabled.includes(slug))
+    if (toEnable.length > 0 && onSourcesChange) onSourcesChange([...enabled, ...toEnable])
+    handleSubmit(
+      newChatSuggestionMessage(suggestion, (key, options) => t(key, options)),
+      undefined,
+      mentions.skills.length > 0 ? mentions.skills : undefined,
+    )
   }
 
   // Handle stop request from InputContainer
@@ -1362,6 +1408,14 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
   // minimum display time): holding them back left the turns unmounted while the search
   // highlight / scroll-to-match effects ran, so a slow switch lost the match.
   const showTranscriptSkeleton = useDelayedLoading(messagesLoading)
+  const newChatEmptyState = (
+    <NewChatEmptyState compact={compactMode}>
+      {canRunSuggestion && <NewChatSuggestions suggestions={newChatSuggestions} onSelect={handleRunSuggestion} />}
+    </NewChatEmptyState>
+  )
+  // A task's orchestrator has no messages until a run, so it shows the task instead (subtask
+  // sessions get their prompt when they start)
+  const briefTaskSlug = session && !session.parentSessionId ? session.taskSlug : undefined
 
   return (
     <RunCommandProvider value={session ? handleRunCommand : null}>
@@ -1420,9 +1474,18 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
                       compact/mobile chats share compactMode but are not edits */}
                   {compactMode && emptyStateLabel !== undefined && turns.length === 0 && <CompactEmptyState />}
                   {emptyStateLabel === undefined && !messagesLoading && !messagesLoadError && turns.length === 0 && !hasUnrenderedLoadedMessages && (
-                    <NewChatEmptyState compact={compactMode}>
-                      {canRunSuggestion && <NewChatSuggestions suggestions={newChatSuggestions} onSelect={handleRunSuggestion} />}
-                    </NewChatEmptyState>
+                    briefTaskSlug ? (
+                      <TaskBriefState
+                        workspaceId={session.workspaceId}
+                        sessionId={session.id}
+                        taskSlug={briefTaskSlug}
+                        title={session.name}
+                        compact={compactMode}
+                        onOpenUrl={onOpenUrl}
+                        onOpenFile={onOpenFile}
+                        fallback={newChatEmptyState}
+                      />
+                    ) : newChatEmptyState
                   )}
                   {!compactMode && hasUnrenderedLoadedMessages && <NoRenderableMessages />}
                   {/* Load more indicator - shown when there are older messages */}
@@ -1751,6 +1814,9 @@ export const ChatDisplay = React.forwardRef<ChatDisplayHandle, ChatDisplayProps>
               onModelChange,
               thinkingLevel,
               onThinkingLevelChange,
+              codingMode,
+              onCodingModeChange,
+              onContinueWithCodingMode: handleContinueWithCodingMode,
               enabledModes,
               enableCompactModelPicker,
               structuredInput,

@@ -3,7 +3,7 @@
  * `RunningBackgroundTask` registry entry the parent tracks it under.
  *
  * Extracted out of the `onSpawnSession` closure in `SessionManager.ts` (same
- * spirit as `buildSpawnedChildSessionOptions`) so the shape asserted by
+ * spirit as `orchaSpawnOverrides`) so the shape asserted by
  * bg-child-visibility-01 (taskId/label/status/kind) is unit-testable without
  * instantiating a full SessionManager + agent.
  */

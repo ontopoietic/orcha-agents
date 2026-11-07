@@ -258,10 +258,6 @@ function getOAuthDefines(): Record<string, string> {
 function getElectronEnv(): Record<string, string> {
   const vitePort = process.env.CRAFT_VITE_PORT || "5173";
 
-  // Codex binary path is resolved at runtime by the binary-resolver module.
-  // It checks: CODEX_PATH env var > bundled binary > local dev fork > system PATH.
-  // You can override with CODEX_PATH env var if needed for debugging.
-
   return {
     ...process.env as Record<string, string>,
     VITE_DEV_SERVER_URL: `http://localhost:${vitePort}`,

@@ -110,6 +110,12 @@ export interface CustomEndpointConfig {
   api: CustomEndpointApi;
   /** Explicit capability hint for arbitrary endpoints — never guessed automatically. */
   supportsImages?: boolean;
+  /**
+   * Output-token cap for every model on this endpoint (positive integer; default 8192).
+   * Pi also bounds compaction summaries by it, so raise it when long sessions fail
+   * to compact. Must not exceed what the server accepts.
+   */
+  maxTokens?: number;
 }
 
 /**

@@ -190,3 +190,5 @@ export {
 
 // Guarded-mode risk check seam (the host implements the check; see core/guarded-mode.ts)
 export type { GuardedModeCheck, GuardedModeCall, GuardedModeRisk, GuardedModeVerdict } from './core/guarded-mode.ts';
+// Subagent model choice seam (Settings default + optional host picker; see core/subagent-model.ts)
+export type { SubagentModelPicker, SubagentTask } from './core/subagent-model.ts';

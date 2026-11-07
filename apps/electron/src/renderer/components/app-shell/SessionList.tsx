@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from "react"
 import { Button } from "@/components/ui/button"
 import { useTranslation } from "react-i18next"
-import { useAtomValue, useSetAtom } from "jotai"
+import { useSetAtom } from "jotai"
 import { isToday, isYesterday, format, startOfDay } from "date-fns"
 import { getDateLocale } from "@craft-agent/shared/i18n"
 import { useAction } from "@/actions"
@@ -28,25 +28,14 @@ import { useFocusZone } from "@/hooks/keyboard"
 import { useEscapeInterrupt } from "@/context/EscapeInterruptContext"
 import { useNavigation, useNavigationState, routes, isSessionsNavigation, isObservationsNavigation } from "@/contexts/NavigationContext"
 import { useFocusContext } from "@/context/FocusContext"
-import { sendToWorkspaceAtom, sessionMetaMapAtom, type SessionMeta } from "@/atoms/sessions"
+import { sendToWorkspaceAtom, type SessionMeta } from "@/atoms/sessions"
 import type { ViewConfig } from "@craft-agent/shared/views"
 import type { SessionStatusId, SessionStatus } from "@/config/session-status-config"
 import { buildCollapsedGroupsScopeSuffix } from "@/utils/session-list-collapse"
-import {
-  buildChildPartition,
-  buildDescendantIndex,
-  emitRowWithChildren,
-  findNearestVisibleAncestor,
-  getRowActivityIndicator,
-  hasProcessingDescendant,
-  type SessionListRow,
-  type SessionMetaLookup,
-} from "./session-list-nesting"
+import { ancestorIds, flatRow, type SessionListRow } from "@/utils/session-tree"
 import { FlipOnChange, SPRING } from "@craft-agent/ui/motion"
 import { useListReorderFlip } from "@/hooks/useListReorderFlip"
 
-// ORCHA §bg-child-sessions (p9): nested child-session row model + pure helpers
-// live in session-list-nesting.ts (unit-tested there).
 export type { SessionListRow }
 
 /** Grouping mode for chat list */
@@ -120,6 +109,14 @@ function formatDateGroupLabel(date: Date, t: (key: string) => string, lang: stri
   return format(date, 'MMM d', { locale: getDateLocale(lang) })
 }
 
+/** Collapsed families saved per workspace, the most recent kept, so ids of deleted sessions don't pile up */
+const MAX_SAVED_COLLAPSED_FAMILIES = 500
+
+function readCollapsedFamilies(scope: string): Set<string> {
+  const saved = storage.get<unknown>(KEYS.collapsedSessionFamilies, [], scope)
+  return new Set(Array.isArray(saved) ? saved.filter((id): id is string => typeof id === 'string') : [])
+}
+
 /**
  * SessionList - Scrollable list of session cards with keyboard navigation
  *
@@ -182,9 +179,8 @@ export function SessionList({
   const flatLabels = useMemo(() => flattenLabels(labels), [labels])
 
   // Get current filter from navigation state (for preserving context in tab routes)
-  // When the focused panel is on the per-session Observations view, the
-  // session list still needs SOMETHING to show.
-  // Fall back to the allSessions filter so the navigator never goes blank.
+  // ORCHA: when the focused panel is on the per-session Observations view, the
+  // session list still needs SOMETHING to show — fall back to allSessions.
   const currentFilter = isSessionsNavigation(navState)
     ? navState.filter
     : isObservationsNavigation(navState)
@@ -254,41 +250,23 @@ export function SessionList({
     })
   }, [])
 
-  // ORCHA §bg-child-sessions (p9): child sessions render nested (collapsed by
-  // default) under their NEAREST ancestor present in the current list view.
-  // Intermediate ancestors that are out of view (archived, hidden, filtered)
-  // are resolved through the full session meta map and skipped (§session-nesting).
-  // Only children with no in-view ancestor at all fall back to top-level rows.
-  const allSessionMetas = useAtomValue(sessionMetaMapAtom)
-  const itemsById = useMemo(() => new Map(items.map(i => [i.id, i])), [items])
-  const lookupMeta = useCallback<SessionMetaLookup>(
-    (id) => itemsById.get(id) ?? allSessionMetas.get(id),
-    [itemsById, allSessionMetas],
-  )
-  const { childrenByParent, nestedChildIds } = useMemo(() => buildChildPartition(items, lookupMeta), [items, lookupMeta])
-  // ORCHA §session-nesting: recursive "working" indicator — a row shows it when
-  // ANY descendant (any depth, via the full meta map) is processing.
-  const descendantIndex = useMemo(() => {
-    const merged = new Map(allSessionMetas)
-    for (const item of items) merged.set(item.id, item)
-    return buildDescendantIndex(merged.values())
-  }, [allSessionMetas, items])
-
-  // ORCHA §bg-child-sessions (p9): per-parent expansion state, persisted to
-  // localStorage (default: collapsed). Search mode auto-expands matched parents
-  // via a render-time override and never touches this persisted state.
-  const [expandedParents, setExpandedParents] = useState<Set<string>>(
-    () => new Set(storage.get<string[]>(KEYS.expandedChildSessionParents, []))
-  )
-  const toggleParentExpanded = useCallback((parentId: string) => {
-    setExpandedParents(prev => {
-      const next = new Set(prev)
-      if (next.has(parentId)) next.delete(parentId)
-      else next.add(parentId)
-      storage.set(KEYS.expandedChildSessionParents, Array.from(next))
-      return next
-    })
+  // Sessions whose sub-sessions are hidden. Families start expanded; the collapsed ones are saved per
+  // workspace, most recently collapsed last.
+  const familyScope = `ws=${workspaceId ? encodeURIComponent(workspaceId) : 'global'}`
+  const [familyState, setFamilyState] = useState(() => ({ scope: familyScope, collapsed: readCollapsedFamilies(familyScope) }))
+  if (familyState.scope !== familyScope) {
+    // Another workspace: switch to its saved set while rendering, so no frame shows the previous one
+    setFamilyState({ scope: familyScope, collapsed: readCollapsedFamilies(familyScope) })
+  }
+  const collapsedFamilies = familyState.collapsed
+  const updateCollapsedFamilies = useCallback((update: (collapsed: Set<string>) => Set<string>) => {
+    setFamilyState(prev => ({ scope: prev.scope, collapsed: update(prev.collapsed) }))
   }, [])
+
+  useEffect(() => {
+    const saved = Array.from(familyState.collapsed).slice(-MAX_SAVED_COLLAPSED_FAMILIES)
+    storage.set(KEYS.collapsedSessionFamilies, saved, familyState.scope)
+  }, [familyState])
 
   // --- Data pipeline (search, filtering, pagination, grouping) ---
   const scrollViewportRef = useRef<HTMLDivElement>(null)
@@ -302,7 +280,8 @@ export function SessionList({
     matchingFilterItems,
     otherResultItems,
     exceededSearchLimit,
-    flatItems,
+    rows: visibleRows,
+    families,
     hasMore,
     collapsedGroupsMeta,
     searchInputRef,
@@ -316,80 +295,16 @@ export function SessionList({
     statusFilter,
     labelFilterMap,
     labelConfigs: labels,
-    nestedChildIds,
     collapsedGroups,
+    collapsedFamilies,
     groupingMode,
     scrollViewportRef,
   })
 
   const rowData = useMemo(() => {
-    // ORCHA §bg-child-sessions (p9): post-pass applied to every non-search
-    // grouping branch — inserts nested child rows beneath their parent row
-    // (respecting the persisted expansion state) and tags parent rows with
-    // chevron metadata. Children never appear as standalone entries.
-    const withNestedChildren = (
-      groups: EntityListGroup<SessionListRow>[],
-    ): { rows: SessionListRow[]; groups: EntityListGroup<SessionListRow>[] } => {
-      if (childrenByParent.size === 0) {
-        return { rows: groups.flatMap(g => g.items), groups }
-      }
-      const seen = new Set<string>()
-      const outGroups = groups.map(g => {
-        const out: SessionListRow[] = []
-        for (const row of g.items) {
-          emitRowWithChildren(row, 0, childrenByParent, id => expandedParents.has(id), out, seen)
-        }
-        return { ...g, items: out }
-      })
-      return { rows: outGroups.flatMap(g => g.items), groups: outGroups }
-    }
-
     if (isSearchMode) {
-      // ORCHA §bg-child-sessions (p9): a matched child session surfaces under
-      // its parent row, auto-expanded for the duration of the search (the
-      // persisted expansion state is not modified). Parents that only match
-      // via a child are injected at the child's rank. Matched children are
-      // collected across both result groups so a parent is rendered once,
-      // with all of its matched children beneath it.
-      // ORCHA §session-nesting: anchor = nearest ancestor present in the view.
-      const resolveParent = (item: SessionMeta): SessionMeta | undefined => {
-        const anchorId = findNearestVisibleAncestor(item, id => itemsById.has(id), lookupMeta)
-        return anchorId ? itemsById.get(anchorId) : undefined
-      }
-
-      const childMatchesByParent = new Map<string, SessionMeta[]>()
-      for (const item of [...matchingFilterItems, ...otherResultItems]) {
-        const parent = resolveParent(item)
-        if (!parent) continue
-        const arr = childMatchesByParent.get(parent.id) ?? []
-        arr.push(item)
-        childMatchesByParent.set(parent.id, arr)
-      }
-
-      const emitted = new Set<string>()
-      const buildRows = (list: SessionMeta[]): SessionListRow[] => {
-        const rows: SessionListRow[] = []
-        for (const item of list) {
-          const anchor = resolveParent(item) ?? item
-          if (emitted.has(anchor.id)) continue
-          emitted.add(anchor.id)
-          const kids = childMatchesByParent.get(anchor.id)
-          if (kids && kids.length > 0) {
-            rows.push({ item: anchor, hasChildren: true, childCount: kids.length, isExpanded: true })
-            for (const kid of kids) {
-              if (emitted.has(kid.id)) continue
-              emitted.add(kid.id)
-              rows.push({ item: kid, depth: 1 })
-            }
-          } else {
-            rows.push({ item: anchor })
-          }
-        }
-        return rows
-      }
-
-      const matchingRows = buildRows(matchingFilterItems)
-      const otherRows = buildRows(otherResultItems)
+      const matchingRows: SessionListRow[] = matchingFilterItems.map(flatRow)
+      const otherRows: SessionListRow[] = otherResultItems.map(flatRow)
 
       const groups: EntityListGroup<SessionListRow>[] = []
       if (matchingRows.length > 0) {
@@ -405,10 +320,12 @@ export function SessionList({
       }
     }
 
-    // flatItems only contains visible (expanded + paginated) items.
+    // visibleRows only contains visible (expanded + paginated) rows.
     // collapsedGroupsMeta provides key + count for collapsed groups so we
     // can insert header-only placeholder groups in the correct position.
-    const rows: SessionListRow[] = flatItems.map(item => ({ item }))
+    // Every row is grouped and sorted by its family's view (`groupItem`), which
+    // all rows of a family share, so the stable sorts keep a family together.
+    const rows = visibleRows
 
     if (groupingMode === 'unread') {
       // Two fixed buckets: unread on top, read below. Within each, items keep
@@ -419,19 +336,24 @@ export function SessionList({
       const unreadRows: SessionListRow[] = []
       const readRows: SessionListRow[] = []
       for (const row of rows) {
-        if (row.item.hasUnread) unreadRows.push(row)
+        if (row.groupItem.hasUnread) unreadRows.push(row)
         else readRows.push(row)
       }
-      unreadRows.sort((a, b) => (b.item.lastMessageAt || 0) - (a.item.lastMessageAt || 0))
-      readRows.sort((a, b) => (b.item.lastMessageAt || 0) - (a.item.lastMessageAt || 0))
+      unreadRows.sort((a, b) => (b.groupItem.lastMessageAt || 0) - (a.groupItem.lastMessageAt || 0))
+      readRows.sort((a, b) => (b.groupItem.lastMessageAt || 0) - (a.groupItem.lastMessageAt || 0))
 
       const collapsedUnread = collapsedGroupsMeta.find(m => m.key === 'unread-yes')
       const collapsedRead = collapsedGroupsMeta.find(m => m.key === 'unread-no')
 
-      // For collapsed groups prefer the persisted count (matches how the
-      // date/status branches surface the size of a collapsed bucket).
-      const unreadCount = collapsedUnread ? collapsedUnread.count : unreadRows.length
-      const readCount = collapsedRead ? collapsedRead.count : readRows.length
+      // Unread counts the unread sessions, Read every session in its group: a family with an unread
+      // session sits in Unread with its read ones. Both count the whole list, so neither the loaded page
+      // nor a collapsed group or family changes them.
+      let unreadCount = 0
+      let readCount = 0
+      for (const { members, view } of families) {
+        if (view.hasUnread) unreadCount += members.filter(member => member.item.hasUnread).length
+        else readCount += members.length
+      }
 
       const orderedGroups: EntityListGroup<SessionListRow>[] = [
         {
@@ -440,25 +362,28 @@ export function SessionList({
           items: unreadRows,
           // Empty groups have nothing to collapse into; suppress the caret.
           collapsible: unreadRows.length > 0 || !!collapsedUnread,
-          ...(collapsedUnread ? { collapsedCount: collapsedUnread.count } : {}),
+          ...(collapsedUnread ? { collapsedCount: unreadCount } : {}),
         },
         {
           key: 'unread-no',
           label: t('session.readGroup', { count: readCount }),
           items: readRows,
           collapsible: readRows.length > 0 || !!collapsedRead,
-          ...(collapsedRead ? { collapsedCount: collapsedRead.count } : {}),
+          ...(collapsedRead ? { collapsedCount: readCount } : {}),
         },
       ]
 
-      return withNestedChildren(orderedGroups)
+      return {
+        rows: orderedGroups.flatMap(g => g.items),
+        groups: orderedGroups,
+      }
     }
 
     if (groupingMode === 'anchor') {
-      // Each session lives under its first anchor (multi-anchor sessions
-      // surface in the group of anchors[0] only — keeps row keys unique
-      // and avoids selection ambiguity). Sessions without anchors land in
-      // a stable "ohne Fokus" bucket at the end.
+      // ORCHA: each family lives under its view's first anchor (multi-anchor
+      // sessions surface in the group of anchors[0] only — keeps row keys unique
+      // and avoids selection ambiguity). Sessions without anchors land in a
+      // stable "ohne Fokus" bucket at the end.
       const groupsByKey = new Map<string, { rows: SessionListRow[], sortKey: string, label: string, type: 'feature' | 'befund' | 'anliegen' | 'none' }>()
 
       const ANCHOR_TYPE_ICON: Record<string, string> = {
@@ -473,11 +398,9 @@ export function SessionList({
       const truncateTitle = (s: string): string =>
         s.length <= HEADER_MAX_TITLE_LEN ? s : s.slice(0, HEADER_MAX_TITLE_LEN - 1).trimEnd() + '…'
 
-      // Pre-pass over the full items list (not just `rows` which is filtered to
-      // visible/expanded items): build a key → AnchorRef map so collapsed
-      // anchor groups can render the snapshot title even when none of their
-      // sessions are currently in `rows`. Without this, a collapsed bucket
-      // falls back to the bare UUID — visually useless.
+      // Pre-pass over the full items list (not just `rows`, which only holds
+      // visible/expanded rows): key → anchor title, so collapsed anchor groups
+      // show the snapshot title instead of the bare UUID.
       const titleByKey = new Map<string, { title: string; type: 'feature' | 'befund' | 'anliegen' }>()
       for (const item of items) {
         const first = item.anchors?.[0]
@@ -489,7 +412,7 @@ export function SessionList({
       }
 
       for (const row of rows) {
-        const first = row.item.anchors?.[0]
+        const first = row.groupItem.anchors?.[0]
         if (first) {
           const key = `anchor-${first.type}:${first.id}`
           if (!groupsByKey.has(key)) {
@@ -536,8 +459,7 @@ export function SessionList({
               })
             } else {
               // Anchor referenced in collapsed-meta but no longer present in any
-              // session (anchor was removed from every session in the bucket).
-              // Fallback: show the icon + a placeholder, sort last among its type.
+              // session. Fallback: icon + placeholder, sorted last among its type.
               const remainder = meta.key.replace(/^anchor-/, '')
               const colonIdx = remainder.indexOf(':')
               const type = (colonIdx >= 0 ? remainder.slice(0, colonIdx) : '') as 'feature' | 'befund' | 'anliegen' | 'none'
@@ -555,7 +477,8 @@ export function SessionList({
 
       const orderedGroups: EntityListGroup<SessionListRow>[] = []
       for (const [key, group] of groupsByKey) {
-        group.rows.sort((a, b) => (b.item.lastMessageAt || 0) - (a.item.lastMessageAt || 0))
+        // Stable sort by the family view keeps each family together
+        group.rows.sort((a, b) => (b.groupItem.lastMessageAt || 0) - (a.groupItem.lastMessageAt || 0))
         const collapsedMeta = collapsedGroupsMeta.find(m => m.key === key)
         orderedGroups.push({
           key,
@@ -579,7 +502,10 @@ export function SessionList({
         orderedGroups[0].collapsible = false
       }
 
-      return withNestedChildren(orderedGroups)
+      return {
+        rows: orderedGroups.flatMap(g => g.items),
+        groups: orderedGroups,
+      }
     }
 
     if (groupingMode === 'status') {
@@ -589,7 +515,7 @@ export function SessionList({
       // Build groups from visible items
       const groupsByKey = new Map<string, { rows: SessionListRow[], statusId: string }>()
       for (const row of rows) {
-        const statusId = getSessionStatus(row.item)
+        const statusId = getSessionStatus(row.groupItem)
         const key = `status-${statusId}`
         if (!groupsByKey.has(key)) groupsByKey.set(key, { rows: [], statusId })
         groupsByKey.get(key)!.rows.push(row)
@@ -607,7 +533,7 @@ export function SessionList({
       for (const [key, { rows: groupRows, statusId }] of groupsByKey) {
         const state = sessionStatuses.find(s => s.id === statusId)
         if (!state) continue
-        groupRows.sort((a, b) => (b.item.lastMessageAt || 0) - (a.item.lastMessageAt || 0))
+        groupRows.sort((a, b) => (b.groupItem.lastMessageAt || 0) - (a.groupItem.lastMessageAt || 0))
         const collapsedMeta = collapsedGroupsMeta.find(m => m.key === key)
         orderedGroups.push({
           key,
@@ -628,7 +554,10 @@ export function SessionList({
         orderedGroups[0].collapsible = false
       }
 
-      return withNestedChildren(orderedGroups)
+      return {
+        rows: orderedGroups.flatMap(g => g.items),
+        groups: orderedGroups,
+      }
     }
 
     if (groupingMode === 'project') {
@@ -642,7 +571,7 @@ export function SessionList({
 
       const groupsByKey = new Map<string, { rows: SessionListRow[], projectId: string | null }>()
       for (const row of rows) {
-        const rawProjectId = (row.item as { projectId?: string }).projectId
+        const rawProjectId = row.groupItem.projectId
         const resolvedProjectId = rawProjectId && projectNameById.has(rawProjectId) ? rawProjectId : null
         const key = resolvedProjectId ? `project-${resolvedProjectId}` : 'project-__none__'
         if (!groupsByKey.has(key)) groupsByKey.set(key, { rows: [], projectId: resolvedProjectId })
@@ -660,7 +589,7 @@ export function SessionList({
 
       const orderedGroups: EntityListGroup<SessionListRow>[] = []
       for (const [key, { rows: groupRows, projectId }] of groupsByKey) {
-        groupRows.sort((a, b) => (b.item.lastMessageAt || 0) - (a.item.lastMessageAt || 0))
+        groupRows.sort((a, b) => (b.groupItem.lastMessageAt || 0) - (a.groupItem.lastMessageAt || 0))
         const collapsedMeta = collapsedGroupsMeta.find(m => m.key === key)
         const label = projectId
           ? (projectNameById.get(projectId) ?? t('sidebar.unknownProject', { defaultValue: 'Unknown project' }))
@@ -686,7 +615,10 @@ export function SessionList({
         orderedGroups[0].collapsible = false
       }
 
-      return withNestedChildren(orderedGroups)
+      return {
+        rows: orderedGroups.flatMap(g => g.items),
+        groups: orderedGroups,
+      }
     }
 
     // Default: group by date
@@ -694,7 +626,7 @@ export function SessionList({
     const groupDates = new Map<string, Date>()
 
     for (const row of rows) {
-      const day = startOfDay(new Date(row.item.lastMessageAt || 0))
+      const day = startOfDay(new Date(row.groupItem.lastMessageAt || 0))
       const groupKey = day.toISOString()
 
       if (!groupsByKey.has(groupKey)) {
@@ -736,43 +668,41 @@ export function SessionList({
       orderedGroups[0].collapsible = false
     }
 
-    return withNestedChildren(orderedGroups)
-  }, [isSearchMode, matchingFilterItems, otherResultItems, flatItems, groupingMode, sessionStatuses, projects, collapsedGroupsMeta, t, childrenByParent, expandedParents, itemsById, lookupMeta])
+    return {
+      rows,
+      groups: orderedGroups,
+    }
+  }, [isSearchMode, matchingFilterItems, otherResultItems, visibleRows, groupingMode, sessionStatuses, projects, collapsedGroupsMeta, families, items, t, i18n.resolvedLanguage])
 
   const flatRows = rowData.rows
 
   const collapseAllGroups = useCallback(() => {
-    // ORCHA §bg-child-sessions (p9): nested children don't form groups of their
-    // own — only top-level items contribute collapse keys.
-    const topLevelItems = nestedChildIds.size > 0
-      ? items.filter(item => !nestedChildIds.has(item.id))
-      : items
     if (groupingMode === 'status') {
-      const allKeys = new Set(topLevelItems.map(item => `status-${getSessionStatus(item)}`))
+      const allKeys = new Set(items.map(item => `status-${getSessionStatus(item)}`))
       setCollapsedGroups(allKeys)
     } else if (groupingMode === 'unread') {
-      const allKeys = new Set(topLevelItems.map(item => item.hasUnread ? 'unread-yes' : 'unread-no'))
+      const allKeys = new Set(items.map(item => item.hasUnread ? 'unread-yes' : 'unread-no'))
       setCollapsedGroups(allKeys)
     } else if (groupingMode === 'anchor') {
-      const allKeys = new Set(topLevelItems.map(item => {
+      const allKeys = new Set(items.map(item => {
         const first = item.anchors?.[0]
         return first ? `anchor-${first.type}:${first.id}` : 'anchor-none'
       }))
       setCollapsedGroups(allKeys)
     } else if (groupingMode === 'project') {
       const knownProjectIds = new Set((projects ?? []).map(p => p.id))
-      const allKeys = new Set(topLevelItems.map(item => {
+      const allKeys = new Set(items.map(item => {
         const pid = (item as { projectId?: string }).projectId
         return pid && knownProjectIds.has(pid) ? `project-${pid}` : 'project-__none__'
       }))
       setCollapsedGroups(allKeys)
     } else {
-      const allKeys = new Set(topLevelItems.map(item =>
+      const allKeys = new Set(items.map(item =>
         startOfDay(new Date(item.lastMessageAt || 0)).toISOString()
       ))
       setCollapsedGroups(allKeys)
     }
-  }, [items, groupingMode, projects, nestedChildIds])
+  }, [items, groupingMode, projects])
   const expandAllGroups = useCallback(() => {
     setCollapsedGroups(new Set())
   }, [])
@@ -831,6 +761,57 @@ export function SessionList({
       interactions.keyboard.setActiveIndex(newIndex)
     }
   }, [selectionStore.state.selected, flatRows, interactions.keyboard])
+
+  // --- Sub-session families ---
+  const highlightedSessionId = focusedSessionId !== undefined ? focusedSessionId : selectionStore.state.selected
+
+  // Collapsing moves the keyboard position from the rows it hides to the parent, without opening the
+  // parent (the chat keeps its session), and drops them from a multi-selection, so batch actions never
+  // reach rows you can't see.
+  const toggleFamily = useCallback((row: SessionListRow) => {
+    const id = row.item.id
+    if (row.collapsed) {
+      updateCollapsedFamilies(prev => {
+        const next = new Set(prev)
+        next.delete(id)
+        return next
+      })
+      return
+    }
+    const index = rowIndexMap.get(id) ?? -1
+    const hidden = new Set<string>()
+    for (let i = index + 1; i < flatRows.length && flatRows[i].depth > row.depth; i++) hidden.add(flatRows[i].item.id)
+    updateCollapsedFamilies(prev => {
+      const next = new Set(prev)
+      next.delete(id) // re-added last: the saved set keeps the most recent
+      next.add(id)
+      return next
+    })
+    if (hidden.has(flatRows[interactions.keyboard.activeIndex]?.item.id ?? '')) {
+      interactions.keyboard.setActiveIndex(index)
+    }
+    selectionStore.setState(prev => {
+      if (!MultiSelect.isMultiSelectActive(prev)) return prev
+      const dropped = [...prev.selectedIds].filter(selectedId => hidden.has(selectedId))
+      return dropped.length > 0 ? MultiSelect.removeFromSelection(prev, dropped) : prev
+    })
+  }, [rowIndexMap, flatRows, interactions.keyboard, selectionStore, updateCollapsedFamilies])
+
+  // Reveal the highlighted session when it lands in a collapsed family (a deep link, a notification, a
+  // new branch). Once per session, so collapsing the family of the session you're on keeps it closed.
+  const revealedSessionRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (!highlightedSessionId || revealedSessionRef.current === highlightedSessionId) return
+    const ancestors = ancestorIds(families, highlightedSessionId)
+    if (!ancestors) return // not in the list (yet)
+    revealedSessionRef.current = highlightedSessionId
+    if (!ancestors.some(id => collapsedFamilies.has(id))) return
+    updateCollapsedFamilies(prev => {
+      const next = new Set(prev)
+      for (const id of ancestors) next.delete(id)
+      return next
+    })
+  }, [highlightedSessionId, families, collapsedFamilies, updateCollapsedFamilies])
 
   // Focus active item when zone gains keyboard focus
   useEffect(() => {
@@ -957,7 +938,7 @@ export function SessionList({
     flatLabels,
     labels,
     searchQuery: resolvedSearchQuery,
-    selectedSessionId: focusedSessionId !== undefined ? focusedSessionId : selectionStore.state.selected,
+    selectedSessionId: highlightedSessionId,
     isMultiSelectActive,
     sessionOptions,
     contentSearchResults,
@@ -971,7 +952,7 @@ export function SessionList({
     projects, onSetProjectId,
     handleSelectSessionById, handleOpenInNewWindow, setSendToWorkspace, handleFocusZone, handleKeyDown,
     sessionStatuses, flatLabels, labels, resolvedSearchQuery,
-    focusedSessionId, selectionStore.state.selected, isMultiSelectActive,
+    highlightedSessionId, isMultiSelectActive,
     sessionOptions, contentSearchResults, activeChatMatchInfo, hasPendingPrompt,
   ])
 
@@ -1034,15 +1015,6 @@ export function SessionList({
         renderItem={(row, _indexInGroup, isFirstInGroup) => {
           const flatIndex = rowIndexMap.get(row.item.id) ?? 0
           const rowProps = interactions.getRowProps(row, flatIndex)
-          // ORCHA §session-nesting: descendant activity on the chip (collapsed
-          // parent) or, for rows without visible children, in the row's own
-          // spinner slot (running descendant archived / out of view).
-          const activity = getRowActivityIndicator({
-            isProcessing: row.item.isProcessing,
-            hasChildren: row.hasChildren,
-            isExpanded: row.isExpanded,
-            descendantProcessing: hasProcessingDescendant(row.item.id, descendantIndex),
-          })
           return (
             <SessionItem
               item={row.item}
@@ -1054,16 +1026,12 @@ export function SessionList({
               onSelect={() => handleSelectSession(row, flatIndex)}
               onToggleSelect={() => handleToggleSelect(row, flatIndex)}
               onRangeSelect={() => handleRangeSelect(flatIndex)}
-              // ORCHA §bg-child-sessions (p9): nested child-session rendering.
-              // In search mode expansion is a transient override (auto-expanded
-              // for matched children) — no toggle, persisted state untouched.
               depth={row.depth}
-              hasChildren={row.hasChildren}
-              childCount={row.childCount}
-              isChildrenExpanded={row.isExpanded}
-              onToggleChildren={row.hasChildren && !isSearchMode ? () => toggleParentExpanded(row.item.id) : undefined}
-              hasWorkingChild={activity === 'chip'}
-              hasWorkingDescendant={activity === 'row'}
+              guides={row.guides}
+              inheritedLabels={row.parent?.labels}
+              subSessions={row.descendantCount > 0
+                ? { count: row.descendantCount, collapsed: row.collapsed, onToggle: () => toggleFamily(row) }
+                : undefined}
             />
           )
         }}
@@ -1119,7 +1087,7 @@ export function SessionList({
           role: 'listbox',
           'aria-label': 'Sessions',
         }}
-        scrollAreaClassName="select-none mask-fade-top-short"
+        scrollAreaClassName="select-none"
         collapsedGroups={collapsedGroups}
         onToggleCollapse={toggleGroupCollapse}
         onCollapseAll={collapseAllGroups}

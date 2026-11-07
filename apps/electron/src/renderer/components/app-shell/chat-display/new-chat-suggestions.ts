@@ -7,18 +7,24 @@
 import type { LoadedSource } from '@craft-agent/shared/sources/types'
 import { inferGoogleServiceFromUrl, inferMicrosoftServiceFromUrl } from '@craft-agent/shared/sources/types'
 import { deriveConnectionStatus } from '../../ui/source-connection-status'
+import { parseMentions } from '@craft-agent/shared/mentions'
 
 /** Source kinds (prompt about one workspace source) */
 type SourceSuggestionKind = 'email' | 'calendar' | 'chat' | 'tasks' | 'issues' | 'code' | 'docs' | 'source'
 /** Top-up kinds (no source needed) */
 type TopUpSuggestionKind = 'connectEmail' | 'news' | 'files'
-export type NewChatSuggestionKind = SourceSuggestionKind | TopUpSuggestionKind
+/** User-defined starter from workspace config.chatStarters */
+type CustomSuggestionKind = 'custom'
+export type NewChatSuggestionKind = SourceSuggestionKind | TopUpSuggestionKind | CustomSuggestionKind
 
 export interface NewChatSuggestion {
   kind: NewChatSuggestionKind
   /** Workspace source the prompt is about; absent for top-ups */
   sourceSlug?: string
   sourceName?: string
+  /** Label and prompt for user-defined custom starters */
+  customLabel?: string
+  customPrompt?: string
 }
 
 export const NEW_CHAT_SUGGESTION_COUNT = 3
@@ -86,6 +92,20 @@ function isSuggestible(source: LoadedSource): boolean {
   return status === 'connected' || status === 'untested'
 }
 
+/**
+ * Convert user-defined chatStarters into custom suggestions, capped at 3.
+ * Used instead of source-based auto-generation when the workspace config defines starters.
+ */
+export function pickCustomSuggestions(
+  chatStarters: ReadonlyArray<{ label: string; prompt: string }>
+): NewChatSuggestion[] {
+  return chatStarters.slice(0, NEW_CHAT_SUGGESTION_COUNT).map(s => ({
+    kind: 'custom' as const,
+    customLabel: s.label,
+    customPrompt: s.prompt,
+  }))
+}
+
 export function pickNewChatSuggestions(sources: readonly LoadedSource[]): NewChatSuggestion[] {
   const firstByKind = new Map<SourceSuggestionKind, LoadedSource>()
   const generic: LoadedSource[] = []
@@ -115,15 +135,34 @@ export function pickNewChatSuggestions(sources: readonly LoadedSource[]): NewCha
   return picks
 }
 
+/**
+ * Sources to enable and skills to invoke when the suggestion is sent. A built-in suggestion is
+ * about its one source; a custom starter carries `[source:…]` / `[skill:…]` mentions in its prompt,
+ * which count only when they name a source or skill of the workspace.
+ */
+export function newChatSuggestionMentions(
+  suggestion: NewChatSuggestion,
+  skillSlugs: readonly string[],
+  sourceSlugs: readonly string[],
+): { sources: string[]; skills: string[] } {
+  if (suggestion.kind === 'custom') {
+    const { sources, skills } = parseMentions(suggestion.customPrompt ?? '', [...skillSlugs], [...sourceSlugs])
+    return { sources, skills }
+  }
+  return { sources: suggestion.sourceSlug ? [suggestion.sourceSlug] : [], skills: [] }
+}
+
 type Translate = (key: string, options: { source: string }) => string
 
-/** Chip text: the source by name. */
+/** Chip text: the source by name, or the custom label. */
 export function newChatSuggestionLabel(suggestion: NewChatSuggestion, t: Translate): string {
+  if (suggestion.kind === 'custom') return suggestion.customLabel ?? ''
   return t(`chat.suggestions.${suggestion.kind}`, { source: suggestion.sourceName ?? '' })
 }
 
-/** The message sent: a workspace source as a `[source:slug]` mention (shown as its badge, enabled on send). */
+/** The message sent: a workspace source as a `[source:slug]` mention, or the raw custom prompt. */
 export function newChatSuggestionMessage(suggestion: NewChatSuggestion, t: Translate): string {
+  if (suggestion.kind === 'custom') return suggestion.customPrompt ?? ''
   return t(`chat.suggestions.${suggestion.kind}`, {
     source: suggestion.sourceSlug ? `[source:${suggestion.sourceSlug}]` : (suggestion.sourceName ?? ''),
   })

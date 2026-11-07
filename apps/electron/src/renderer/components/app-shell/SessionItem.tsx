@@ -1,22 +1,20 @@
-import { formatDistanceToNowStrict } from "date-fns"
-import type { Locale } from "date-fns"
 import { useTranslation } from "react-i18next"
-import { AlertCircle, ChevronRight, Flag, Hand } from "lucide-react"
+import { AlertCircle, ChevronRight, CodeXml, Flag, Hand } from "lucide-react"
 import { useActionLabel } from "@/actions"
 import { cn } from "@/lib/utils"
 import { rendererPerf } from "@/lib/perf"
 import { Spinner } from "@craft-agent/ui"
-import { EntityRow } from "@/components/ui/entity-row"
+import { EntityRow, type TreeGuide } from "@/components/ui/entity-row"
 import { EntityListBadge } from "@/components/ui/entity-list-badge"
 import { SessionMenu } from "./SessionMenu"
 import { BatchSessionMenu } from "./BatchSessionMenu"
 import { CompactSessionMenu } from "./CompactSessionMenu"
 import { SessionStatusIcon } from "./SessionStatusIcon"
-import { SessionBadges } from "./SessionBadges"
+import { SessionBadges, chipButtonProps } from "./SessionBadges"
 import { SessionProjectColorWrapper } from "./SessionProjectColorWrapper"
 import { hasTransferTargets } from "./transfer-targets"
 import { useProjectColorTreatment } from "@/hooks/useProjectColorTreatment"
-import { getSessionTitle, getSessionPreviewText, highlightMatch, hasUnreadMeta, shortTimeLocale } from "@/utils/session"
+import { getSessionTitle, getSessionPreviewText, highlightMatch, hasUnreadMeta, formatShortAge } from "@/utils/session"
 import { useSessionListContext } from "@/context/SessionListContext"
 import { useAppShellContext } from "@/context/AppShellContext"
 import { navigate, routes } from "@/lib/navigate"
@@ -50,21 +48,14 @@ export interface SessionItemProps {
   onSelect: () => void
   onToggleSelect?: () => void
   onRangeSelect?: () => void
-  // ORCHA §bg-child-sessions (p9): nested child-session rendering.
-  /** Nesting depth (0/undefined = top-level row, 1+ = indented child row) */
+  /** Nesting level under the session's list parent (0 = top level) */
   depth?: number
-  /** Row has nested child sessions — renders the chevron + count chip */
-  hasChildren?: boolean
-  /** Number of nested child sessions */
-  childCount?: number
-  /** Whether the nested child rows are currently expanded */
-  isChildrenExpanded?: boolean
-  /** Toggle expansion. When undefined (e.g. search mode), the chevron is a static indicator. */
-  onToggleChildren?: () => void
-  /** Any nested child session is currently processing — shown on the collapsed chip */
-  hasWorkingChild?: boolean
-  /** ORCHA §session-nesting: a descendant without a row in the view (archived/filtered) is processing — shown in the row's own spinner slot */
-  hasWorkingDescendant?: boolean
+  /** Tree lines of the levels above the row (see `EntityRow`) */
+  guides?: readonly TreeGuide[]
+  /** Label entries the row's parent shows too (a task's family shares its label), left out here */
+  inheritedLabels?: readonly string[]
+  /** The sessions nested under this row, when it has any */
+  subSessions?: { count: number; collapsed: boolean; onToggle: () => void }
 }
 
 /**
@@ -72,7 +63,9 @@ export interface SessionItemProps {
  * - leading glyph = the user's workflow status (click to change it)
  * - title (600 when unread) · age (unread: led by an 8px accent dot, age in accent)
  * - subtitle = run state with its own shape and color (needs you · working · failed · plan ready),
- *   else the labels (chips tinted with each label's color), else the session preview
+ *   else the labels (chips tinted with each label's color), else the session preview (top level only)
+ * - sub-sessions: a parent's subtitle line leads with their toggle, under the glyph, where the tree line to
+ *   its nested rows starts; a nested row leaves out the labels its parent shows
  */
 export function SessionItem({
   item,
@@ -83,13 +76,10 @@ export function SessionItem({
   onSelect,
   onToggleSelect,
   onRangeSelect,
-  depth,
-  hasChildren,
-  childCount,
-  isChildrenExpanded,
-  onToggleChildren,
-  hasWorkingChild,
-  hasWorkingDescendant,
+  depth = 0,
+  guides,
+  inheritedLabels,
+  subSessions,
 }: SessionItemProps) {
   const { t } = useTranslation()
   const ctx = useSessionListContext()
@@ -105,6 +95,7 @@ export function SessionItem({
   const chatMatchCount = isActiveSession ? activeMatch!.count : ripgrepMatchCount
   const hasMatch = chatMatchCount != null && chatMatchCount > 0
   const hasLabels = !!(item.labels && item.labels.length > 0 && ctx.flatLabels.length > 0 && item.labels.some(entry => {
+    if (inheritedLabels?.includes(entry)) return false
     const labelId = extractLabelId(entry)
     return ctx.flatLabels.some(l => l.id === labelId)
   }))
@@ -117,8 +108,7 @@ export function SessionItem({
   // Run state owns the subtitle line; attention states win (spec §2.4).
   const runState: 'needs-you' | 'working' | 'failed' | 'plan' | null = hasPendingPrompt
     ? 'needs-you'
-    // ORCHA §session-nesting: a row also reads "working" when a descendant out of view is processing
-    : (item.isProcessing || hasWorkingDescendant)
+    : item.isProcessing
       ? 'working'
       : item.lastMessageRole === 'error'
         ? 'failed'
@@ -127,8 +117,9 @@ export function SessionItem({
           : null
   const needsAttention = runState === 'needs-you' || runState === 'failed'
   // One line, one subject: run state, else labels (full width), else the preview. Squeezing the preview
-  // and the chips into one line truncated both into fragments ("Run `gh issu…" · "Schedul…").
-  const previewText = runState || hasLabels ? null : getSessionPreviewText(item)
+  // and the chips into one line truncated both into fragments ("Run `gh issu…" · "Schedul…"). A nested
+  // row skips the preview (its prompt, which its parent wrote), so a family stays compact.
+  const previewText = runState || hasLabels || depth > 0 ? null : getSessionPreviewText(item)
 
   // Resolve the bound project so the row can show a project-themed stripe /
   // tint and reveal the project name on hover. Treatment is a user preference
@@ -167,28 +158,6 @@ export function SessionItem({
     onSelect()
   }
 
-  // ORCHA §bg-child-sessions (p9): chevron + child-count chip rendered inline
-  // after the title. Click toggles expansion (stopPropagation so the row isn't
-  // selected). Without a toggle handler (search mode) it's a static indicator.
-  const childToggleChip = hasChildren ? (
-    <span
-      role="button"
-      tabIndex={-1}
-      aria-expanded={isChildrenExpanded}
-      title={t('sidebar.childSessions', { count: childCount ?? 0 })}
-      onMouseDown={(e) => { e.preventDefault(); e.stopPropagation() }}
-      onClick={(e) => { e.stopPropagation(); onToggleChildren?.() }}
-      className={cn(
-        "inline-flex items-center gap-px pl-0.5 pr-1 py-0.5 rounded-[6px] text-[10px] font-medium tabular-nums leading-tight whitespace-nowrap",
-        "bg-foreground/5 text-foreground/60",
-        onToggleChildren && "hover:bg-foreground/10 cursor-pointer",
-      )}
-    >
-      <ChevronRight className={cn("h-3 w-3 transition-transform duration-150", isChildrenExpanded && "rotate-90")} />
-      {childCount}
-      {!isChildrenExpanded && hasWorkingChild && <Spinner className="text-[8px] ml-1" />}
-    </span>
-  ) : null
   const subtitle = runState === 'needs-you' ? (
     <span className="flex items-center gap-1.5 min-w-0 text-info">
       <Hand className="size-3.5 shrink-0" aria-hidden="true" />
@@ -211,12 +180,56 @@ export function SessionItem({
     </span>
   ) : previewText
 
+  // Sub-session toggle, under the status glyph: the chevron turns like a group header's, and the rows
+  // appear at once. The count is in its name and tooltip.
+  const subSessionToggleLabel = subSessions && (subSessions.collapsed
+    ? t("session.showSubSessions", { count: subSessions.count })
+    : t("session.hideSubSessions", { count: subSessions.count }))
+  const subSessionToggle = subSessions ? (
+    <div
+      {...chipButtonProps(subSessions.onToggle)}
+      data-slot="sub-session-toggle"
+      aria-expanded={!subSessions.collapsed}
+      aria-label={subSessionToggleLabel}
+      title={subSessionToggleLabel}
+      className={cn(
+        // A 20px circle like the status glyph's hover above it, laid out at the glyph's 16px
+        "relative grid size-5 -m-0.5 shrink-0 place-items-center rounded-full text-tertiary cursor-pointer -outline-offset-2",
+        "transition-[background-color,color] duration-micro ease-out-subtle hover:bg-fill-pressed hover:text-foreground hover:duration-instant",
+        // Touch: a 36px-wide hit area down to the row's edge, clear of the status glyph above
+        "@max-mobile/shell:before:absolute @max-mobile/shell:before:-inset-x-2 @max-mobile/shell:before:top-0 @max-mobile/shell:before:-bottom-3",
+      )}
+    >
+      <ChevronRight
+        aria-hidden
+        className={cn(
+          "size-3.5 transition-transform duration-(--spring-snap-dur) ease-(--spring-snap)",
+          !subSessions.collapsed && "rotate-90",
+        )}
+      />
+    </div>
+  ) : undefined
+  // A parent with nothing else on its subtitle line names its sub-sessions there, beside the toggle. The
+  // text toggles too (a mouse convenience: the chevron is the control assistive tech gets).
+  const subSessionCount = subSessions && !subtitle && !hasLabels ? (
+    <span
+      aria-hidden="true"
+      onMouseDown={(e) => { e.stopPropagation(); e.preventDefault() }}
+      onClick={(e) => { e.stopPropagation(); subSessions.onToggle() }}
+      className="cursor-pointer text-tertiary transition-colors duration-micro ease-out-subtle hover:text-foreground hover:duration-instant"
+    >
+      {t("session.subSessionCount", { count: subSessions.count })}
+    </span>
+  ) : null
+
   return (
     <SessionProjectColorWrapper color={projectColor} treatment={projectColorTreatment}>
     <EntityRow
-      // ORCHA §bg-child-sessions (p9): indent nested child rows
-      className={cn("session-item", depth === 1 && "pl-5", (depth ?? 0) >= 2 && "pl-10")}
+      className="session-item"
       dataAttributes={{ 'data-session-id': item.id }}
+      depth={depth}
+      guides={guides}
+      guideBelow={!!subSessions && !subSessions.collapsed}
       isSelected={isSelected}
       isInMultiSelect={isInMultiSelect}
       // When a project stripe is drawn at the leading edge, suppress EntityRow's
@@ -281,12 +294,15 @@ export function SessionItem({
       icon={<SessionStatusIcon item={item} />}
       title={ctx.searchQuery ? highlightMatch(title, ctx.searchQuery) : title}
       titleClassName={cn(isUnread && "font-semibold", item.isAsyncOperationOngoing && "animate-shimmer-text")}
-      subtitle={subtitle}
-      subtitleTrailing={hasLabels && !needsAttention ? <SessionBadges item={item} /> : undefined}
+      subtitle={subtitle ?? subSessionCount}
+      subtitleLeading={subSessionToggle}
+      subtitleTrailing={hasLabels && !needsAttention ? <SessionBadges item={item} hiddenLabels={inheritedLabels} /> : undefined}
       titleSuffix={
-        (childToggleChip || projectName || hasMessagingBinding) ? (
+        (projectName || hasMessagingBinding || item.codingMode) ? (
           <div className="flex items-center gap-1">
-            {childToggleChip}
+            {item.codingMode && (
+              <CodeXml className="size-3.5 shrink-0 text-tertiary" aria-label={t("chat.codingMode.label")} />
+            )}
             {projectName && (
               // Revealed on hover/focus only, and out of the layout otherwise: an invisible (opacity-0)
               // name still reserved its width and cut the title short for nothing. Solved tertiary
@@ -324,7 +340,7 @@ export function SessionItem({
           {item.isFlagged ? (
             <Flag className="size-3.5 text-info" aria-label={t("sidebar.flagged")} />
           ) : item.lastMessageAt ? (
-            formatDistanceToNowStrict(new Date(item.lastMessageAt), { locale: shortTimeLocale as Locale, roundingMethod: 'floor' })
+            formatShortAge(item.lastMessageAt)
           ) : null}
         </span>
       ) : hasMatch ? (
@@ -338,7 +354,7 @@ export function SessionItem({
         <Flag className="size-3.5 text-info" aria-label={t("sidebar.flagged")} />
       ) : item.lastMessageAt ? (
         <span>
-          {formatDistanceToNowStrict(new Date(item.lastMessageAt), { locale: shortTimeLocale as Locale, roundingMethod: 'floor' })}
+          {formatShortAge(item.lastMessageAt)}
         </span>
       ) : undefined}
     />

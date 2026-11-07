@@ -87,6 +87,8 @@ export interface StoredConfig {
   // Prompt caching & context
   extendedPromptCache?: boolean;  // Use 1h prompt cache TTL instead of 5m (default: false)
   enable1MContext?: boolean;  // Enable 1M context window for supported models (default: false — opt-in; requires Anthropic Tier 4+)
+  autoCompactWindow?: number;  // Auto-compact when the context reaches this many tokens (100000–1000000), in Claude and Pi sessions. Unset: each SDK's default, near the model's full window (1M on Opus 5.5)
+  subagentModel?: SubagentModel;  // Claude: model for subagents whose call names none (never above the session's model). Unset: same as the session
   // Token optimization
   rtkEnabled?: boolean;  // Route Bash commands through rtk to compress tool output (default: false). https://github.com/rtk-ai/rtk
   rtkExcludeCommands?: string[];  // Base commands never routed through rtk, e.g. ["grep", "cat"] (default: none)
@@ -571,6 +573,56 @@ export function setEnable1MContext(enabled: boolean): void {
   const config = loadStoredConfig();
   if (!config) return;
   config.enable1MContext = enabled;
+  saveConfig(config);
+}
+
+/**
+ * Get the Claude auto-compact window in tokens, or undefined for the SDK default.
+ * The SDK compacts near min(window, model limit). Its default is the model's full window, and the
+ * CLI runs first-party Opus with 1M even when enable1MContext is off, so a long session re-reads up
+ * to ~1M tokens on every call. A smaller window trades more compactions for cheaper calls; subagents
+ * inherit it. Only integers the CLI accepts (100K–1M) are returned.
+ */
+export function getAutoCompactWindow(): number | undefined {
+  const value = loadStoredConfig()?.autoCompactWindow;
+  return Number.isInteger(value) && value! >= 100_000 && value! <= 1_000_000 ? value : undefined;
+}
+
+/** Set the Claude auto-compact window; `null` (or a value outside 100K–1M) restores the SDK default. */
+export function setAutoCompactWindow(tokens: number | null): void {
+  const config = loadStoredConfig();
+  if (!config) return;
+  if (tokens !== null && Number.isInteger(tokens) && tokens >= 100_000 && tokens <= 1_000_000) {
+    config.autoCompactWindow = tokens;
+  } else {
+    delete config.autoCompactWindow;
+  }
+  saveConfig(config);
+}
+
+/** Models a subagent can be moved to, cheapest first (the Agent tool's `model` aliases). */
+export const SUBAGENT_MODELS = ['haiku', 'sonnet'] as const;
+export type SubagentModel = typeof SUBAGENT_MODELS[number];
+
+/**
+ * Get the model for Claude subagents whose Agent call names none, or undefined to run them on the
+ * session's model (the SDK default). Subagents re-read their context on every step, so running
+ * them on the session's model (often Opus) is a large share of a session's cost.
+ */
+export function getSubagentModel(): SubagentModel | undefined {
+  const value = loadStoredConfig()?.subagentModel;
+  return SUBAGENT_MODELS.includes(value as SubagentModel) ? value : undefined;
+}
+
+/** Set the default subagent model; `null` runs subagents on the session's model. */
+export function setSubagentModel(model: SubagentModel | null): void {
+  const config = loadStoredConfig();
+  if (!config) return;
+  if (model && SUBAGENT_MODELS.includes(model)) {
+    config.subagentModel = model;
+  } else {
+    delete config.subagentModel;
+  }
   saveConfig(config);
 }
 

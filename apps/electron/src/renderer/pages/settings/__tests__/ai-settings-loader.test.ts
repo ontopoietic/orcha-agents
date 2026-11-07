@@ -7,6 +7,8 @@ const api = (): Api => ({
   getDefaultThinkingLevel: async () => 'medium',
   getExtendedPromptCache: async () => false,
   getEnable1MContext: async () => true,
+  getAutoCompactWindow: async () => 400_000,
+  getSubagentModel: async () => null,
   getRtkEnabled: async () => false,
   getRtkStatus: async () => ({ installed: false, version: null, path: null, outdated: false, minSafeVersion: '1.0.0', foundPath: null, updateCommand: '' }),
   getCredentialHealth: async () => ({ healthy: true, issues: [] }),

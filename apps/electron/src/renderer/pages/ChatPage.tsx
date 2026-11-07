@@ -21,6 +21,7 @@ import { coerceInputText } from '@/lib/input-text'
 import { deriveSessionMessagesLoadState, formatSessionLoadFailure } from '@/lib/session-load'
 import { ensureSessionMessagesLoadedAtom, forceSessionMessagesReloadAtom, loadedSessionsAtom, sessionMetaMapAtom } from '@/atoms/sessions'
 import { getSessionTitle } from '@/utils/session'
+import { usePrWatch } from '@/hooks/usePrWatch'
 // Model resolution: connection.defaultModel (no hardcoded defaults)
 import { resolveEffectiveConnectionSlug, isSessionConnectionUnavailable } from '@config/llm-connections'
 
@@ -52,6 +53,7 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
     onAttachmentsChange,
     enabledSources,
     skills,
+    chatStarters,
     labels,
     onSessionLabelsChange,
     enabledModes,
@@ -305,6 +307,9 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
 
   // Working directory for this session
   const workingDirectory = session?.workingDirectory
+  // Coding mode's header PR chip: desktop only, with a folder. The chip itself renders only once that
+  // folder is a git repo whose branch has a PR (see ChatHeaderPrChip).
+  const prWatch = usePrWatch(sessionId, !!sessionOpts.codingMode && !!workingDirectory && !isCompactMode, workingDirectory)
   const activeWorkspace = React.useMemo(
     () => workspaces.find((w) => w.id === activeWorkspaceId) || null,
     [workspaces, activeWorkspaceId]
@@ -457,6 +462,8 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
               onRespondToCredential={onRespondToCredential}
               thinkingLevel={sessionOpts.thinkingLevel}
               onThinkingLevelChange={(level) => setOption('thinkingLevel', level)}
+              codingMode={sessionOpts.codingMode}
+              onCodingModeChange={(enabled) => setOption('codingMode', enabled)}
               permissionMode={sessionOpts.permissionMode}
               previousPermissionMode={sessionOpts.previousPermissionMode}
               onPermissionModeChange={setPermissionMode}
@@ -467,6 +474,7 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
               onAttachmentsChange={handleAttachmentsChange}
               sources={enabledSources}
               skills={skills}
+              chatStarters={chatStarters}
               workspaceId={activeWorkspaceId || undefined}
               onSourcesChange={(slugs) => onSessionSourcesChange?.(sessionId, slugs)}
               workingDirectory={sessionMeta.workingDirectory}
@@ -509,6 +517,15 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
         sharedUrl={sharedUrl}
         workingDirectory={workingDirectory}
         sessionFolderPath={session?.sessionFolderPath}
+        prWatch={prWatch.state}
+        prWatchNav={prWatch.nav}
+        prWatchActiveOrigin={prWatch.activeOrigin}
+        onRefreshPrWatch={prWatch.refresh}
+        onUnbindPr={prWatch.unbind}
+        onSetPrAutoMerge={prWatch.setAutoMerge}
+        prWatchAutoFix={prWatch.autoFix}
+        onSetPrAutoFix={prWatch.setAutoFix}
+        onPrCardOpenChange={prWatch.onCardOpenChange}
       />
       <div className="px-4 py-1.5 border-b border-border/40">
         <SessionAnchorBar sessionId={sessionId} workingDir={session.workingDirectory} sessionDir={sessionDir} />
@@ -533,6 +550,8 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
           onRespondToCredential={onRespondToCredential}
           thinkingLevel={sessionOpts.thinkingLevel}
           onThinkingLevelChange={(level) => setOption('thinkingLevel', level)}
+          codingMode={sessionOpts.codingMode}
+          onCodingModeChange={(enabled) => setOption('codingMode', enabled)}
           permissionMode={sessionOpts.permissionMode}
           previousPermissionMode={sessionOpts.previousPermissionMode}
           onPermissionModeChange={setPermissionMode}
@@ -543,6 +562,7 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
           onAttachmentsChange={handleAttachmentsChange}
           sources={enabledSources}
           skills={skills}
+          chatStarters={chatStarters}
           labels={labels}
           onLabelsChange={(newLabels) => onSessionLabelsChange?.(sessionId, newLabels)}
           workspaceId={activeWorkspaceId || undefined}
