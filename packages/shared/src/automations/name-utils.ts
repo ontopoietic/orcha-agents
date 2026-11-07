@@ -29,11 +29,6 @@ export function deriveAutomationName(event: string, matcher: AutomationMatcher):
     return label.length > 40 ? label.slice(0, 40) + '...' : label;
   }
 
-  if (firstAction.type === 'command') {
-    const label = `Command: ${firstAction.command}`;
-    return label.length > 40 ? label.slice(0, 40) + '...' : label;
-  }
-
   if (firstAction.type === 'script') {
     const label = firstAction.page
       ? `Refresh page ${firstAction.page}`

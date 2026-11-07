@@ -16,14 +16,13 @@
  */
 
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
-import { execSync } from 'node:child_process';
 import { join } from 'node:path';
 import { resolveAutomationsConfigPath, generateShortId } from './resolve-config-path.ts';
 import { compactAutomationHistorySync } from './history-store.ts';
 import { createLogger } from '../utils/debug.ts';
 import { WorkspaceEventBus, type EventPayloadMap } from './event-bus.ts';
 import { PromptHandler, EventLogHandler, WebhookHandler, ScriptHandler, type AutomationsConfigProvider } from './handlers/index.ts';
-import { type AutomationsConfig, type AutomationEvent, type AutomationMatcher, type PendingPrompt, type WebhookActionResult, type ScriptActionResult, type AppEvent, type AgentEvent, type CommandAction, type SdkAutomationCallbackMatcher, type SdkAutomationInput, AGENT_EVENTS } from './types.ts';
+import { type AutomationsConfig, type AutomationEvent, type AutomationMatcher, type PendingPrompt, type WebhookActionResult, type ScriptActionResult, type AppEvent, type AgentEvent, type SdkAutomationCallbackMatcher, type SdkAutomationInput } from './types.ts';
 import { buildPageRefreshMatchers } from '../pages/refresh.ts';
 import { validateAutomationsConfig } from './validation.ts';
 import { matcherMatchesSdk } from './utils.ts';
@@ -562,86 +561,12 @@ export class AutomationSystem implements AutomationsConfigProvider {
   /**
    * Build SDK hook callbacks from automations.json definitions.
    *
-   * For Agent events with command actions, builds callbacks that execute the
-   * shell command and return stdout as the hook reason. This makes command
-   * output visible to the agent (e.g., PreCompact warnings).
+   * Command execution has been removed — all automation actions now go through prompt-based
+   * execution (creating agent sessions via PromptHandler). Agent event automations are not
+   * currently supported via prompts, so this returns empty.
    */
-  buildSdkHooks(sessionId?: string): Partial<Record<AgentEvent, SdkAutomationCallbackMatcher[]>> {
-    if (!this.config) return {};
-
-    const hooks: Partial<Record<AgentEvent, SdkAutomationCallbackMatcher[]>> = {};
-    const workingDir = this.options.workingDir ?? this.options.workspaceRootPath;
-
-    // Pass workspace + session context to command actions via env vars so
-    // PreCompact / SessionEnd / PostToolUse scripts can find the right session
-    // without auto-detection heuristics.
-    const baseEnv: Record<string, string> = {
-      ...process.env as Record<string, string>,
-      CRAFT_WORKSPACE_ROOT: this.options.workspaceRootPath,
-      CRAFT_WORKSPACE_ID: this.options.workspaceId,
-    };
-    if (sessionId) baseEnv.CRAFT_SESSION_ID = sessionId;
-
-    for (const event of AGENT_EVENTS) {
-      const matchers = this.config.automations[event];
-      if (!matchers?.length) continue;
-
-      const enabledMatchers = matchers.filter(m =>
-        m.enabled !== false && m.actions.some(a => a.type === 'command')
-      );
-      if (enabledMatchers.length === 0) continue;
-
-      hooks[event] = enabledMatchers.map(matcher => ({
-        matcher: matcher.matcher,
-        timeout: this.getCommandTimeout(matcher),
-        hooks: [async (_input: SdkAutomationInput, _toolUseId: string, _options: { signal?: AbortSignal }) => {
-          const outputs: string[] = [];
-
-          for (const action of matcher.actions) {
-            if (action.type !== 'command') continue;
-            const cmd = action as CommandAction;
-
-            try {
-              const timeout = cmd.timeout ?? 30000;
-              const stdout = execSync(cmd.command, {
-                encoding: 'utf-8',
-                timeout,
-                cwd: workingDir,
-                env: baseEnv,
-                stdio: ['pipe', 'pipe', 'pipe'],
-              }).trim();
-
-              if (stdout) outputs.push(stdout);
-              log.debug(`[buildSdkHooks] ${event} command succeeded: ${stdout.slice(0, 100)}`);
-            } catch (err: unknown) {
-              // Command failed or timed out — extract stdout if available
-              const execErr = err as { stdout?: string; stderr?: string; message?: string };
-              if (execErr.stdout?.trim()) outputs.push(execErr.stdout.trim());
-              log.debug(`[buildSdkHooks] ${event} command failed: ${execErr.message ?? 'unknown'}`);
-            }
-          }
-
-          return {
-            continue: true,
-            reason: outputs.length > 0 ? outputs.join('\n') : undefined,
-          };
-        }],
-      }));
-    }
-
-    return hooks;
-  }
-
-  /** Extract the longest command timeout from a matcher's actions */
-  private getCommandTimeout(matcher: AutomationMatcher): number {
-    let maxTimeout = 30000;
-    for (const action of matcher.actions) {
-      if (action.type === 'command') {
-        const cmd = action as CommandAction;
-        if (cmd.timeout && cmd.timeout > maxTimeout) maxTimeout = cmd.timeout;
-      }
-    }
-    return maxTimeout;
+  buildSdkHooks(): Partial<Record<AgentEvent, SdkAutomationCallbackMatcher[]>> {
+    return {};
   }
 
   // ============================================================================

@@ -99,16 +99,6 @@ export interface WebhookAction {
   auth?: WebhookAuth;
 }
 
-/** A command action - executes a shell command (Agent events only).
- *  Stdout is returned as the hook reason, making it visible to the agent. */
-export interface CommandAction {
-  type: 'command';
-  /** Shell command to execute */
-  command: string;
-  /** Timeout in milliseconds (default: 30000) */
-  timeout?: number;
-}
-
 /** Runtime a script action executes under (resolved via resolveScriptRuntime) */
 export type ScriptActionRuntime = 'bun' | 'node' | 'python3';
 
@@ -141,7 +131,7 @@ export interface ScriptAction {
   page?: string;
 }
 
-export type AutomationAction = PromptAction | WebhookAction | ScriptAction | CommandAction;
+export type AutomationAction = PromptAction | WebhookAction | ScriptAction;
 
 // ============================================================================
 // Condition Types

@@ -63,12 +63,6 @@ export const WebhookActionSchema = z.object({
   ]).optional(),
 });
 
-export const CommandActionSchema = z.object({
-  type: z.literal('command'),
-  command: z.string().min(1, 'Command cannot be empty'),
-  timeout: z.number().int().positive().optional(),
-});
-
 export const ScriptActionSchema = z.object({
   type: z.literal('script'),
   script: z.string().min(1, 'Script path cannot be empty').superRefine((script, ctx) => {
@@ -95,8 +89,6 @@ export const ActionDefinitionSchema = z.discriminatedUnion('type', [
   PromptActionSchema.strict(),
   WebhookActionSchema.strict(),
   ScriptActionSchema.strict(),
-  // Fork (FORK §2): shell-command actions for Agent events (PreCompact hooks)
-  CommandActionSchema.strict(),
 ]);
 
 // ============================================================================
