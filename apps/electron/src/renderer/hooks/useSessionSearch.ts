@@ -516,7 +516,7 @@ export function useSessionSearch({
   // Outside search a sub-session sits under its parent, and the family is placed, grouped and
   // paginated as a whole by its view. Search results stay flat.
   const families = useMemo(
-    () => isSearchMode ? [] : buildSessionFamilies(searchFilteredItems),
+    () => isSearchMode ? [] : buildSessionFamilies(searchFilteredItems, { childOrder: 'newest-first' }),
     [isSearchMode, searchFilteredItems]
   )
 

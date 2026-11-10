@@ -85,6 +85,11 @@ const TYPE_LABEL_KEY: Record<BackgroundTask['type'], string> = {
   workflow: 'chat.backgroundTask.typeWorkflow',
 }
 
+/** ORCHA §bg-child-sessions: a spawn_session child is labelled as a sub-session, not a background agent. */
+function typeLabelKey(task: BackgroundTask): string {
+  return task.kind === 'child-session' ? 'chat.backgroundTask.typeSubSession' : TYPE_LABEL_KEY[task.type]
+}
+
 function useStatusText(task: BackgroundTask): string {
   const { t } = useTranslation()
   if (task.stopping && isLive(task)) return t('chat.backgroundTask.stopping')
@@ -321,6 +326,13 @@ function BackgroundTaskCard({ task, sessionId, onStop, onDismiss, onOpenOutput, 
         )}
       </div>
     )
+  } else if (isChildSession) {
+    // ORCHA §bg-child-sessions: no task output to read — the work lives in its own session
+    body = (
+      <p className="text-label-sm text-tertiary">
+        {task.summary || (live ? t('chat.backgroundTask.childSessionRunning') : t('chat.backgroundTask.childSessionDone'))}
+      </p>
+    )
   } else {
     body = (
       <p className="text-label-sm text-tertiary">
@@ -336,7 +348,7 @@ function BackgroundTaskCard({ task, sessionId, onStop, onDismiss, onOpenOutput, 
         <div className="min-w-0 flex-1">
           <p className="line-clamp-2 text-label font-medium text-foreground" title={title}>{title}</p>
           <p className="mt-0.5 text-label-sm text-tertiary tabular-nums">
-            {t(TYPE_LABEL_KEY[task.type])} · {statusText} · {formatElapsed(elapsed)}
+            {t(typeLabelKey(task))} · {statusText} · {formatElapsed(elapsed)}
             {task.type === 'workflow' && (task.agentsCompleted ?? 0) > 0 && ` · ${t('chat.workflowAgentsDone', { count: task.agentsCompleted ?? 0 })}`}
           </p>
           {/* The agent's own one-line status (SDK progress summary), refreshed about every 30 s */}
@@ -412,7 +424,7 @@ export function BackgroundTaskChip({ task, sessionId, open, onOpenChange, onStop
       <PopoverTrigger asChild>
         <button
           type="button"
-          aria-label={`${t('chat.backgroundTask.chipLabel', { type: t(TYPE_LABEL_KEY[task.type]), intent: label })} · ${statusText} · ${formatElapsed(elapsed)}`}
+          aria-label={`${t('chat.backgroundTask.chipLabel', { type: t(typeLabelKey(task)), intent: label })} · ${statusText} · ${formatElapsed(elapsed)}`}
           title={hint ?? label}
           className={cn(COMPOSER_META_CHIP, 'max-w-full cursor-pointer pl-2', running && 'animate-shimmer', tone)}
         >

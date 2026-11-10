@@ -90,6 +90,17 @@ describe('buildSessionFamilies', () => {
     expect(shape(families)).toEqual([['old@0', 'child-of-old@1'], ['recent@0']])
   })
 
+  // ORCHA: the session list shows the newest sub-session on top
+  it('orders children newest first when asked to', () => {
+    const families = buildSessionFamilies([
+      session('parent', { createdAt: 0 }),
+      session('first-created', { parentSessionId: 'parent', createdAt: 1 }),
+      session('second-created', { parentSessionId: 'parent', createdAt: 2 }),
+      session('third-created', { parentSessionId: 'parent', createdAt: 3 }),
+    ], { childOrder: 'newest-first' })
+    expect(shape(families)).toEqual([['parent@0', 'third-created@1', 'second-created@1', 'first-created@1']])
+  })
+
   it('breaks a loop of parents where the walk from its newest member meets it again', () => {
     const families = buildSessionFamilies([
       session('a', { parentSessionId: 'b' }),

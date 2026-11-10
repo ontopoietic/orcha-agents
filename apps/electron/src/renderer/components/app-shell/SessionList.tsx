@@ -797,6 +797,21 @@ export function SessionList({
     })
   }, [rowIndexMap, flatRows, interactions.keyboard, selectionStore, updateCollapsedFamilies])
 
+  // ORCHA: sessions with a processing descendant (any depth). A collapsed row reads "working" while one of
+  // its hidden sub-sessions runs; expanded rows leave that to the nested rows themselves.
+  const workingAncestorIds = useMemo(() => {
+    const ids = new Set<string>()
+    for (const { members } of families) {
+      const path: string[] = [] // ancestors of the current member, by depth
+      for (const { item, depth } of members) {
+        path.length = depth
+        if (item.isProcessing) for (const id of path) ids.add(id)
+        path.push(item.id)
+      }
+    }
+    return ids
+  }, [families])
+
   // Reveal the highlighted session when it lands in a collapsed family (a deep link, a notification, a
   // new branch). Once per session, so collapsing the family of the session you're on keeps it closed.
   const revealedSessionRef = useRef<string | null>(null)
@@ -1032,6 +1047,7 @@ export function SessionList({
               subSessions={row.descendantCount > 0
                 ? { count: row.descendantCount, collapsed: row.collapsed, onToggle: () => toggleFamily(row) }
                 : undefined}
+              hasWorkingSubSession={row.collapsed && workingAncestorIds.has(row.item.id)}
             />
           )
         }}

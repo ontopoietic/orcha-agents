@@ -39,6 +39,13 @@ describe('background task chip lifecycle', () => {
     expect(stale?.completedAt).toBeUndefined()
   })
 
+  // ORCHA §bg-child-sessions: a child session never sends SDK progress signals
+  it('never marks a child-session task stale', () => {
+    const tasks = [task({ kind: 'child-session', lastSignalAt: NOW - RUNNING_SIGNAL_TIMEOUT_MS * 3 })]
+
+    expect(advanceBackgroundTaskChips(tasks, NOW)).toBe(tasks)
+  })
+
   it('does not auto-prune stale tasks', () => {
     const tasks = [task({
       status: 'stale',

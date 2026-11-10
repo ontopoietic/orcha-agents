@@ -56,6 +56,8 @@ export interface SessionItemProps {
   inheritedLabels?: readonly string[]
   /** The sessions nested under this row, when it has any */
   subSessions?: { count: number; collapsed: boolean; onToggle: () => void }
+  /** ORCHA: a sub-session hidden in this row's collapsed family is processing — the row reads "working" */
+  hasWorkingSubSession?: boolean
 }
 
 /**
@@ -80,6 +82,7 @@ export function SessionItem({
   guides,
   inheritedLabels,
   subSessions,
+  hasWorkingSubSession,
 }: SessionItemProps) {
   const { t } = useTranslation()
   const ctx = useSessionListContext()
@@ -108,7 +111,7 @@ export function SessionItem({
   // Run state owns the subtitle line; attention states win (spec §2.4).
   const runState: 'needs-you' | 'working' | 'failed' | 'plan' | null = hasPendingPrompt
     ? 'needs-you'
-    : item.isProcessing
+    : (item.isProcessing || hasWorkingSubSession)
       ? 'working'
       : item.lastMessageRole === 'error'
         ? 'failed'

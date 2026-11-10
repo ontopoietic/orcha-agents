@@ -25,8 +25,11 @@ export function advanceBackgroundTaskChips(
   const next = tasks
     .map((task) => {
       const lastSignalAt = task.lastSignalAt ?? task.startTime
+      // ORCHA §bg-child-sessions: a child-session task never sends SDK progress signals (it runs in
+      // its own session) — its chip ends only via the real task_completed, so it never goes stale.
       if (
         task.status === 'running'
+        && task.kind !== 'child-session'
         && now - lastSignalAt >= RUNNING_SIGNAL_TIMEOUT_MS
       ) {
         changed = true

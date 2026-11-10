@@ -57,7 +57,11 @@ export function flatRow(item: SessionMeta): SessionListRow {
  * session header) is broken where the walk up from its newest member meets it again. Families come
  * in the order of their first member in `items`, which the list hands over newest first.
  */
-export function buildSessionFamilies(items: readonly SessionMeta[]): SessionFamily[] {
+export function buildSessionFamilies(
+  items: readonly SessionMeta[],
+  // ORCHA: the session list passes 'newest-first' (newest sub-session on top)
+  options: { childOrder?: 'oldest-first' | 'newest-first' } = {},
+): SessionFamily[] {
   const byId = new Map(items.map(item => [item.id, item]))
   const parentOf = new Map<string, string>()
   for (const item of items) {
@@ -87,7 +91,9 @@ export function buildSessionFamilies(items: readonly SessionMeta[]): SessionFami
     else childrenOf.set(parentId, [item])
   }
   for (const siblings of childrenOf.values()) {
-    siblings.sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0))
+    siblings.sort(options.childOrder === 'newest-first'
+      ? (a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0)
+      : (a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0))
   }
 
   const rootIds = new Set<string>()
