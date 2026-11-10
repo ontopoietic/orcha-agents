@@ -23,20 +23,6 @@ export type {
 // Field constants
 export { SESSION_PERSISTENT_FIELDS } from './types.ts';
 
-// Anchors (references to Orcha framework artifacts)
-export type {
-  AnchorRef,
-  AnchorType,
-  AnchorableItem,
-} from './anchors.ts';
-export {
-  ANCHOR_TYPES,
-  anchorKey,
-  anchorsEqual,
-  anchorFromItem,
-  validateAnchor,
-  validateAnchorsLenient,
-} from './anchors.ts';
 
 // Storage functions
 export {

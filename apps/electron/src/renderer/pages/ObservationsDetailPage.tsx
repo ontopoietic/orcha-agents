@@ -13,7 +13,7 @@
 import * as React from 'react'
 import { useAtomValue } from 'jotai'
 import { observationsSessionDirAtom } from '@/atoms/panel-stack'
-import { ObservationsContent } from '@/components/anchors/ObservationsViewer'
+import { ObservationsContent } from '@/components/observations/ObservationsViewer'
 import { useNavigation } from '@/contexts/NavigationContext'
 
 export default function ObservationsDetailPage() {

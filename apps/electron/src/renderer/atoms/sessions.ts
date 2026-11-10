@@ -12,7 +12,6 @@ import { atom } from 'jotai'
 import type { Getter, Setter } from 'jotai/vanilla'
 import { atomFamily } from 'jotai-family'
 import type { Session, Message } from '../../shared/types'
-import type { AnchorRef } from '@craft-agent/shared/sessions/anchors'
 
 /**
  * Session metadata for list display (lightweight, no messages)
@@ -46,8 +45,6 @@ export interface SessionMeta {
   hasUnread?: boolean
   /** Labels for filtering (additive tags, many-per-session) */
   labels?: string[]
-  /** Anchors to Orcha framework artifacts (Feature, Befund, Anliegen) */
-  anchors?: AnchorRef[]
   /** Permission mode ('safe', 'ask', 'guarded', 'allow-all') — used by view expressions */
   permissionMode?: string
   /** Session status for filtering */

@@ -14,7 +14,6 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { parseObservationsMarkdown, type ParsedBullet, type Salience } from '../../sessions/observation-markdown-parser.ts';
 import { isLocalMcpEnabled } from '../../workspaces/storage.ts';
 import { formatPreferencesForPrompt } from '../../config/preferences.ts';
 import { formatSessionState } from '../mode-manager.ts';
@@ -26,8 +25,6 @@ import {
 import { getSessionPlansPath, getSessionDataPath, getSessionPath } from '../../sessions/storage.ts';
 import { maybeTriggerObserver } from '../../sessions/observation-trigger.ts';
 import { maybeTriggerReflector } from '../../sessions/reflection-trigger.ts';
-import { maybeTriggerAutoAnchor } from '../../sessions/auto-anchor-trigger.ts';
-import { gatherRecallHint, renderRecallHintBlock } from '../../sessions/recall-engine.ts';
 import { buildConversationTail, isStreamingModeEnabled } from './message-provider.ts';
 import { createLogger } from '../../utils/debug.ts';
 import type {
@@ -112,8 +109,8 @@ export class PromptBuilder {
    *     signal — see {@link formatSessionState})
    *  3. source state (auth/connection status), when provided
    *  4. volatile git developer context, when the selected working directory is in a repo
-   *  5. (Orcha fork, FORK §6) session memory (`<session_memory>`), recall hint
-   *     (`<relevant_memory>`), streaming-mode conversation tail, anchor reminder.
+   *  5. (Orcha fork, FORK §6) session memory (`<session_memory>`) and the
+   *     streaming-mode conversation tail.
    *     These MUST stay here (volatile tail) — never in the pinned system prompt.
    *
    * MUST be called exactly once per turn, because it consumes one-shot mode
@@ -179,49 +176,9 @@ export class PromptBuilder {
         log.debug('[buildContextParts] Reflector trigger threw:', err);
       }
 
-      // Auto-anchor — fires when enough observations lack a framework-anchor,
-      // keeping cross-session recall's anchor axis populated. Independent of
-      // the Reflector (reflect preserves anchorRefs on rebuild). Fire-and-forget.
-      try {
-        const anchorDecision = maybeTriggerAutoAnchor(sessionDir, sessionId);
-        if (anchorDecision.triggered) {
-          log.debug(`[buildContextParts] Auto-anchor triggered: ${anchorDecision.reason}`);
-        }
-      } catch (err) {
-        log.debug('[buildContextParts] Auto-anchor trigger threw:', err);
-      }
-
       const observationsBlock = this.getSessionObservations(sessionId);
       if (observationsBlock) {
         parts.push(observationsBlock);
-      }
-
-      // Cross-session recall pointer (B2 pivot: push→pull). We no longer inject
-      // full summaries every turn. The detector now draws from the SAME source
-      // the `recall` tool reads (per-session observation ledgers + anchorRefs),
-      // not the legacy episode index — so when the hint fires, recall is
-      // guaranteed to return something. If OTHER sessions hold observations
-      // sharing an anchor with this session, we emit a slim `<relevant_memory>`
-      // pointer telling the agent to pull the detail via `recall`. No-op when
-      // the session has no anchors or nothing relevant exists.
-      try {
-        const sessionAnchors = this.readSessionAnchors(sessionId);
-        if (sessionAnchors.length > 0) {
-          const hintData = gatherRecallHint({
-            workspaceRootPath: this.workspaceRootPath,
-            sessionId,
-            anchors: sessionAnchors,
-          });
-          const block = renderRecallHintBlock(hintData);
-          if (block) {
-            log.debug(
-              `[buildContextParts] Recall hint emitted (${hintData.observationCount} obs across ${hintData.sessionCount} other sessions)`,
-            );
-            parts.push(block);
-          }
-        }
-      } catch (err) {
-        log.debug('[buildContextParts] Recall hint detection threw:', err);
       }
 
       // Streaming-mode: inject conversation tail. With ORCHA_STREAMING_MODE
@@ -240,14 +197,6 @@ export class PromptBuilder {
         } catch (err) {
           log.debug('[buildContextParts] Conversation tail threw:', err);
         }
-      }
-    }
-
-    // Add anchor reminder if the session has no anchors
-    if (sessionId) {
-      const anchorReminder = this.getAnchorReminder(sessionId);
-      if (anchorReminder) {
-        parts.push(anchorReminder);
       }
     }
 
@@ -286,43 +235,6 @@ export class PromptBuilder {
     }
 
     return parts;
-  }
-
-  // ============================================================
-  // Anchor Reminder (nudges the agent to set anchors when missing)
-  // ============================================================
-
-  /**
-   * Build a reminder block when the session has no anchors. The agent then
-   * knows to apply the `orcha-anchor-discipline` skill if a clear Orcha
-   * artifact is referenced. Returns null if the session already has at least
-   * one anchor or if anchors cannot be determined.
-   */
-  getAnchorReminder(sessionId: string): string | null {
-    try {
-      const sessionDir = getSessionPath(this.workspaceRootPath, sessionId);
-      const jsonlPath = join(sessionDir, 'session.jsonl');
-      if (!existsSync(jsonlPath)) return null;
-
-      // Read just the header (first line) to check anchors.
-      const raw = readFileSync(jsonlPath, 'utf-8');
-      const firstNewline = raw.indexOf('\n');
-      const firstLine = firstNewline > 0 ? raw.slice(0, firstNewline) : raw;
-      const header = JSON.parse(firstLine) as { anchors?: unknown[] };
-
-      const anchors = Array.isArray(header.anchors) ? header.anchors : [];
-      if (anchors.length > 0) return null;
-
-      return `<anchor_reminder>
-This session has no anchors set. Anchors (Feature, Befund, Anliegen) scope the session to an Orcha artifact and let later memory aggregation group sessions correctly.
-
-If the user has made the focus explicit, or it is unambiguous from context (e.g. "Lass uns am Modul-System weitermachen", or working on a feature visible via \`orcha feature list\`), apply the \`orcha-anchor-discipline\` skill and call \`set_session_anchors\` with the right anchor.
-
-Do NOT guess. Wrong anchors are worse than no anchors. If the user is just exploring or the target is unclear, leave anchors empty — this reminder is a nudge, not a requirement.
-</anchor_reminder>`;
-    } catch {
-      return null;
-    }
   }
 
   /**
@@ -424,7 +336,7 @@ Do NOT guess. Wrong anchors are worse than no anchors. If the user is just explo
   }
 
   /**
-   * Strip anchor short-IDs (` {abcdef}` suffix) from the canonical Markdown
+   * Strip message short-IDs (` {abcdef}` suffix) from the canonical Markdown
    * ledger before injecting into the system prompt. The main model doesn't
    * need them — the Sidecar (observations-evidence.json) is the source of
    * truth for UI back-links and echo-detection.
@@ -441,7 +353,7 @@ Do NOT guess. Wrong anchors are worse than no anchors. If the user is just explo
     let truncated = false;
     for (const rawLine of md.split(/\r?\n/)) {
       if (truncated) break;
-      // Strip trailing ` {anchor}` from bullet lines only; leave date headers alone.
+      // Strip trailing ` {shortId}` from bullet lines only; leave date headers alone.
       const line = rawLine.replace(/\s\{[a-z0-9]+\}\s*$/, '');
       if (line.startsWith('- ')) bulletCount++;
       if (totalChars + line.length + 1 > maxChars) {
@@ -456,32 +368,6 @@ Do NOT guess. Wrong anchors are worse than no anchors. If the user is just explo
   }
 
   /**
-   * Read the session's anchors from the JSONL header. Returns empty array
-   * if the file does not exist or is malformed. Used by the anchor-filter
-   * in `getSessionObservations`.
-   */
-  private readSessionAnchors(sessionId: string): Array<{ type: string; id: string }> {
-    try {
-      const sessionDir = getSessionPath(this.workspaceRootPath, sessionId);
-      const jsonlPath = join(sessionDir, 'session.jsonl');
-      if (!existsSync(jsonlPath)) return [];
-      const raw = readFileSync(jsonlPath, 'utf-8');
-      const firstNewline = raw.indexOf('\n');
-      const firstLine = firstNewline > 0 ? raw.slice(0, firstNewline) : raw;
-      const header = JSON.parse(firstLine) as { anchors?: unknown };
-      if (!Array.isArray(header.anchors)) return [];
-      return header.anchors
-        .filter((a): a is { type: string; id: string } =>
-          !!a && typeof a === 'object' &&
-          typeof (a as Record<string, unknown>).type === 'string' &&
-          typeof (a as Record<string, unknown>).id === 'string')
-        .map((a) => ({ type: a.type, id: a.id }));
-    } catch {
-      return [];
-    }
-  }
-
-  /**
    * Read observations from session data and format as a context block.
    * Returns null if no observations exist.
    *
@@ -492,8 +378,6 @@ Do NOT guess. Wrong anchors are worse than no anchors. If the user is just explo
    * Gated by:
    * - Conversation length (skip injection on short sessions where raw
    *   messages still fit cheaply)
-   * - Anchor-scope: when session has anchors, only show observations
-   *   whose anchors intersect (or are anchor-less)
    */
   getSessionObservations(sessionId: string): string | null {
     const sessionDir = getSessionPath(this.workspaceRootPath, sessionId);
@@ -501,9 +385,8 @@ Do NOT guess. Wrong anchors are worse than no anchors. If the user is just explo
     const markdownPath = join(sessionDir, 'data', 'observations.md');
     const jsonlPath = join(sessionDir, 'session.jsonl');
 
-    // Mastra-format ledger takes precedence when present. It carries no
-    // per-bullet anchors, so we inject it whole (no anchor-scoping); the
-    // continuity-hints sidecar is appended for the next-turn agent.
+    // Mastra-format ledger takes precedence when present. It is injected
+    // whole; the continuity-hints sidecar is appended for the next-turn agent.
     if (existsSync(mastraMdPath)) {
       const lineCount = this.countJsonlLines(jsonlPath);
       if (lineCount < PromptBuilder.MIN_LINES_BEFORE_INJECTION) return null;
@@ -552,102 +435,24 @@ Do NOT guess. Wrong anchors are worse than no anchors. If the user is just explo
       return null;
     }
 
-    // Canonical post Plan A/C path: Markdown ledger. Anchors are stripped
-    // before injection — the main model doesn't need them, the sidecar
-    // carries the data the UI uses.
-    //
-    // Anchor-scope filter: when the session has anchors, bullets are kept
-    // only if their evidence-sidecar `anchorRefs` intersect the session's
-    // anchors, or if they have no anchorRefs at all (= session-local).
+    // Canonical post Plan A/C path: Markdown ledger. Message short-IDs
+    // (` {abcdef}`) are stripped before injection — the main model doesn't
+    // need them, the evidence sidecar carries the data the UI uses.
     try {
       const md = readFileSync(markdownPath, 'utf-8');
-      const sessionAnchors = this.readSessionAnchors(sessionId);
-      const sidecar = this.loadEvidenceSidecar(sessionDir);
-      const { md: scopedMd, totalBullets, keptBullets } =
-        this.applyAnchorScope(md, sidecar, sessionAnchors);
-      if (keptBullets === 0) return null;
-
-      const stripped = this.formatMarkdownForInjection(scopedMd);
+      const stripped = this.formatMarkdownForInjection(md);
       if (!stripped.body || stripped.bulletCount === 0) return null;
 
       const header = '<session_memory>';
       const footer = '</session_memory>';
       const intro = 'Structured observations from past conversation turns. These persist across compaction — the agent does NOT need to re-derive them.';
-      const stats =
-        sessionAnchors.length > 0
-          ? `${totalBullets} observations total, ${keptBullets} in scope, showing ${stripped.bulletCount}` +
-            ` · scoped to ${sessionAnchors.length} anchor${sessionAnchors.length === 1 ? '' : 's'}`
-          : `${stripped.bulletCount} observations`;
-      log.debug(`[getSessionObservations] Injecting Markdown ledger (${stripped.bulletCount} bullets, ${sessionAnchors.length} session anchors) for session ${sessionId}`);
+      const stats = `${stripped.bulletCount} observations`;
+      log.debug(`[getSessionObservations] Injecting Markdown ledger (${stripped.bulletCount} bullets) for session ${sessionId}`);
       return `${header}\n${intro}\n\n${stripped.body}\n\n${stats}\n${footer}`;
     } catch (err) {
       log.debug('[getSessionObservations] Failed to read observations.md:', err);
       return null;
     }
-  }
-
-  /**
-   * Load `observations-evidence.json` so the anchor-scope filter can resolve
-   * each bullet's `{shortId}` back to its `anchorRefs`. Returns an empty map
-   * when the sidecar is missing or malformed.
-   */
-  private loadEvidenceSidecar(sessionDir: string): Record<string, { anchorRefs?: unknown[] }> {
-    const evidencePath = join(sessionDir, 'data', 'observations-evidence.json');
-    if (!existsSync(evidencePath)) return {};
-    try {
-      const parsed = JSON.parse(readFileSync(evidencePath, 'utf-8'));
-      return parsed && typeof parsed === 'object' ? (parsed as Record<string, { anchorRefs?: unknown[] }>) : {};
-    } catch {
-      return {};
-    }
-  }
-
-  /**
-   * Filter Markdown bullets to those in scope for the session.
-   *
-   * Rules (match the original JSON-path semantics):
-   * - No session anchors → return MD unchanged (no filtering).
-   * - Session has anchors → keep bullets whose evidence-sidecar
-   *   `anchorRefs` intersect, OR bullets that have no anchorRefs entry at
-   *   all (treated as session-local).
-   *
-   * Re-renders the surviving bullets grouped by date, newest date first.
-   * Byte-for-byte parity with the source file isn't preserved — that's fine
-   * here, the downstream `formatMarkdownForInjection` strips anchors anyway.
-   */
-  private applyAnchorScope(
-    md: string,
-    sidecar: Record<string, { anchorRefs?: unknown[] }>,
-    sessionAnchors: Array<{ type: string; id: string }>,
-  ): { md: string; totalBullets: number; keptBullets: number } {
-    const bullets = parseObservationsMarkdown(md);
-    if (!bullets || bullets.length === 0) {
-      return { md: '', totalBullets: 0, keptBullets: 0 };
-    }
-    if (sessionAnchors.length === 0) {
-      return { md, totalBullets: bullets.length, keptBullets: bullets.length };
-    }
-    const sessionKeys = new Set(sessionAnchors.map((a) => `${a.type}:${a.id}`));
-    const inScope = (b: ParsedBullet): boolean => {
-      if (!b.anchorShortId) return true;
-      const ev = sidecar[b.anchorShortId];
-      const anchors = ev?.anchorRefs;
-      if (!Array.isArray(anchors) || anchors.length === 0) return true;
-      for (const a of anchors) {
-        if (!a || typeof a !== 'object') continue;
-        const r = a as Record<string, unknown>;
-        if (typeof r.type === 'string' && typeof r.id === 'string' && sessionKeys.has(`${r.type}:${r.id}`)) {
-          return true;
-        }
-      }
-      return false;
-    };
-    const kept = bullets.filter(inScope);
-    return {
-      md: renderBulletsByDate(kept),
-      totalBullets: bullets.length,
-      keptBullets: kept.length,
-    };
   }
 
   // ============================================================
@@ -768,44 +573,4 @@ Please continue the conversation naturally from where we left off.
   getSystemPromptPreset(): string {
     return this.config.systemPromptPreset ?? 'default';
   }
-}
-
-const SALIENCE_TO_EMOJI: Record<Salience, string> = {
-  high: '🔴',
-  medium: '🟡',
-  low: '🟢',
-};
-
-/**
- * Render a set of parsed bullets back to Markdown, grouped by date (newest
- * first). Bullets without a date land under an `# unknown` header so they
- * remain visible but clearly demarcated.
- */
-function renderBulletsByDate(bullets: ParsedBullet[]): string {
-  if (bullets.length === 0) return '';
-  const byDate = new Map<string, ParsedBullet[]>();
-  for (const b of bullets) {
-    const date = b.date ?? 'unknown';
-    const list = byDate.get(date) ?? [];
-    list.push(b);
-    byDate.set(date, list);
-  }
-  // Newest first, with "unknown" sinking to the bottom.
-  const sortedDates = [...byDate.keys()].sort((a, b) => {
-    if (a === 'unknown') return 1;
-    if (b === 'unknown') return -1;
-    return b.localeCompare(a);
-  });
-  const lines: string[] = [];
-  for (const date of sortedDates) {
-    lines.push(`# ${date}`);
-    for (const b of byDate.get(date) ?? []) {
-      const emoji = SALIENCE_TO_EMOJI[b.salience];
-      const timePart = b.time ? `${b.time} ` : '';
-      const anchor = b.anchorShortId ? ` {${b.anchorShortId}}` : '';
-      lines.push(`- ${emoji} ${timePart}${b.summary}${anchor}`);
-    }
-    lines.push('');
-  }
-  return lines.join('\n').trimEnd() + '\n';
 }

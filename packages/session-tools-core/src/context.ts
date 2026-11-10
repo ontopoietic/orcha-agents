@@ -312,16 +312,6 @@ export interface SessionToolContext {
   /** Set labels on a session. Defaults to current session if no ID given. Injected by backend. */
   setSessionLabels?(sessionId: string | undefined, labels: string[]): void | Promise<void>;
 
-  /**
-   * Set anchors on a session — references to Orcha framework artifacts
-   * (Feature, Befund, Anliegen). Defaults to current session if no ID given.
-   * Injected by backend.
-   */
-  setSessionAnchors?(
-    sessionId: string | undefined,
-    anchors: Array<{ type: 'feature' | 'befund' | 'anliegen'; id: string; title?: string; addedAt: string; addedBy: 'user' | 'agent' }>,
-  ): void | Promise<void>;
-
   /** Set status on a session. Defaults to current session if no ID given. Injected by backend. */
   setSessionStatus?(sessionId: string | undefined, status: string): void | Promise<void>;
 
@@ -337,7 +327,7 @@ export interface SessionToolContext {
   /**
    * Cross-session observational recall (B2 resource-scoped retrieval).
    * Injected by the backend, which owns the file-based recall engine.
-   * `mode: 'search'` finds observations by anchor/text; `mode: 'resolve'`
+   * `mode: 'search'` finds observations by text; `mode: 'resolve'`
    * pages the raw messages behind a hit's durable pointer.
    */
   recall?(args: RecallToolArgs): RecallToolResult | Promise<RecallToolResult>;
@@ -1022,9 +1012,6 @@ export interface RecallToolArgs {
   mode?: 'search' | 'resolve';
   /** search: free-text query (token-overlap scored). */
   text?: string;
-  /** search: exact framework-anchor filter. */
-  anchorType?: 'feature' | 'befund' | 'anliegen';
-  anchorId?: string;
   /** search: restrict to one session. resolve: the session to page (required). */
   sessionId?: string;
   /** resolve: the anchor message ID to page around (required). */

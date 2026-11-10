@@ -51,7 +51,7 @@ describe('validateOrchaScriptRuntime', () => {
     writeCjsBundles(['orcha-observe', 'orcha-reflect']);
     const report = validateOrchaScriptRuntime(appRoot);
     expect(report.ok).toBe(false);
-    expect(report.missing.sort()).toEqual(['orcha-embed-worker', 'orcha-recall-anchors']);
+    expect(report.missing.sort()).toEqual(['orcha-embed-worker']);
   });
 
   it('reports every script missing for an empty app root', () => {

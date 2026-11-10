@@ -42,7 +42,6 @@ import { handleScriptSandbox } from './handlers/script-sandbox.ts';
 import { handleRenderTemplate } from './handlers/render-template.ts';
 import { handleSendDeveloperFeedback } from './handlers/send-developer-feedback.ts';
 import { handleSetSessionLabels } from './handlers/set-session-labels.ts';
-import { handleSetSessionAnchors } from './handlers/set-session-anchors.ts';
 import { handleSetSessionStatus } from './handlers/set-session-status.ts';
 import { handleGetSessionInfo } from './handlers/get-session-info.ts';
 import { handleRecall } from './handlers/recall.ts';
@@ -257,15 +256,6 @@ export const SetSessionLabelsSchema = z.object({
   labels: z.array(z.string()).describe('Labels to set (replaces all existing labels)'),
 });
 
-export const SetSessionAnchorsSchema = z.object({
-  sessionId: z.string().optional().describe('Session ID to update. Omit to update the current session.'),
-  anchors: z.array(z.object({
-    type: z.enum(['feature', 'befund', 'anliegen']).describe('Orcha artifact category'),
-    id: z.string().describe('Orcha artifact ID (UUID from `orcha {type} list`)'),
-    title: z.string().optional().describe('Snapshot of the artifact title at attach time. Optional but recommended for clearer UI.'),
-  })).describe('Anchors to set (replaces all existing anchors). Pass [] to clear.'),
-});
-
 export const SetSessionStatusSchema = z.object({
   sessionId: z.string().optional().describe('Session ID to update. Omit to update the current session.'),
   status: z.string().describe('Status to set (e.g., "todo", "in_progress", "done")'),
@@ -384,8 +374,6 @@ export const RecallSchema = z.object({
     "'search' (default): find past observations across all sessions. 'resolve': page the raw messages behind a hit's pointer.",
   ),
   text: z.string().optional().describe('search: free-text query, scored by embedding similarity (semantic) with word-overlap fallback against observation summaries + source excerpts'),
-  anchorType: z.enum(['feature', 'befund', 'anliegen']).optional().describe('search: filter to observations tagged with this framework-anchor type (requires anchorId)'),
-  anchorId: z.string().optional().describe('search: the anchor artifact ID to filter by (use with anchorType)'),
   sessionId: z.string().optional().describe('search: restrict to one session. resolve: the session to page (required in resolve mode)'),
   messageId: z.string().optional().describe("resolve: the anchor message ID to page around, taken from a hit's messageRange.from (required in resolve mode)"),
   limit: z.number().optional().describe('search: max hits to return (default 20)'),
@@ -677,19 +665,6 @@ Use this to share anything that would help improve the product — issues you hi
 Use this to tag sessions for filtering or to trigger label-based automations (LabelAdd/LabelRemove events).
 Pass an empty array to clear all labels. Omit sessionId to target the current session.`,
 
-  set_session_anchors: `Set anchors on the current session — references to Orcha framework artifacts (Feature, Befund, Anliegen).
-
-Anchors express what the session is conceptually working on. They appear as chips under the session title and group sessions by focus.
-
-Use this when the user makes clear which Orcha artifact the work belongs to (e.g. "let's continue on the modul-system feature", "this looks like a befund about X"). Discover candidate IDs via the orcha CLI in the session's working directory:
-  orcha feature list
-  orcha befund list
-  orcha anliegen list
-
-Each anchor is { type, id, title? } — title is the snapshot displayed in the UI. Replaces the full anchor list (pass [] to clear). Omit sessionId to target the current session.
-
-Only set anchors when the connection to the artifact is explicit. Don't guess.`,
-
   set_session_status: `Set the status of the current session or a specific session by ID (e.g., "todo", "in_progress").
 
 Use this to reflect progress or trigger status-based automations (SessionStatusChange events).
@@ -769,10 +744,10 @@ Use get_session_info for full details on a specific session (list-then-detail pa
 Use this when the compressed observations in your context aren't enough and you need to find — or read the exact wording of — something from an earlier session.
 
 Two modes:
-- mode "search" (default): find relevant past observations. Filter by framework anchor (anchorType + anchorId) for a precise, structural lookup ("everything about feature X"), and/or pass text for a word-overlap search. Each hit carries a durable pointer (messageRange.from + its sessionId).
+- mode "search" (default): find relevant past observations by text (optionally restricted to one sessionId). Each hit carries a durable pointer (messageRange.from + its sessionId).
 - mode "resolve": pass a hit's sessionId + messageId (its messageRange.from) to page the raw original messages around it, when you need exact quotes, tool output, or chronology that the summary dropped.
 
-Anchor search is precise and explainable; text search is semantic (embedding similarity with word-overlap fallback). Prefer anchors when you know the artifact; use text for everything phrased differently than it was recorded. A semantic search reports coverage (observations vs. vectorized): observations not yet vectorized were matched by words only and are indexed in the background, so a repeat search a little later can find more.`,
+Text search is semantic (embedding similarity with word-overlap fallback), so it also finds things phrased differently than they were recorded. A semantic search reports coverage (observations vs. vectorized): observations not yet vectorized were matched by words only and are indexed in the background, so a repeat search a little later can find more.`,
 
   list_background_tasks: `List background agents/tasks tracked for a session (running, finished, or orphaned).
 
@@ -875,7 +850,6 @@ export const SESSION_TOOL_DEFS: SessionToolDef[] = [
   { name: 'browser_tool', description: TOOL_DESCRIPTIONS.browser_tool, inputSchema: BrowserToolSchema, executionMode: 'backend', safeMode: 'allow', handler: null },
   // Session self-management tools (registry — use context callbacks to reach SessionManager)
   { name: 'set_session_labels', description: TOOL_DESCRIPTIONS.set_session_labels, inputSchema: SetSessionLabelsSchema, executionMode: 'registry', safeMode: 'block', handler: handleSetSessionLabels },
-  { name: 'set_session_anchors', description: TOOL_DESCRIPTIONS.set_session_anchors, inputSchema: SetSessionAnchorsSchema, executionMode: 'registry', safeMode: 'block', handler: handleSetSessionAnchors },
   { name: 'set_session_status', description: TOOL_DESCRIPTIONS.set_session_status, inputSchema: SetSessionStatusSchema, executionMode: 'registry', safeMode: 'block', handler: handleSetSessionStatus },
   { name: 'archive_session', description: TOOL_DESCRIPTIONS.archive_session, inputSchema: ArchiveSessionSchema, executionMode: 'registry', safeMode: 'block', handler: handleArchiveSession },
   { name: 'create_task', description: TOOL_DESCRIPTIONS.create_task, inputSchema: CreateTaskSchema, executionMode: 'registry', safeMode: 'block', handler: handleCreateTask },

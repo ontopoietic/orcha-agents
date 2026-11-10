@@ -48,14 +48,6 @@ export function attachSessionSelfManagementBindings(
     enumerable: true,
   });
 
-  Object.defineProperty(context, 'setSessionAnchors', {
-    get() {
-      return getSessionScopedToolCallbacks(sessionId)?.setSessionAnchorsFn;
-    },
-    configurable: true,
-    enumerable: true,
-  });
-
   Object.defineProperty(context, 'setSessionStatus', {
     get() {
       return getSessionScopedToolCallbacks(sessionId)?.setSessionStatusFn;
@@ -100,10 +92,6 @@ export function attachSessionSelfManagementBindings(
         }
         const query = {
           text: args.text,
-          anchor:
-            args.anchorType && args.anchorId
-              ? { type: args.anchorType, id: args.anchorId }
-              : undefined,
           sessionId: args.sessionId,
           limit: args.limit,
         };

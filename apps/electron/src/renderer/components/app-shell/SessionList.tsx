@@ -39,7 +39,7 @@ import { useListReorderFlip } from "@/hooks/useListReorderFlip"
 export type { SessionListRow }
 
 /** Grouping mode for chat list */
-export type ChatGroupingMode = 'date' | 'status' | 'unread' | 'anchor' | 'project'
+export type ChatGroupingMode = 'date' | 'status' | 'unread' | 'project'
 
 interface SessionListProps {
   items: SessionMeta[]
@@ -379,135 +379,6 @@ export function SessionList({
       }
     }
 
-    if (groupingMode === 'anchor') {
-      // ORCHA: each family lives under its view's first anchor (multi-anchor
-      // sessions surface in the group of anchors[0] only — keeps row keys unique
-      // and avoids selection ambiguity). Sessions without anchors land in a
-      // stable "ohne Fokus" bucket at the end.
-      const groupsByKey = new Map<string, { rows: SessionListRow[], sortKey: string, label: string, type: 'feature' | 'befund' | 'anliegen' | 'none' }>()
-
-      const ANCHOR_TYPE_ICON: Record<string, string> = {
-        feature: '📦',
-        befund: '🐛',
-        anliegen: '📥',
-      }
-
-      // Header titles render on a single line. Truncate to keep the chevron,
-      // counter, and (in collapsed state) the count visible without wrapping.
-      const HEADER_MAX_TITLE_LEN = 28
-      const truncateTitle = (s: string): string =>
-        s.length <= HEADER_MAX_TITLE_LEN ? s : s.slice(0, HEADER_MAX_TITLE_LEN - 1).trimEnd() + '…'
-
-      // Pre-pass over the full items list (not just `rows`, which only holds
-      // visible/expanded rows): key → anchor title, so collapsed anchor groups
-      // show the snapshot title instead of the bare UUID.
-      const titleByKey = new Map<string, { title: string; type: 'feature' | 'befund' | 'anliegen' }>()
-      for (const item of items) {
-        const first = item.anchors?.[0]
-        if (!first) continue
-        const key = `anchor-${first.type}:${first.id}`
-        if (!titleByKey.has(key)) {
-          titleByKey.set(key, { title: first.title || first.id, type: first.type })
-        }
-      }
-
-      for (const row of rows) {
-        const first = row.groupItem.anchors?.[0]
-        if (first) {
-          const key = `anchor-${first.type}:${first.id}`
-          if (!groupsByKey.has(key)) {
-            const icon = ANCHOR_TYPE_ICON[first.type] ?? ''
-            const title = first.title || first.id
-            groupsByKey.set(key, {
-              rows: [],
-              sortKey: `${first.type}:${title.toLowerCase()}`,
-              label: `${icon} ${truncateTitle(title)}`.trim(),
-              type: first.type,
-            })
-          }
-          groupsByKey.get(key)!.rows.push(row)
-        } else {
-          const key = 'anchor-none'
-          if (!groupsByKey.has(key)) {
-            groupsByKey.set(key, {
-              rows: [],
-              sortKey: '~~~ohne-fokus',  // sorts last
-              label: t('sidebar.unanchored'),
-              type: 'none',
-            })
-          }
-          groupsByKey.get(key)!.rows.push(row)
-        }
-      }
-
-      // Insert collapsed placeholder groups — use the title cache from the
-      // pre-pass so collapsed buckets show the proper name, not the UUID.
-      for (const meta of collapsedGroupsMeta) {
-        if (!meta.key.startsWith('anchor-')) continue
-        if (!groupsByKey.has(meta.key)) {
-          if (meta.key === 'anchor-none') {
-            groupsByKey.set(meta.key, { rows: [], sortKey: '~~~ohne-fokus', label: t('sidebar.unanchored'), type: 'none' })
-          } else {
-            const cached = titleByKey.get(meta.key)
-            if (cached) {
-              const icon = ANCHOR_TYPE_ICON[cached.type] ?? ''
-              groupsByKey.set(meta.key, {
-                rows: [],
-                sortKey: `${cached.type}:${cached.title.toLowerCase()}`,
-                label: `${icon} ${truncateTitle(cached.title)}`.trim(),
-                type: cached.type,
-              })
-            } else {
-              // Anchor referenced in collapsed-meta but no longer present in any
-              // session. Fallback: icon + placeholder, sorted last among its type.
-              const remainder = meta.key.replace(/^anchor-/, '')
-              const colonIdx = remainder.indexOf(':')
-              const type = (colonIdx >= 0 ? remainder.slice(0, colonIdx) : '') as 'feature' | 'befund' | 'anliegen' | 'none'
-              const icon = ANCHOR_TYPE_ICON[type] ?? ''
-              groupsByKey.set(meta.key, {
-                rows: [],
-                sortKey: `${type}:~~~missing`,
-                label: `${icon} ${t('sidebar.unanchored')}`.trim(),
-                type,
-              })
-            }
-          }
-        }
-      }
-
-      const orderedGroups: EntityListGroup<SessionListRow>[] = []
-      for (const [key, group] of groupsByKey) {
-        // Stable sort by the family view keeps each family together
-        group.rows.sort((a, b) => (b.groupItem.lastMessageAt || 0) - (a.groupItem.lastMessageAt || 0))
-        const collapsedMeta = collapsedGroupsMeta.find(m => m.key === key)
-        orderedGroups.push({
-          key,
-          label: group.label,
-          items: group.rows,
-          collapsible: true,
-          ...(collapsedMeta ? { collapsedCount: collapsedMeta.count } : {}),
-        })
-      }
-      // Sort by anchor type (feature → befund → anliegen → none), then by title
-      const TYPE_ORDER: Record<string, number> = { feature: 0, befund: 1, anliegen: 2, none: 3 }
-      orderedGroups.sort((a, b) => {
-        const aGroup = groupsByKey.get(a.key)!
-        const bGroup = groupsByKey.get(b.key)!
-        const typeDiff = (TYPE_ORDER[aGroup.type] ?? 99) - (TYPE_ORDER[bGroup.type] ?? 99)
-        if (typeDiff !== 0) return typeDiff
-        return aGroup.sortKey.localeCompare(bGroup.sortKey)
-      })
-
-      if (orderedGroups.length === 1) {
-        orderedGroups[0].collapsible = false
-      }
-
-      return {
-        rows: orderedGroups.flatMap(g => g.items),
-        groups: orderedGroups,
-      }
-    }
-
     if (groupingMode === 'status') {
       const statusOrder = new Map<string, number>()
       sessionStatuses.forEach((state, index) => statusOrder.set(state.id, index))
@@ -672,7 +543,7 @@ export function SessionList({
       rows,
       groups: orderedGroups,
     }
-  }, [isSearchMode, matchingFilterItems, otherResultItems, visibleRows, groupingMode, sessionStatuses, projects, collapsedGroupsMeta, families, items, t, i18n.resolvedLanguage])
+  }, [isSearchMode, matchingFilterItems, otherResultItems, visibleRows, groupingMode, sessionStatuses, projects, collapsedGroupsMeta, families, t, i18n.resolvedLanguage])
 
   const flatRows = rowData.rows
 
@@ -682,12 +553,6 @@ export function SessionList({
       setCollapsedGroups(allKeys)
     } else if (groupingMode === 'unread') {
       const allKeys = new Set(items.map(item => item.hasUnread ? 'unread-yes' : 'unread-no'))
-      setCollapsedGroups(allKeys)
-    } else if (groupingMode === 'anchor') {
-      const allKeys = new Set(items.map(item => {
-        const first = item.anchors?.[0]
-        return first ? `anchor-${first.type}:${first.id}` : 'anchor-none'
-      }))
       setCollapsedGroups(allKeys)
     } else if (groupingMode === 'project') {
       const knownProjectIds = new Set((projects ?? []).map(p => p.id))

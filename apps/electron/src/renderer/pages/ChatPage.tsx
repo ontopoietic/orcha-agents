@@ -12,7 +12,7 @@ import { AlertCircle } from 'lucide-react'
 import { ChatDisplay, type ChatDisplayHandle } from '@/components/app-shell/ChatDisplay'
 import { PanelHeader } from '@/components/app-shell/PanelHeader'
 import { ChatHeader } from '@/components/app-shell/chat-header/ChatHeader'
-import { SessionAnchorBar } from '@/components/anchors/SessionAnchorBar'
+import { SessionObservationsBar } from '@/components/observations/SessionObservationsBar'
 import { toast } from 'sonner'
 import { useAppShellContext, usePendingPermission, usePendingCredential, useSessionOptionsFor, useSession as useSessionData } from '@/context/AppShellContext'
 import { rendererPerf } from '@/lib/perf'
@@ -444,7 +444,7 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
             workingDirectory={sessionMeta.workingDirectory}
           />
           <div className="px-4 py-1.5 border-b border-border/40">
-            <SessionAnchorBar sessionId={sessionId} workingDir={sessionMeta.workingDirectory} sessionDir={sessionDir} />
+            <SessionObservationsBar sessionDir={sessionDir} />
           </div>
           <div className="flex-1 flex flex-col min-h-0">
             <ChatDisplay
@@ -528,7 +528,7 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
         onPrCardOpenChange={prWatch.onCardOpenChange}
       />
       <div className="px-4 py-1.5 border-b border-border/40">
-        <SessionAnchorBar sessionId={sessionId} workingDir={session.workingDirectory} sessionDir={sessionDir} />
+        <SessionObservationsBar sessionDir={sessionDir} />
       </div>
       <div className="flex-1 flex flex-col min-h-0">
         <ChatDisplay

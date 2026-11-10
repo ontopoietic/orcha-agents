@@ -1,52 +1,34 @@
 /**
- * SessionAnchorBar
+ * SessionObservationsBar
  *
- * Inline bar showing the active anchors of a session as chips with a
- * trailing "+ Anchor" button that opens the AnchorPicker. Lives in the
- * TopBar / session-detail header. Renders nothing if no sessionId is
- * given.
- *
- * Also shows an always-visible 👁 observer indicator with the last run
- * time. Clicking it opens a popover with detailed observation stats.
- *
- * Mutations go through useSessionAnchors → sessionCommand RPC. The Jotai
- * meta atom updates via the 'anchors_changed' event stream, so this
- * component re-renders without manual state management.
+ * Always-visible 👁 observer indicator for a session (memory system §6) with
+ * the last run time. Clicking it opens a popover with observation stats, a
+ * manual observer run, L2 reflect, and a link to the observations view.
+ * Renders nothing without a session directory.
  */
 
 import * as React from 'react'
-import { useTranslation } from 'react-i18next'
-import { Eye, Plus, Pin } from 'lucide-react'
+import { Eye } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { AnchorChip } from './AnchorChip'
-import { AnchorPicker } from './AnchorPicker'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import { useSessionAnchors } from '@/hooks/useSessionAnchors'
 import { useObservationStatus } from '@/hooks/useObservationStatus'
 import { useObservations } from '@/hooks/useObservations'
 import { useSetAtom } from 'jotai'
 import { pushPanelAtom, observationsSessionDirAtom } from '@/atoms/panel-stack'
 import { routes } from '@/contexts/NavigationContext'
 
-export interface SessionAnchorBarProps {
-  sessionId: string | null | undefined
-  workingDir: string | null | undefined
+export interface SessionObservationsBarProps {
   /** Absolute path to the session directory (for observation watcher) */
   sessionDir?: string | null
-  /** Override for the empty-state hint (default: "Add anchor") */
-  addLabelKey?: string
   className?: string
 }
 
-export function SessionAnchorBar({ sessionId, workingDir, sessionDir, addLabelKey, className }: SessionAnchorBarProps) {
-  const { t } = useTranslation()
-  const [pickerOpen, setPickerOpen] = React.useState(false)
+export function SessionObservationsBar({ sessionDir, className }: SessionObservationsBarProps) {
   const [observerOpen, setObserverOpen] = React.useState(false)
   const pushPanel = useSetAtom(pushPanelAtom)
   const setObservationsSessionDir = useSetAtom(observationsSessionDirAtom)
   const [runningObserver, setRunningObserver] = React.useState(false)
   const [runResult, setRunResult] = React.useState<{ ok: boolean; message: string } | null>(null)
-  const { anchors, add, remove } = useSessionAnchors(sessionId)
   const observation = useObservationStatus(sessionDir ?? null)
   // Live observation TOTAL for the badge. The watermark's lastSignalCount is
   // per-run (and was a poor badge value); the ledger length is what the user
@@ -91,38 +73,11 @@ export function SessionAnchorBar({ sessionId, workingDir, sessionDir, addLabelKe
     }
   }, [sessionDir, runningObserver])
 
-  if (!sessionId) return null
+  if (!sessionDir) return null
 
   return (
     <>
       <div className={cn('flex items-center gap-1.5 flex-wrap', className)}>
-        {anchors.map((anchor) => (
-          <AnchorChip
-            key={`${anchor.type}:${anchor.id}`}
-            anchor={anchor}
-            onRemove={(a) => void remove({ type: a.type, id: a.id })}
-          />
-        ))}
-
-        <button
-          type="button"
-          onClick={() => setPickerOpen(true)}
-          title={anchors.length === 0
-            ? 'Set a focus anchor (Feature, Befund, Anliegen) so observations get scoped correctly'
-            : undefined}
-          className={cn(
-            'inline-flex items-center gap-1 h-6 px-2 rounded-md text-xs transition-colors',
-            anchors.length === 0
-              // Empty state — more prominent: filled bg, accent text, pin icon
-              ? 'border border-foreground/20 bg-foreground/[0.04] text-foreground/80 hover:bg-foreground/[0.08] hover:text-foreground'
-              // Has anchors — discreet "+" affordance
-              : 'border border-dashed border-border text-muted hover:border-foreground/30 hover:text-foreground hover:bg-foreground/5',
-          )}
-        >
-          {anchors.length === 0 ? <Pin className="h-3 w-3" /> : <Plus className="h-3 w-3" />}
-          <span>{t(addLabelKey ?? (anchors.length === 0 ? 'anchors.addFirst' : 'anchors.add'))}</span>
-        </button>
-
         {/* Always-visible observer indicator */}
         {sessionDir && (
           <Popover open={observerOpen} onOpenChange={setObserverOpen}>
@@ -274,13 +229,6 @@ export function SessionAnchorBar({ sessionId, workingDir, sessionDir, addLabelKe
         )}
       </div>
 
-      <AnchorPicker
-        open={pickerOpen}
-        onOpenChange={setPickerOpen}
-        workingDir={workingDir}
-        existing={anchors}
-        onSelect={(anchor) => void add(anchor)}
-      />
     </>
   )
 }

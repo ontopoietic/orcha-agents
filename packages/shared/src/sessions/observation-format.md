@@ -14,7 +14,7 @@ Per session, under `data/`:
 - `observations.md` — human- and LLM-readable Markdown bullets. THIS file is
   injected into the main model's context.
 - `observations-evidence.json` — sidecar with verbatim excerpts, full message
-  IDs, anchor refs, actor, timestamps. Keyed by short anchor ID. Read ONLY by
+  IDs, actor, timestamps. Keyed by short anchor ID. Read ONLY by
   UI and echo-detection — never injected into the main model.
 - `observations.json` (legacy) — old JSON format. Read-only fallback for
   sessions created before the format switch.
@@ -65,14 +65,7 @@ If the source message-ID does not match the pattern, fall back to the last
     "messageRangeTo": "msg-1778338128969-u5luxw",
     "excerpt": "Tradeoffs werden ja nicht mehr dekontextualisiert aufgelöst.",
     "actor": "user",
-    "createdAt": "2026-05-09T14:49:14.493Z",
-    "anchorRefs": [
-      {
-        "type": "feature",
-        "id": "66c67c77-67c6-41c0-9065-c4fe651d8404",
-        "title": "Entscheidungsrahmen"
-      }
-    ]
+    "createdAt": "2026-05-09T14:49:14.493Z"
   }
 }
 ```

@@ -19,7 +19,7 @@ const PI_AGENT_SERVER_OUTPUT = join(PI_AGENT_SERVER_DIR, "dist/index.js");
 const WA_WORKER_DIR = join(ROOT_DIR, "packages/messaging-whatsapp-worker");
 const WA_WORKER_SOURCE = join(WA_WORKER_DIR, "src/worker.ts");
 const WA_WORKER_OUTPUT = join(WA_WORKER_DIR, "dist/worker.cjs");
-// Memory subsystem helper scripts (Observer / Reflector / Recall-anchors).
+// Memory subsystem helper scripts (Observer / Reflector / embed worker).
 // Spawned as detached child processes from the main process.
 // In packaged builds they run as bundled CJS via Electron-as-Node — see
 // packages/shared/src/sessions/observer-runtime.ts, which owns the canonical
@@ -345,7 +345,7 @@ async function main(): Promise<void> {
   // Build WhatsApp worker (Baileys subprocess — optional package)
   await buildWhatsAppWorker();
 
-  // Build memory observer scripts (Observer/Reflector/Recall-anchors)
+  // Build memory observer scripts (Observer/Reflector/embed worker)
   await buildObserverScripts();
 
   const buildDefines = getBuildDefines();

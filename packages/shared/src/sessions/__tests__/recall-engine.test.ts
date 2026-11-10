@@ -4,8 +4,6 @@ import { join } from 'node:path';
 import {
   recall,
   resolvePointer,
-  gatherRecallHint,
-  renderRecallHintBlock,
 } from '../recall-engine.ts';
 
 const ROOT = join(import.meta.dir, '__test_recall_ws__');
@@ -102,27 +100,11 @@ describe('recall-engine', () => {
     if (existsSync(ROOT)) rmSync(ROOT, { recursive: true });
   });
 
-  it('finds an observation across sessions by anchor (exact filter)', () => {
-    const hits = recall(ROOT, { anchor: { type: 'feature', id: FEATURE_A } });
-    expect(hits).toHaveLength(1);
-    expect(hits[0]!.sessionId).toBe('260507-apt-flood');
-    expect(hits[0]!.matched).toContain('anchor');
-    expect(hits[0]!.score).toBeGreaterThanOrEqual(1.0);
-    // Durable pointer survived end-to-end.
-    expect(hits[0]!.messageRange.from).toBe('msg-1778254265335-aaa111');
-  });
-
   it('scores text overlap and ranks the better match first', () => {
     const hits = recall(ROOT, { text: 'reflector threshold trigger' });
     expect(hits.length).toBeGreaterThanOrEqual(1);
     expect(hits[0]!.sessionId).toBe('260601-other-topic');
     expect(hits[0]!.matched).toContain('text');
-  });
-
-  it('anchor filter excludes non-matching observations', () => {
-    const hits = recall(ROOT, { anchor: { type: 'feature', id: FEATURE_B } });
-    expect(hits).toHaveLength(1);
-    expect(hits[0]!.sessionId).toBe('260601-other-topic');
   });
 
   it('empty query returns most-recent observations (recency)', () => {
@@ -145,63 +127,4 @@ describe('recall-engine', () => {
     expect(resolvePointer(ROOT, '260507-apt-flood', 'msg-does-not-exist')).toBeNull();
   });
 
-  describe('gatherRecallHint / renderRecallHintBlock', () => {
-    it('detects cross-session matches and renders a slim pointer', () => {
-      // A NEW session anchored to FEATURE_A; the match lives in 260507-apt-flood.
-      const data = gatherRecallHint({
-        workspaceRootPath: ROOT,
-        sessionId: '260607-new-session',
-        anchors: [{ type: 'feature', id: FEATURE_A }],
-      });
-      expect(data.observationCount).toBe(1);
-      expect(data.sessionCount).toBe(1);
-      expect(data.sessionIds).toEqual(['260507-apt-flood']);
-      expect(data.anchors).toHaveLength(1);
-      // Title is snapshotted from the matched observation's anchorRef.
-      expect(data.anchors[0]!.title).toBe('Userflow Graph 2D');
-
-      const block = renderRecallHintBlock(data);
-      expect(block).not.toBeNull();
-      expect(block!).toContain('<relevant_memory>');
-      expect(block!).toContain(`anchorId="${FEATURE_A}"`);
-      expect(block!).toContain('`recall`');
-      // Names the source session so the agent knows where the prior work lives.
-      expect(block!).toContain('260507-apt-flood');
-      // Directive: a concrete recall invocation the agent can copy.
-      expect(block!).toContain(`recall({ anchorType: "feature", anchorId: "${FEATURE_A}"`);
-      // Slim pointer must NOT dump the observation summary.
-      expect(block!).not.toContain('Userflow Graph 2D layout engine');
-    });
-
-    it('excludes the current session (cross-session only)', () => {
-      // The current session IS the one holding the FEATURE_A observation.
-      const data = gatherRecallHint({
-        workspaceRootPath: ROOT,
-        sessionId: '260507-apt-flood',
-        anchors: [{ type: 'feature', id: FEATURE_A }],
-      });
-      expect(data.observationCount).toBe(0);
-      expect(renderRecallHintBlock(data)).toBeNull();
-    });
-
-    it('returns null block when no other session shares the anchor', () => {
-      const data = gatherRecallHint({
-        workspaceRootPath: ROOT,
-        sessionId: '260607-new-session',
-        anchors: [{ type: 'feature', id: 'unknown-anchor-id' }],
-      });
-      expect(data.observationCount).toBe(0);
-      expect(renderRecallHintBlock(data)).toBeNull();
-    });
-
-    it('ignores non-framework anchor types', () => {
-      const data = gatherRecallHint({
-        workspaceRootPath: ROOT,
-        sessionId: '260607-new-session',
-        // 'not-a-real-type' is not a framework AnchorType → must be skipped.
-        anchors: [{ type: 'not-a-real-type', id: FEATURE_A }],
-      });
-      expect(data.observationCount).toBe(0);
-    });
-  });
 });

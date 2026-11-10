@@ -36,7 +36,7 @@ function writeObservationsMd(content: string): void {
   writeFileSync(OBSERVATIONS_MD, content, 'utf-8');
 }
 
-function writeEvidence(entries: Record<string, { anchorRefs?: Array<{ type: string; id: string }> }>): void {
+function writeEvidence(entries: Record<string, Record<string, unknown>>): void {
   mkdirSync(join(SESSION_DIR, 'data'), { recursive: true });
   writeFileSync(EVIDENCE_FILE, JSON.stringify(entries, null, 2) + '\n', 'utf-8');
 }
@@ -46,8 +46,8 @@ function writeEvidence(entries: Record<string, { anchorRefs?: Array<{ type: stri
  * The injection length-gate uses this line count to decide whether to inject.
  * Default `messageCount` (40) clears the gate (default threshold = 20 lines).
  */
-function writeSessionJsonl(messageCount = 40, anchors: Array<{ type: string; id: string }> = []): void {
-  const header = { id: SESSION_ID, anchors };
+function writeSessionJsonl(messageCount = 40): void {
+  const header = { id: SESSION_ID };
   const lines = [JSON.stringify(header)];
   for (let i = 0; i < messageCount; i++) {
     lines.push(JSON.stringify({ id: `msg-${i}`, type: i % 2 === 0 ? 'user' : 'assistant', content: 'x' }));
@@ -142,62 +142,6 @@ describe('getSessionObservations (Markdown path)', () => {
     expect(builder.getSessionObservations(SESSION_ID)).toBeNull();
   });
 
-  describe('anchor-scope filter', () => {
-    it('filters observations by session anchors using evidence sidecar', () => {
-      writeSessionJsonl(40, [{ type: 'feature', id: 'feat-A' }]);
-      writeObservationsMd(
-        '# 2026-05-07\n' +
-        '- 🔴 10:00 IN-A {aaa111}\n' +    // matches feat-A → keep
-        '- 🔴 10:05 OUT-B {bbb222}\n' +   // matches feat-B → drop
-        '- 🔴 10:10 BARE-NO-SIDECAR {ccc333}\n' + // no sidecar entry → keep (session-local)
-        '- 🔴 10:15 BARE-NO-REFS {ddd444}\n' +    // sidecar but empty anchorRefs → keep
-        '- 🔴 10:20 ANCHORLESS\n',                // no anchor at all → keep
-      );
-      writeEvidence({
-        aaa111: { anchorRefs: [{ type: 'feature', id: 'feat-A' }] },
-        bbb222: { anchorRefs: [{ type: 'feature', id: 'feat-B' }] },
-        ddd444: { anchorRefs: [] },
-      });
-
-      const result = builder.getSessionObservations(SESSION_ID);
-      expect(result).not.toBeNull();
-      expect(result!).toContain('IN-A');
-      expect(result!).toContain('BARE-NO-SIDECAR');
-      expect(result!).toContain('BARE-NO-REFS');
-      expect(result!).toContain('ANCHORLESS');
-      expect(result!).not.toContain('OUT-B');
-      expect(result!).toContain('5 observations total, 4 in scope, showing 4');
-      expect(result!).toContain('scoped to 1 anchor');
-    });
-
-    it('shows all observations when session has no anchors', () => {
-      writeSessionJsonl(40, []);
-      writeObservationsMd(
-        '# 2026-05-07\n' +
-        '- 🔴 10:00 A {aaa111}\n' +
-        '- 🔴 10:05 B {bbb222}\n',
-      );
-      writeEvidence({
-        aaa111: { anchorRefs: [{ type: 'feature', id: 'feat-A' }] },
-        bbb222: { anchorRefs: [{ type: 'feature', id: 'feat-B' }] },
-      });
-
-      const result = builder.getSessionObservations(SESSION_ID);
-      expect(result).not.toBeNull();
-      expect(result!).toContain('A');
-      expect(result!).toContain('B');
-      // No scope-stats when session is unscoped
-      expect(result!).not.toContain('scoped to');
-    });
-
-    it('returns null when every bullet is filtered out', () => {
-      writeSessionJsonl(40, [{ type: 'feature', id: 'feat-A' }]);
-      writeObservationsMd('# 2026-05-07\n- 🔴 10:00 X {bbb222}\n');
-      writeEvidence({ bbb222: { anchorRefs: [{ type: 'feature', id: 'feat-B' }] } });
-
-      expect(builder.getSessionObservations(SESSION_ID)).toBeNull();
-    });
-  });
 });
 
 describe('buildContextParts with observations', () => {

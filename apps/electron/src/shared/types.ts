@@ -301,16 +301,6 @@ export interface ElectronAPI {
   observationReflectNow(sessionDir: string, options?: { force?: boolean }): Promise<{ ok: true; output: string } | { ok: false; error: string }>
   onObservationStatus(callback: (status: import('@craft-agent/shared/sessions').ObservationWatermark) => void): () => void
 
-  // Orcha CLI bridge — anchor picker data source (Feature, Befund, Anliegen)
-  listAnchorables(
-    type: import('@craft-agent/shared/sessions').AnchorType,
-    workingDir: string,
-  ): Promise<import('@craft-agent/shared/sessions').AnchorableItem[]>
-  clearAnchorablesCache(
-    type?: import('@craft-agent/shared/sessions').AnchorType,
-    workingDir?: string,
-  ): Promise<void>
-
   /** Default zoom for app windows in percent (Electron only; Appearance settings). */
   getDefaultZoomLevel?(): Promise<number>
   /** Saves and applies the default zoom; resolves to the stored (snapped) level. */

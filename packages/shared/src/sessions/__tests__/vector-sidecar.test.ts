@@ -319,23 +319,4 @@ describe('recallSemantic (read-only on the vector side)', () => {
     expect(hits[0]!.matched).toContain('text');
   });
 
-  it('keeps anchors as a hard filter on top of semantic scoring', async () => {
-    const tagged = signal('obs-cat', 'Feline asleep cat', '2026-06-01T10:00:00Z');
-    (tagged as { anchorRefs?: unknown[] }).anchorRefs = [
-      { type: 'feature', id: 'f-1', title: 'Cats' },
-    ];
-    writeSignals([tagged, signal('obs-cat2', 'Another cat note Katze', '2026-06-01T11:00:00Z')]);
-    const embedder = mockEmbedder();
-    await indexSessionEmbeddings(SESSION_DIR, embedder);
-
-    const hits = await recallSemantic(
-      WS,
-      { text: 'Katze', anchor: { type: 'feature', id: 'f-1' } },
-      { embedder },
-      clock,
-    );
-    expect(hits.length).toBe(1);
-    expect(hits[0]!.summary).toContain('asleep');
-    expect(hits[0]!.matched).toContain('anchor');
-  });
 });

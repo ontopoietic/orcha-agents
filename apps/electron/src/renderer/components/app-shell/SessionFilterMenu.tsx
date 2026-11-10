@@ -11,7 +11,6 @@ import * as React from "react"
 import { useMemo } from "react"
 import { useTranslation } from "react-i18next"
 import {
-  Anchor,
   Calendar,
   Check,
   EyeOff,
@@ -902,12 +901,6 @@ export function SessionFilterMenu({
                         <MailOpen className="h-3.5 w-3.5" />
                         <span className="flex-1">{t("sidebar.groupByUnread")}</span>
                         {chatGroupingMode === 'unread' && <Check className="h-3 w-3 text-tertiary" />}
-                      </StyledDropdownMenuItem>
-                      {/* ORCHA: group by Orcha anchor (Feature / Befund / Anliegen) */}
-                      <StyledDropdownMenuItem onClick={() => setChatGroupingMode('anchor')}>
-                        <Anchor className="h-3.5 w-3.5" />
-                        <span className="flex-1">{t("sidebar.groupByAnchor")}</span>
-                        {chatGroupingMode === 'anchor' && <Check className="h-3 w-3 text-tertiary" />}
                       </StyledDropdownMenuItem>
                       {projectMenuOptions.length > 0 && (
                         <StyledDropdownMenuItem onClick={() => setChatGroupingMode('project')}>

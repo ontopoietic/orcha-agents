@@ -61,8 +61,6 @@ export interface Session {
   sessionStatus?: SessionStatus
   /** Labels (additive tags, many-per-session — bare IDs or "id::value" entries) */
   labels?: string[]
-  /** Active focus anchors — Feature/Befund/Anliegen refs scoping observations and signals */
-  anchors?: import('../sessions/anchors').AnchorRef[]
   lastReadMessageId?: string
   /**
    * Explicit unread flag - single source of truth for NEW badge.
@@ -472,7 +470,6 @@ export type SessionEvent =
   | { type: 'sources_changed'; sessionId: string; enabledSourceSlugs: string[] }
   | { type: 'coding_mode_changed'; sessionId: string; codingMode: boolean }
   | { type: 'labels_changed'; sessionId: string; labels: string[] }
-  | { type: 'anchors_changed'; sessionId: string; anchors: import('../sessions/anchors').AnchorRef[] }
   | { type: 'project_id_changed'; sessionId: string; projectId: string | null }
   | { type: 'connection_changed'; sessionId: string; connectionSlug: string; supportsBranching?: boolean }
   | { type: 'task_backgrounded'; sessionId: string; toolUseId: string; taskId: string; intent?: string; turnId?: string; kind?: 'workflow' | 'task' | 'child-session'; workflowId?: string }
@@ -543,7 +540,6 @@ export type SessionCommand =
   | { type: 'updateWorkingDirectory'; dir: string }
   | { type: 'setSources'; sourceSlugs: string[] }
   | { type: 'setLabels'; labels: string[] }
-  | { type: 'setAnchors'; anchors: import('../sessions/anchors').AnchorRef[] }
   | { type: 'setProjectId'; projectId: string | null }
   | { type: 'setKanbanColumn'; column: string | null }
   | { type: 'showInFinder' }

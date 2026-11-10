@@ -456,11 +456,6 @@ async function runSourceOAuth(args: SourceOAuthArgs, signal: AbortSignal): Promi
   return () => { ipcRenderer.removeListener('transfer:progress', handler) }
 }
 
-// Orcha CLI bridge — anchor picker data source
-;(api as ElectronAPI).listAnchorables = (type, workingDir) =>
-  ipcRenderer.invoke('orcha:list-anchorables', type, workingDir)
-;(api as ElectronAPI).clearAnchorablesCache = (type, workingDir) =>
-  ipcRenderer.invoke('orcha:clear-anchorables-cache', type, workingDir)
 
 // Observation watcher — watch meta/observation-watermark.json in session dir
 ;(api as ElectronAPI).observationWatch = (sessionDir: string) =>

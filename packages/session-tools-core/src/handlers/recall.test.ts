@@ -41,14 +41,6 @@ describe('handleRecall', () => {
     expect(calls).toHaveLength(0);
   });
 
-  it('rejects anchorType without anchorId (binding not called)', async () => {
-    const { ctx, calls } = createCtx();
-    const res = await handleRecall(ctx, { anchorType: 'feature' });
-    expect(res.isError).toBe(true);
-    expect(res.content[0]!.text).toContain('requires anchorId');
-    expect(calls).toHaveLength(0);
-  });
-
   it('passes a valid resolve request through to the binding', async () => {
     const { ctx, calls } = createCtx((a) => ({ mode: 'resolve', resolved: { sessionId: a.sessionId } }));
     const res = await handleRecall(ctx, { mode: 'resolve', sessionId: 's1', messageId: 'msg-1' });

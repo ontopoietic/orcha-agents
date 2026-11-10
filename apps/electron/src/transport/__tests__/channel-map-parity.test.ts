@@ -37,8 +37,6 @@ type ApiToChannelMapKeys =
   | 'onTransferProgress' // direct IPC listener — chunk upload progress
   | 'changeLanguage' // direct IPC to main process — syncs i18n language
   | 'getFilePath' // renderer-local — webUtils.getPathForFile, no IPC round-trip
-  | 'listAnchorables' // direct IPC — orcha CLI bridge for anchor picker
-  | 'clearAnchorablesCache' // direct IPC — orcha CLI bridge cache invalidation
   | 'observationWatch' // direct IPC — observation file watcher
   | 'observationUnwatch' // direct IPC — observation file watcher
   | 'observationRead' // direct IPC — observation watermark reader

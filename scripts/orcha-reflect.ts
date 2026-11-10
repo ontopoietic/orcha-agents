@@ -68,7 +68,6 @@ interface ObservationSignal {
   summary: string;
   status: string;
   salience?: 'high' | 'medium' | 'low' | string;
-  anchorRefs?: unknown[];
   conversation?: {
     sessionId?: string;
     messageRange?: { from?: string; to?: string };
@@ -95,7 +94,6 @@ interface EvidenceEntry {
   excerpt?: string;
   actor?: 'user' | 'agent';
   createdAt?: string;
-  anchorRefs?: unknown[];
 }
 
 interface ReflectionWatermark {
@@ -178,7 +176,6 @@ function loadObservationsFromMarkdown(sessionDir: string): ObservationSignal[] |
       summary: b.summary,
       status: 'raw',
       salience: b.salience,
-      anchorRefs: Array.isArray(ev?.anchorRefs) ? ev.anchorRefs : undefined,
       conversation: {
         messageRange: ev ? { from: ev.fullMessageId, to: ev.messageRangeTo ?? ev.fullMessageId } : undefined,
         excerpt: ev?.excerpt ?? '',
@@ -268,9 +265,6 @@ function writeMarkdownLedger(
       excerpt: s.conversation?.excerpt ?? previous?.excerpt ?? '',
       actor: (s.conversation?.actor === 'user' ? 'user' : 'agent') as 'user' | 'agent',
       createdAt: s.createdAt,
-      ...(Array.isArray(s.anchorRefs) && s.anchorRefs.length > 0
-        ? { anchorRefs: s.anchorRefs }
-        : previous?.anchorRefs ? { anchorRefs: previous.anchorRefs } : {}),
     };
   }
   writeFileSync(evidencePath, JSON.stringify(nextEvidence, null, 2) + '\n', 'utf-8');
@@ -342,7 +336,6 @@ Output schema — return ONLY this JSON, nothing else:
       "summary": string,                       // ≤ 140 chars
       "salience": "high" | "medium" | "low",
       "actor": "user" | "agent",
-      "anchorRefs": string[],                  // anchor IDs if any (titles or UUIDs ok)
       "replacedIds": string[],                 // input observation IDs being collapsed
       "excerpt": string                        // ~120 chars; can be a synthesized summary excerpt
     }
@@ -366,20 +359,9 @@ Return ONLY valid JSON.`;
 
 function buildReflectorUserPrompt(items: ObservationSignal[]): string {
   const lines = items.map((s) => {
-    const anchors =
-      Array.isArray(s.anchorRefs) && s.anchorRefs.length > 0
-        ? ` anchors=[${s.anchorRefs
-            .map((a) => {
-              if (typeof a === 'string') return a;
-              const obj = a as Record<string, unknown>;
-              return (obj.title as string) ?? (obj.id as string) ?? '';
-            })
-            .filter(Boolean)
-            .join(',')}]`
-        : '';
     const sal = normalizeLegacySalience(s.salience);
     const summary = s.summary.replace(/\s+/g, ' ').trim().slice(0, 280);
-    return `[${s.id}] (${sal})${anchors} ${summary}`;
+    return `[${s.id}] (${sal}) ${summary}`;
   });
   return `Observations to condense (${items.length} items):\n\n${lines.join(
     '\n',
@@ -414,7 +396,6 @@ interface ReflectorOutput {
     summary: string;
     salience: 'high' | 'medium' | 'low';
     actor: 'user' | 'agent';
-    anchorRefs?: string[];
     replacedIds: string[];
     excerpt?: string;
   }>;
@@ -446,12 +427,9 @@ function parseReflectorJson(raw: string): ReflectorOutput | null {
       const replacedIds = Array.isArray(o.replacedIds)
         ? (o.replacedIds.filter((x) => typeof x === 'string') as string[])
         : [];
-      const anchorRefs = Array.isArray(o.anchorRefs)
-        ? (o.anchorRefs.filter((x) => typeof x === 'string') as string[])
-        : undefined;
       const excerpt = typeof o.excerpt === 'string' ? o.excerpt : '';
       if (!summary || !salience || replacedIds.length === 0) continue;
-      condensed.push({ summary, salience, actor, anchorRefs, replacedIds, excerpt });
+      condensed.push({ summary, salience, actor, replacedIds, excerpt });
     }
     return { condensed, drop: dropArr };
   } catch (err) {
@@ -735,11 +713,6 @@ async function main(): Promise<void> {
   const sessionIdForOutput = candidates[0]?.conversation?.sessionId ?? expandedDir.split('/').pop() ?? 'unknown';
 
   const condensedSignals: ObservationSignal[] = parsed.condensed.map((c, idx) => {
-    // Inherit anchorRefs from the first replaced original if reflector didn't provide
-    const inherited =
-      c.anchorRefs && c.anchorRefs.length > 0
-        ? c.anchorRefs
-        : firstAnchorRefs(candidates, c.replacedIds);
     // Inherit earliest createdAt + original date from the items being replaced.
     // Otherwise condensed bullets all collapse onto today's date and lose the
     // narrative's temporal arc.
@@ -757,7 +730,6 @@ async function main(): Promise<void> {
       summary: c.summary,
       status: 'raw',
       salience: c.salience,
-      anchorRefs: inherited,
       conversation: {
         sessionId: sessionIdForOutput,
         excerpt: c.excerpt ?? '',
@@ -828,14 +800,6 @@ async function main(): Promise<void> {
       `  Backup: ${backupPath}\n` +
       `  Output: ${mdPath} (+ evidence sidecar)`,
   );
-}
-
-function firstAnchorRefs(items: ObservationSignal[], ids: string[]): unknown[] | undefined {
-  for (const id of ids) {
-    const m = items.find((s) => s.id === id);
-    if (m && Array.isArray(m.anchorRefs) && m.anchorRefs.length > 0) return m.anchorRefs;
-  }
-  return undefined;
 }
 
 main().catch((err) => {

@@ -1,7 +1,7 @@
 /**
  * Observer-family script runtime resolution.
  *
- * The Observer / Reflector / Recall-anchor helpers live as standalone
+ * The Observer / Reflector / embed-worker helpers live as standalone
  * scripts under `scripts/orcha-*.ts` and are spawned as detached
  * child processes. In DEV the spawn is `npx tsx scripts/<name>.ts` — tsx
  * resolves from node_modules and runs the TypeScript directly.
@@ -29,14 +29,12 @@ import { join } from 'node:path';
 export type OrchaScriptBase =
   | 'orcha-observe'
   | 'orcha-reflect'
-  | 'orcha-recall-anchors'
   | 'orcha-embed-worker';
 
 /** Every spawnable script — keep in sync with OrchaScriptBase. */
 export const ORCHA_SCRIPT_BASES: readonly OrchaScriptBase[] = [
   'orcha-observe',
   'orcha-reflect',
-  'orcha-recall-anchors',
   'orcha-embed-worker',
 ];
 

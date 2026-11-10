@@ -10,7 +10,7 @@
  *
  * Two responsibilities, kept separate so each is testable in isolation:
  *   1. `recall(...)`     — find relevant observations across all sessions
- *                          (anchor filter + text scoring; vector search later).
+ *                          (text scoring; semantic scoring via embeddings).
  *   2. `resolvePointer(...)` — page the raw messages behind a hit's pointer.
  *
  * The Observer/Reflector keep writing per-session as before; this engine only
@@ -19,8 +19,6 @@
  */
 
 import { readdirSync } from 'node:fs';
-import type { AnchorRef, AnchorType } from './anchors.ts';
-import { anchorKey, ANCHOR_TYPES } from './anchors.ts';
 import { loadObservationSignals } from './observation-loader.ts';
 import { readAllMessages, type ObservableMessage } from './observation-watermark.ts';
 import { getWorkspaceSessionsPath } from '../workspaces/storage.ts';
@@ -36,8 +34,6 @@ import { lookupEmbeddings } from './vector-sidecar.ts';
 export interface RecallQuery {
   /** Free-text query; scored by token overlap against summary + excerpt. */
   text?: string;
-  /** Exact framework-anchor filter (precise, explainable axis). */
-  anchor?: { type: AnchorType; id: string };
   /** Restrict to a single session (skip the cross-session scan). */
   sessionId?: string;
   /** Max hits to return (default 20). */
@@ -50,13 +46,12 @@ export interface RecallHit {
   excerpt: string;
   createdAt: string;
   salience?: string;
-  anchorRefs: AnchorRef[];
   /** Durable pointer onto the raw session.jsonl. */
   messageRange: { from: string; to: string };
   /** Composite relevance score (higher = better). */
   score: number;
   /** Which signals contributed to the match (for explainability/UI). */
-  matched: Array<'anchor' | 'text' | 'semantic' | 'recency'>;
+  matched: Array<'text' | 'semantic' | 'recency'>;
 }
 
 export interface ResolvedPointer {
@@ -84,21 +79,6 @@ function listSessionIds(workspaceRootPath: string): string[] {
   }
 }
 
-/** Coerce the loosely-typed `unknown[]` anchorRefs into AnchorRef-ish records. */
-function toAnchorRefs(raw: unknown): AnchorRef[] {
-  if (!Array.isArray(raw)) return [];
-  const out: AnchorRef[] = [];
-  for (const entry of raw) {
-    if (entry && typeof entry === 'object') {
-      const a = entry as Record<string, unknown>;
-      if (typeof a.type === 'string' && typeof a.id === 'string') {
-        out.push(a as unknown as AnchorRef);
-      }
-    }
-  }
-  return out;
-}
-
 // ============================================================================
 // Scoring
 // ============================================================================
@@ -123,7 +103,7 @@ function textScore(queryTokens: string[], haystack: string): number {
 }
 
 /** Newer observations get a small tiebreak (0..~0.1) so recency never
- *  outweighs an anchor or text match but breaks ties predictably. */
+ *  outweighs a text match but breaks ties predictably. */
 function recencyBoost(createdAt: string, now: number): number {
   const t = Date.parse(createdAt);
   if (Number.isNaN(t)) return 0;
@@ -136,14 +116,13 @@ function recencyBoost(createdAt: string, now: number): number {
 // ============================================================================
 
 /**
- * Cross-session recall. Scans per-session ledgers, filters by anchor (exact),
- * scores by text overlap, and returns the top hits with durable pointers.
+ * Cross-session recall. Scans per-session ledgers, scores by text overlap,
+ * and returns the top hits with durable pointers.
  *
  * Scoring model (intentionally simple and explainable):
- *   - anchor match  → +1.0 base (precise structural axis)
  *   - text overlap  → +overlapFraction (0..1)
  *   - recency       → +small tiebreak (0..0.1)
- * A query with neither text nor anchor returns the most recent observations.
+ * A query without text returns the most recent observations.
  */
 export function recall(
   workspaceRootPath: string,
@@ -153,7 +132,6 @@ export function recall(
   const limit = query.limit ?? 20;
   const now = clock();
   const queryTokens = query.text ? tokenize(query.text) : [];
-  const wantAnchorKey = query.anchor ? `${query.anchor.type}:${query.anchor.id}` : undefined;
 
   const sessionIds = query.sessionId ? [query.sessionId] : listSessionIds(workspaceRootPath);
   const hits: RecallHit[] = [];
@@ -168,21 +146,13 @@ export function recall(
     }
 
     for (const sig of signals) {
-      const anchorRefs = toAnchorRefs(sig.anchorRefs);
       const matched: RecallHit['matched'] = [];
       let score = 0;
-
-      if (wantAnchorKey) {
-        const has = anchorRefs.some((a) => anchorKey(a) === wantAnchorKey);
-        if (!has) continue; // anchor is a hard filter when present
-        score += 1.0;
-        matched.push('anchor');
-      }
 
       if (queryTokens.length > 0) {
         const haystack = `${sig.summary}\n${sig.conversation?.excerpt ?? ''}`;
         const overlap = textScore(queryTokens, haystack);
-        if (overlap === 0 && !wantAnchorKey) continue; // no text hit, no anchor → drop
+        if (overlap === 0) continue; // no text hit → drop
         if (overlap > 0) {
           score += overlap;
           matched.push('text');
@@ -199,7 +169,6 @@ export function recall(
         excerpt: sig.conversation?.excerpt ?? '',
         createdAt: sig.createdAt,
         salience: sig.salience,
-        anchorRefs,
         messageRange: {
           from: sig.conversation?.messageRange?.from ?? '',
           to: sig.conversation?.messageRange?.to ?? sig.conversation?.messageRange?.from ?? '',
@@ -245,10 +214,9 @@ export interface SemanticRecallResult {
 /**
  * Semantic recall — `recall()` with the text axis upgraded from token overlap
  * to embedding similarity. Everything else is identical by construction:
- * anchors stay a hard filter, the durable pointer is untouched, and the
- * scoring model keeps its shape:
+ * the durable pointer is untouched, and the scoring model keeps its shape:
  *
- *   anchor match → +1.0   |   meaning → +max(textOverlap, cosineSim)   |   recency tiebreak
+ *   meaning → +max(textOverlap, cosineSim)   |   recency tiebreak
  *
  * `max(text, sem)` rather than vector-only: exact word hits (IDs, file names,
  * error strings) are something embeddings are *worse* at than grep — the two
@@ -288,7 +256,6 @@ export async function recallSemanticDetailed(
   const minSimilarity = opts.minSimilarity ?? 0;
   const now = clock();
   const queryTokens = tokenize(query.text);
-  const wantAnchorKey = query.anchor ? `${query.anchor.type}:${query.anchor.id}` : undefined;
 
   const sessionIds = query.sessionId ? [query.sessionId] : listSessionIds(workspaceRootPath);
   const hits: RecallHit[] = [];
@@ -311,16 +278,8 @@ export async function recallSemanticDetailed(
     if (missing > 0) needsIndex.push(sessionDir);
 
     for (const sig of signals) {
-      const anchorRefs = toAnchorRefs(sig.anchorRefs);
       const matched: RecallHit['matched'] = [];
       let score = 0;
-
-      if (wantAnchorKey) {
-        const has = anchorRefs.some((a) => anchorKey(a) === wantAnchorKey);
-        if (!has) continue; // anchor is a hard filter when present
-        score += 1.0;
-        matched.push('anchor');
-      }
 
       const haystack = `${sig.summary}\n${sig.conversation?.excerpt ?? ''}`;
       const overlap = textScore(queryTokens, haystack);
@@ -328,7 +287,7 @@ export async function recallSemanticDetailed(
       const sim = vector ? Math.max(0, cosineSimilarity(queryVector, vector)) : 0;
       const meaning = Math.max(overlap, sim >= minSimilarity ? sim : 0);
 
-      if (meaning === 0 && !wantAnchorKey) continue; // nothing relevant → drop
+      if (meaning === 0) continue; // nothing relevant → drop
       if (meaning > 0) {
         score += meaning;
         matched.push(sim > overlap && sim >= minSimilarity ? 'semantic' : 'text');
@@ -344,7 +303,6 @@ export async function recallSemanticDetailed(
         excerpt: sig.conversation?.excerpt ?? '',
         createdAt: sig.createdAt,
         salience: sig.salience,
-        anchorRefs,
         messageRange: {
           from: sig.conversation?.messageRange?.from ?? '',
           to: sig.conversation?.messageRange?.to ?? sig.conversation?.messageRange?.from ?? '',
@@ -378,112 +336,6 @@ export async function recallSemantic(
   clock: () => number = () => Date.now(),
 ): Promise<RecallHit[]> {
   return (await recallSemanticDetailed(workspaceRootPath, query, opts, clock)).hits;
-}
-
-// ============================================================================
-// Public: recall hint (cross-session "you have prior work" pointer)
-// ============================================================================
-
-export interface RecallHintInput {
-  workspaceRootPath: string;
-  /** Current session — excluded so the hint is about OTHER sessions only. */
-  sessionId: string;
-  /** Current session's anchors (loosely typed; non-framework types ignored). */
-  anchors: Array<{ type: string; id: string; title?: string }>;
-  /** Hits scanned per anchor before aggregation. Default 50. */
-  perAnchorLimit?: number;
-}
-
-export interface RecallHintData {
-  /** Distinct matching observations across other sessions. */
-  observationCount: number;
-  /** Distinct other sessions that carry a match. */
-  sessionCount: number;
-  /** The source session IDs (newest-match first), for naming in the hint. */
-  sessionIds: string[];
-  /** The session anchors that actually have cross-session matches. */
-  anchors: Array<{ type: AnchorType; id: string; title?: string }>;
-}
-
-/**
- * Detect whether OTHER sessions hold observations sharing an anchor with the
- * current session — the signal behind the `<relevant_memory>` recall pointer.
- *
- * Built ON TOP of `recall()` so the hint draws from the SAME source the
- * `recall` tool reads: when the hint fires, recall is guaranteed to return
- * something. (The retired episode-index detector could promise matches that
- * recall couldn't actually surface — two indexes, one truth claim.)
- * Self-suppressing: empty result → caller emits no block.
- */
-export function gatherRecallHint(
-  input: RecallHintInput,
-  clock: () => number = () => Date.now(),
-): RecallHintData {
-  const sessions = new Set<string>();
-  const matchedAnchors = new Map<string, { type: AnchorType; id: string; title?: string }>();
-  const seenObs = new Set<string>();
-
-  for (const anchor of input.anchors) {
-    if (!ANCHOR_TYPES.includes(anchor.type as AnchorType)) continue;
-    const type = anchor.type as AnchorType;
-    const hits = recall(
-      input.workspaceRootPath,
-      { anchor: { type, id: anchor.id }, limit: input.perAnchorLimit ?? 50 },
-      clock,
-    );
-    for (const h of hits) {
-      if (h.sessionId === input.sessionId) continue; // other sessions only
-      const obsKey = `${h.sessionId}:${h.messageRange.from || h.createdAt}`;
-      if (!seenObs.has(obsKey)) {
-        seenObs.add(obsKey);
-        sessions.add(h.sessionId);
-      }
-      // Prefer a title from the input anchor, else snapshot from the matched
-      // observation's anchorRef, else whatever we recorded earlier.
-      const key = `${type}:${anchor.id}`;
-      const ref = h.anchorRefs.find((a) => a.type === type && a.id === anchor.id);
-      const title = anchor.title ?? ref?.title ?? matchedAnchors.get(key)?.title;
-      matchedAnchors.set(key, { type, id: anchor.id, title });
-    }
-  }
-
-  return {
-    observationCount: seenObs.size,
-    sessionCount: sessions.size,
-    sessionIds: [...sessions],
-    anchors: [...matchedAnchors.values()],
-  };
-}
-
-/**
- * Render the slim `<relevant_memory>` pointer from gathered hint data. Returns
- * null when there is nothing to recall, so the caller can push unconditionally.
- *
- * Deliberately compact (it does NOT dump summaries — that was the per-turn push
- * bloat the B2 pivot removed) but DIRECTIVE: an informational "you may call
- * recall" pointer was empirically ignored by the agent mid-task even when
- * highly relevant prior work existed, so this phrases the pull as an explicit
- * step-zero instruction with a concrete recall invocation and named sources.
- */
-export function renderRecallHintBlock(data: RecallHintData): string | null {
-  if (data.observationCount === 0 || data.anchors.length === 0) return null;
-
-  const anchorList = data.anchors
-    .map((a) => `${a.title ?? a.id} (anchorType="${a.type}", anchorId="${a.id}")`)
-    .join('; ');
-  const obsWord = data.observationCount === 1 ? 'decision/observation' : 'decisions/observations';
-  const sessWord = data.sessionCount === 1 ? 'earlier session' : 'earlier sessions';
-  const sources = data.sessionIds.length > 0 ? ` (${data.sessionIds.join(', ')})` : '';
-  // Lead with the first matched anchor as the most likely recall argument.
-  const primary = data.anchors[0]!;
-
-  return `<relevant_memory>
-You are anchored to: ${anchorList}. ${data.observationCount} ${obsWord} about this already exist in ${data.sessionCount} ${sessWord}${sources}.
-
-This is prior work you cannot see in your current context. Before you answer, decide, or start implementing anything tied to these anchors, your FIRST step is to call the \`recall\` tool to load it — do not re-derive or re-decide what was already settled. For example:
-  recall({ anchorType: "${primary.type}", anchorId: "${primary.id}" })
-or pass a \`text\` query for a specific question. Skip this only if the user's request is clearly unrelated to the anchors above.
-</relevant_memory>`;
 }
 
 // ============================================================================

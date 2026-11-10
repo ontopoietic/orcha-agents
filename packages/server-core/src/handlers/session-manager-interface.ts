@@ -111,7 +111,6 @@ export interface ISessionManager {
   updateWorkingDirectory(sessionId: string, path: string): void
   setSessionSources(sessionId: string, sourceSlugs: string[]): Promise<void>
   setSessionLabels(sessionId: string, labels: string[]): void
-  setSessionAnchors(sessionId: string, anchors: import('@craft-agent/shared/sessions').AnchorRef[]): Promise<void>
   /** Apply the reserved Task labeling (mint / inherit the per-task item label under the Task
    *  root). Returns the resolved ITEM label id, or undefined if the session is unknown.
    *  See SessionManager.applyTaskLabel. */

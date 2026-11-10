@@ -10,7 +10,6 @@
  *
  * CLI:
  *   orcha-recall <workspaceRoot> --text "<query>"            text search
- *   orcha-recall <workspaceRoot> --anchor feature:<id>       exact anchor
  *   orcha-recall <workspaceRoot> --text "x" --limit 5
  *   orcha-recall <workspaceRoot> --resolve <sessionId> <messageId>
  *
@@ -23,12 +22,10 @@
 
 import { existsSync } from 'node:fs';
 import { recall, resolvePointer, type RecallQuery } from '../packages/shared/src/sessions/recall-engine.ts';
-import type { AnchorType } from '../packages/shared/src/sessions/anchors.ts';
 
 function usage(): never {
   console.error('Usage:');
   console.error('  orcha-recall <workspaceRoot> --text "<query>" [--limit N] [--session <id>]');
-  console.error('  orcha-recall <workspaceRoot> --anchor <type>:<id> [--limit N]');
   console.error('  orcha-recall <workspaceRoot> --resolve <sessionId> <messageId> [--before N] [--after N]');
   process.exit(1);
 }
@@ -63,23 +60,15 @@ const query: RecallQuery = {};
 const text = argVal('--text');
 if (text) query.text = text;
 
-const anchorRaw = argVal('--anchor');
-if (anchorRaw) {
-  const [type, ...rest] = anchorRaw.split(':');
-  const id = rest.join(':');
-  if (!type || !id) usage();
-  query.anchor = { type: type as AnchorType, id };
-}
-
 const session = argVal('--session');
 if (session) query.sessionId = session;
 
 const limit = argVal('--limit');
 if (limit) query.limit = Number(limit);
 
-if (!query.text && !query.anchor && !query.sessionId) {
+if (!query.text && !query.sessionId) {
   // Allow empty → most-recent, but warn so it isn't a silent surprise.
-  console.error('[orcha-recall] no --text/--anchor/--session given → returning most-recent observations');
+  console.error('[orcha-recall] no --text/--session given → returning most-recent observations');
 }
 
 const hits = recall(workspaceRoot, query);

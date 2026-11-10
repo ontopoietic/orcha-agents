@@ -22,9 +22,6 @@ export async function handleRecall(
   if (mode === 'resolve' && (!args.sessionId || !args.messageId)) {
     return errorResponse('recall mode "resolve" requires both sessionId and messageId.');
   }
-  if (mode === 'search' && args.anchorType && !args.anchorId) {
-    return errorResponse('recall anchor filter requires anchorId alongside anchorType.');
-  }
 
   try {
     const result = await ctx.recall({ ...args, mode });

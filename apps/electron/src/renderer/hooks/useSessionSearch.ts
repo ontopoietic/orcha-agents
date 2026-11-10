@@ -38,7 +38,7 @@ export interface CollapsedGroupMeta {
   count: number
 }
 
-export type SessionGroupingMode = 'date' | 'status' | 'unread' | 'anchor' | 'project'
+export type SessionGroupingMode = 'date' | 'status' | 'unread' | 'project'
 
 export interface UseSessionSearchOptions {
   items: SessionMeta[]
@@ -98,11 +98,6 @@ export interface UseSessionSearchResult {
 function getCollapseGroupKey(item: SessionMeta, groupingMode?: SessionGroupingMode): string {
   if (groupingMode === 'status') return `status-${getSessionStatus(item)}`
   if (groupingMode === 'unread') return item.hasUnread ? 'unread-yes' : 'unread-no'
-  // ORCHA: group by first anchor
-  if (groupingMode === 'anchor') {
-    const first = item.anchors?.[0]
-    return first ? `anchor-${first.type}:${first.id}` : 'anchor-none'
-  }
   if (groupingMode === 'project') return `project-${(item as { projectId?: string }).projectId ?? '__none__'}`
   return startOfDay(new Date(item.lastMessageAt || 0)).toISOString()
 }
@@ -115,7 +110,7 @@ function getCollapseGroupKey(item: SessionMeta, groupingMode?: SessionGroupingMo
  * bounded; `displayLimit` still grows on scroll.
  */
 function paginatesPerGroup(groupingMode?: SessionGroupingMode): boolean {
-  return groupingMode === 'status' || groupingMode === 'unread' || groupingMode === 'anchor' || groupingMode === 'project'
+  return groupingMode === 'status' || groupingMode === 'unread' || groupingMode === 'project'
 }
 
 /** How many sessions an item stands for (a family view: the family's size) */

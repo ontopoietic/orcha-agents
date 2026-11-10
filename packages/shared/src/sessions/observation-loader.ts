@@ -1,7 +1,7 @@
 /**
  * Observation loader — materialize bullets from `observations.md` +
  * `observations-evidence.json` into the canonical `ObservationSignal` shape
- * used by the UI, the reflector, and Orcha side-tools (recall-anchors,
+ * used by the UI, the reflector, and Orcha side-tools (recall,
  * artifact-extractor).
  *
  * Source-of-truth post Plan A/C: the canonical store is the Markdown ledger
@@ -41,7 +41,6 @@ interface EvidenceEntry {
   excerpt?: string;
   actor?: 'user' | 'agent';
   createdAt?: string;
-  anchorRefs?: unknown[];
 }
 
 export type ObservationIdStrategy = 'anchor-stable' | 'bullet-index';
@@ -157,7 +156,6 @@ export function loadObservationSignalsFromMarkdown(
       summary: bullet.summary,
       status: 'raw',
       salience: bullet.salience,
-      anchorRefs: evidence?.anchorRefs as ObservationSignal['anchorRefs'],
       conversation: {
         sessionId,
         messageRange: {
@@ -257,7 +255,6 @@ export function loadObservationSignalsFromMastraMarkdown(
       status: 'raw',
       salience: bullet.salience,
       completed: bullet.completed || undefined,
-      anchorRefs: evidence?.anchorRefs as ObservationSignal['anchorRefs'],
       conversation: {
         sessionId,
         messageRange: {

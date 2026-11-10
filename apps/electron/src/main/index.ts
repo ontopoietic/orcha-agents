@@ -1049,19 +1049,6 @@ app.whenReady().then(async () => {
         }
       })
 
-      // Orcha CLI bridge — list features/befunde/anliegen for the anchor picker
-      ipcMain.handle('orcha:list-anchorables', async (_event, type: string, workingDir: string) => {
-        const { listAnchorables } = require('./orcha-bridge') as typeof import('./orcha-bridge')
-        if (type !== 'feature' && type !== 'befund' && type !== 'anliegen') return []
-        return listAnchorables(type, workingDir)
-      })
-
-      ipcMain.handle('orcha:clear-anchorables-cache', (_event, type?: string, workingDir?: string) => {
-        const { clearAnchorablesCache } = require('./orcha-bridge') as typeof import('./orcha-bridge')
-        const safeType = type === 'feature' || type === 'befund' || type === 'anliegen' ? type : undefined
-        clearAnchorablesCache(safeType, workingDir)
-      })
-
       ipcMain.on('__get-ws-port', (e) => {
         e.returnValue = instance.port
       })

@@ -13,7 +13,6 @@ import type { PermissionMode } from '../agent/mode-manager.ts';
 import type { ThinkingLevel } from '../agent/thinking-levels.ts';
 import type { BoundPr, PrMonitorState } from '../protocol/pr-watch.ts';
 import type { StoredAttachment, MessageRole, ToolStatus, AuthRequestType, AuthStatus, CredentialInputMode, StoredMessage, ContextUsageSnapshot } from '@craft-agent/core/types';
-import type { AnchorRef } from './anchors.ts';
 
 /**
  * Session fields that persist to disk.
@@ -31,7 +30,7 @@ export const SESSION_PERSISTENT_FIELDS = [
   // Timestamps
   'createdAt', 'lastUsedAt', 'lastMessageAt',
   // Display
-  'name', 'isFlagged', 'sessionStatus', 'labels', 'anchors', 'hidden',
+  'name', 'isFlagged', 'sessionStatus', 'labels', 'hidden',
   // Read tracking
   'lastReadMessageId', 'hasUnread',
   // Config
@@ -145,12 +144,6 @@ export interface SessionConfig {
   sessionStatus?: SessionStatus;
   /** Labels applied to this session (bare IDs or "id::value" entries) */
   labels?: string[];
-  /**
-   * Anchors to Orcha framework artifacts (Feature, Befund, Anliegen).
-   * Sessions are grouped by anchor in the UI and aggregated by anchor for
-   * later observational-memory summaries. Empty/undefined = "without focus".
-   */
-  anchors?: AnchorRef[];
   /** ID of last message user has read */
   lastReadMessageId?: string;
   /**
@@ -301,12 +294,6 @@ export interface SessionHeader {
   sessionStatus?: SessionStatus;
   /** Labels applied to this session (bare IDs or "id::value" entries) */
   labels?: string[];
-  /**
-   * Anchors to Orcha framework artifacts (Feature, Befund, Anliegen).
-   * Mirrors `SessionConfig.anchors`. Persisted in the JSONL header so
-   * session lists can render anchor groups without loading full configs.
-   */
-  anchors?: AnchorRef[];
   /** ID of last message user has read */
   lastReadMessageId?: string;
   /**
@@ -428,11 +415,6 @@ export interface SessionMetadata {
   sessionStatus?: SessionStatus;
   /** Labels applied to this session (bare IDs or "id::value" entries) */
   labels?: string[];
-  /**
-   * Anchors to Orcha framework artifacts (Feature, Befund, Anliegen).
-   * Mirrors `SessionHeader.anchors`. Lightweight enough for list rendering.
-   */
-  anchors?: AnchorRef[];
   /** Explicit per-session source selection (absent = follow workspace defaults) */
   enabledSourceSlugs?: string[];
   /** Permission mode for this session */

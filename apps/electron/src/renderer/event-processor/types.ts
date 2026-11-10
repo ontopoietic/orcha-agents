@@ -163,14 +163,6 @@ export interface LabelsChangedEvent {
   labels: string[]
 }
 
-/**
- * Anchors changed event (Orcha framework references — Feature, Befund, Anliegen)
- */
-export interface AnchorsChangedEvent {
-  type: 'anchors_changed'
-  sessionId: string
-  anchors: import('@craft-agent/shared/sessions/anchors').AnchorRef[]
-}
 
 /**
  * Project id changed event (session bound/unbound to a workspace project)
@@ -567,7 +559,6 @@ export type AgentEvent =
   | SourcesChangedEvent
   | CodingModeChangedEvent
   | LabelsChangedEvent
-  | AnchorsChangedEvent
   | ProjectIdChangedEvent
   | SessionStatusChangedEvent
   | SessionMetadataChangedEvent

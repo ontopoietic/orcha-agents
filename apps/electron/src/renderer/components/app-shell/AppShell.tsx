@@ -32,7 +32,6 @@ import {
   Bot,
   Info,
   MailOpen,
-  Anchor,
   FolderKanban,
   EyeOff,
   PanelsTopLeft,
@@ -532,7 +531,11 @@ function AppShellContent({
 
   const chatGroupingMode: ChatGroupingMode = isStateSubView
     ? 'date'
-    : (viewFiltersMap[sessionFilterKey ?? '']?.groupingMode ?? 'date')
+    : (() => {
+        // ORCHA: 'anchor' grouping was removed — a persisted value falls back to 'date'
+        const stored = viewFiltersMap[sessionFilterKey ?? '']?.groupingMode as string | undefined
+        return (!stored || stored === 'anchor' ? 'date' : stored) as ChatGroupingMode
+      })()
 
   const setChatGroupingMode = useCallback((mode: ChatGroupingMode) => {
     setViewFiltersMap(prev => {

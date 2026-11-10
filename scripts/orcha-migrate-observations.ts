@@ -21,7 +21,6 @@ interface LegacySignal {
   createdAt?: string;
   summary?: string;
   salience?: 'pivotal' | 'question' | 'context';
-  anchorRefs?: unknown[];
   conversation?: {
     messageRange?: { from?: string; to?: string };
     excerpt?: string;
@@ -121,9 +120,6 @@ function migrateSession(sessionDir: string, force: boolean, dryRun: boolean): Mi
         excerpt: sig.conversation?.excerpt ?? '',
         actor: sig.conversation?.actor ?? 'user',
         createdAt,
-        ...(Array.isArray(sig.anchorRefs) && sig.anchorRefs.length > 0
-          ? { anchorRefs: sig.anchorRefs }
-          : {}),
       };
     }
   }

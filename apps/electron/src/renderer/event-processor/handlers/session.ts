@@ -14,7 +14,6 @@ import type {
   SourcesChangedEvent,
   CodingModeChangedEvent,
   LabelsChangedEvent,
-  AnchorsChangedEvent,
   ProjectIdChangedEvent,
   SessionStatusChangedEvent,
   SessionMetadataChangedEvent,
@@ -722,26 +721,6 @@ export function handleLabelsChanged(
   }
 }
 
-/**
- * Handle anchors_changed - update session's anchors (Orcha framework refs)
- */
-export function handleAnchorsChanged(
-  state: SessionState,
-  event: AnchorsChangedEvent
-): ProcessResult {
-  const { session, streaming } = state
-
-  return {
-    state: {
-      session: {
-        ...session,
-        anchors: event.anchors,
-      },
-      streaming,
-    },
-    effects: [],
-  }
-}
 
 /**
  * Handle project_id_changed - update session's projectId binding

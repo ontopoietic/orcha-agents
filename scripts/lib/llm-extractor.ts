@@ -1,6 +1,6 @@
 /**
  * LLM extractor — shared background-LLM helper for Orcha's detached side-jobs
- * (Observer, Reflector, and the auto-anchor pass).
+ * (Observer and Reflector).
  *
  * Extracted verbatim from scripts/orcha-reflect.ts so the same auth strategy
  * (OAuth → claude CLI, else Anthropic API key) and call shape are reused
@@ -28,7 +28,7 @@ export interface ResolveExtractorOptions {
   modelEnvKeys?: string[];
   /** Env var names checked (in order) for an API key. */
   apiKeyEnvKeys?: string[];
-  /** Prefix for warning logs (e.g. "Reflector", "AutoAnchor"). */
+  /** Prefix for warning logs (e.g. "Reflector"). */
   logPrefix?: string;
   /** CLI call timeout in ms (default 90s). */
   timeoutMs?: number;

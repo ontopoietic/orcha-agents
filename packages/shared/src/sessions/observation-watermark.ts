@@ -50,7 +50,6 @@ export interface ObservationSignal {
   salience?: 'high' | 'medium' | 'low' | string;
   /** True when the source bullet was a ✅ Completed observation. */
   completed?: boolean;
-  anchorRefs?: unknown[];
   conversation?: {
     sessionId?: string;
     messageRange?: { from?: string; to?: string };

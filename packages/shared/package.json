@@ -32,7 +32,6 @@
     "./mcp": "./src/mcp/index.ts",
     "./prompts": "./src/prompts/index.ts",
     "./sessions": "./src/sessions/index.ts",
-    "./sessions/anchors": "./src/sessions/anchors.ts",
     "./sessions/observation-markdown-parser": "./src/sessions/observation-markdown-parser.ts",
     "./sessions/mastra-om": "./src/sessions/mastra-om/index.ts",
     "./sessions/mastra-om/parse-ledger": "./src/sessions/mastra-om/parse-ledger.ts",

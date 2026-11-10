@@ -13,7 +13,6 @@ import type { FSWatcher } from 'fs'
 import { join, basename } from 'path'
 import { estimateBacklogTokens, getObserverThresholdTokens } from '@craft-agent/shared/sessions/observation-trigger'
 import { maybeTriggerReflector } from '@craft-agent/shared/sessions/reflection-trigger'
-import { maybeTriggerAutoAnchor } from '@craft-agent/shared/sessions/auto-anchor-trigger'
 import { resolveOrchaScript } from '@craft-agent/shared/sessions/observer-runtime'
 import { requestEmbeddingIndex } from '@craft-agent/shared/sessions/embed-client'
 import { getLlmConnections } from '@craft-agent/shared/config/storage'
@@ -205,14 +204,12 @@ export function startObservationWatch(
   // already exceeds the observer threshold and no run is in flight, fire the
   // observer once to catch up. Fire-and-forget; errors are logged, not thrown.
   maybeWakeObserver(sessionDir)
-  // Same quiescent-backlog gap for the L2 Reflector and the auto-anchor pass:
-  // their per-turn triggers only fire on a new turn, so a session that crossed
-  // a threshold and was then left idle never catches up until reused. Wake both
-  // on session-open. Both reuse the shared trigger (threshold + in-process
-  // inFlight guard); we only inject fresh auth, since the watcher's process.env
-  // may carry a stale/absent OAuth token.
+  // Same quiescent-backlog gap for the L2 Reflector: its per-turn trigger only
+  // fires on a new turn, so a session that crossed the threshold and was then
+  // left idle never catches up until reused. Wake it on session-open. Reuses
+  // the shared trigger (threshold + in-process inFlight guard); we only inject
+  // fresh auth, since the watcher's process.env may carry a stale/absent OAuth token.
   maybeWakeReflector(sessionDir)
-  maybeWakeAutoAnchor(sessionDir)
 }
 
 /**
@@ -232,26 +229,6 @@ function maybeWakeReflector(sessionDir: string): void {
       }
     } catch (err) {
       obsLog.warn(`wake-trigger: reflector wake threw: ${err instanceof Error ? err.message : String(err)}`)
-    }
-  })()
-}
-
-/**
- * Fire the auto-anchor pass on session-open when enough observations lack a
- * framework-anchor but the session went idle. Same delegation as the reflector
- * wake. The pass is idempotent, so this is safe even alongside a per-turn run.
- */
-function maybeWakeAutoAnchor(sessionDir: string): void {
-  void (async () => {
-    try {
-      const sessionId = basename(sessionDir)
-      const authEnv = await resolveObserverAuthEnv()
-      const decision = maybeTriggerAutoAnchor(sessionDir, sessionId, { envOverride: authEnv })
-      if (decision.triggered) {
-        obsLog.info(`wake-trigger: auto-anchor fired on session-open — ${decision.reason}`)
-      }
-    } catch (err) {
-      obsLog.warn(`wake-trigger: auto-anchor wake threw: ${err instanceof Error ? err.message : String(err)}`)
     }
   })()
 }
